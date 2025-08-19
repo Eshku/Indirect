@@ -1,0 +1,28 @@
+{
+	"extends": ["projectile_base", "fire_trail_effect"],
+	"components": {
+		"speed": { "value": 500 },
+		"shapeDescriptor": {
+			"shape": "circle",
+			"radius": 12,
+			"color": "0x4d423e",
+			"zIndex": 10
+		},
+		"onHit": {
+			"effects": [
+				{
+					"type": "dealDamage",
+					"damageType": "physical",
+					"baseValue": 25,
+					"scaling": [{ "stat": "strength", "type": "additive", "multiplier": 0.8 }]
+				},
+				{
+					"type": "dealDamage",
+					"damageType": "fire",
+					"baseValue": 25,
+					"scaling": [{ "stat": "intelligence", "type": "additive", "multiplier": 0.8 }]
+				}
+			]
+		}
+	}
+}

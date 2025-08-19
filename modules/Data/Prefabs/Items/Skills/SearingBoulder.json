@@ -1,0 +1,110 @@
+{
+	"extends": "item_base",
+	"dependencies": [
+		"searing_boulder_projectile"
+	],
+	"components": {
+		"displayName": { "value": "Searing Boulder" },
+		"icon": { "assetName": "searing_boulder_icon" },
+		"cooldown": { "duration": 1.0 },		
+		"usable": { "useTime": 0.25 },
+		"tooltip": {
+			"type": "ItemTooltip",
+			"description": {
+				"template": "Launches a molten rock that deals {physicalDamage} Physical and {fireDamage} Fire damage on impact.",
+				"values": {
+					"physicalDamage": {
+						"from": { "source": "child", "childKey": "dealDamage_physical", "path": "components.dealDamage" },
+						"transform": "calculateDamage"
+					},
+					"fireDamage": {
+						"from": { "source": "child", "childKey": "dealDamage_fire", "path": "components.dealDamage" },
+						"transform": "calculateDamage"
+					}
+				}
+			},
+			"stats": [
+				{
+					"label": "Physical Damage",
+					"value": {
+						"from": { "source": "child", "childKey": "dealDamage_physical", "path": "components.dealDamage" },
+						"transform": "calculateDamage"
+					}
+				},
+				{
+					"label": "Fire Damage",
+					"value": {
+						"from": { "source": "child", "childKey": "dealDamage_fire", "path": "components.dealDamage" },
+						"transform": "calculateDamage"
+					}
+				},
+				{
+					"label": "Projectile Speed",
+					"value": { "from": { "source": "child", "childKey": "spawnProjectile_main", "path": "components.spawnProjectile.speed" } }
+				},
+				{
+					"label": "Cooldown",
+					"value": { "from": { "source": "self", "path": "components.cooldown.duration" } },
+					"suffix": "s"
+				}
+			],
+			"formulas": [
+				{
+					"label": "Physical Damage Scaling",
+					"value": {
+						"from": { "source": "child", "childKey": "dealDamage_physical", "path": "components.dealDamage" },
+						"transform": "generateScalingFormula"
+					}
+				},
+				{
+					"label": "Fire Damage Scaling",
+					"value": {
+						"from": { "source": "child", "childKey": "dealDamage_fire", "path": "components.dealDamage" },
+						"transform": "generateScalingFormula"
+					}
+				}
+			]
+		}
+	},
+	"children": [
+		{
+			"key": "spawnProjectile_main",
+			"components": {
+				"trigger": { "on": "OnUse" },
+				"spawnProjectile": {
+					"target": "Point",
+					"projectilePrefab": "searing_boulder_projectile",
+					"speed": 600
+				}
+			},
+			"children": [
+				{
+					"key": "dealDamage_physical",
+					"components": {
+						"trigger": { "on": "OnHit" },
+						"dealDamage": {
+							"damageType": "Physical",
+							"baseValue": 25,
+							"scaling": [{ "stat": "Strength", "type": "Additive", "multiplier": 0.8 }]
+						}
+					}
+				},
+				{
+					"key": "dealDamage_fire",
+					"components": {
+						"trigger": { "on": "OnHit" },
+						"dealDamage": {
+							"damageType": "Fire",
+							"baseValue": 25,
+							"scaling": [{ "stat": "Intelligence", "type": "Additive", "multiplier": 0.8 }]
+						}
+					}
+				}
+			]
+		}
+	],
+	"shared": {
+		"rarity": { "value": "uncommon" },
+		"stack": { "size": 64 }
+	}
+}

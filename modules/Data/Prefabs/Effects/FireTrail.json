@@ -1,0 +1,19 @@
+{
+    "components": {
+        "ParticleEmitter": {
+            "particleView": {
+                "shape": "circle",
+                "radius": 4,
+                "color": "0xffdd00"
+            },
+            "emissionRate": 100,
+            "lifetime": { "min": 0.2, "max": 0.6 },
+            "speed": { "min": 20, "max": 40 },
+            "angle": { "min": -5, "max": 5 },
+            "startColor": "0xffdd00",
+            "endColor": "0x333333",
+            "startScale": 1,
+            "endScale": 0
+        }
+    }
+}

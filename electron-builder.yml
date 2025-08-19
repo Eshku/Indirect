@@ -1,0 +1,6 @@
+directories:
+  output: exe
+  buildResources: electron
+win:
+  target: portable
+  icon: assets/electron/icon.ico

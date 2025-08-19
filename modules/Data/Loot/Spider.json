@@ -1,0 +1,8 @@
+{
+	"spider": {
+		"drops": [
+			{ "prefabName": "gold_coin", "chance": 0.9, "quantity": [1, 10] },
+			{ "prefabName": "rusty_sword", "chance": 0.05, "quantity": [1, 1] }
+		]
+	}
+}

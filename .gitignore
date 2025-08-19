@@ -1,0 +1,11 @@
+#node
+/node_modules
+
+#build
+/exe
+
+#asset sources
+/assets/icons/skills/source
+
+#weird stuffs
+TODO.MD

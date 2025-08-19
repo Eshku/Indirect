@@ -1,0 +1,9 @@
+#game_wrap {
+  position: relative;
+  cursor:none;
+}
+
+#canvas {
+  display: block;
+  outline:unset;
+}

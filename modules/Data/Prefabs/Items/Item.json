@@ -1,0 +1,8 @@
+{
+  "components": {
+    "displayName": { "value": "Unnamed Item" }
+  },
+  "shared": {
+    "stack": { "size": 1 }
+  }
+}

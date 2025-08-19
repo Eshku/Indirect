@@ -1,0 +1,144 @@
+{
+	"name": "Default User Controls",
+	"description": "Default WASD and mouse controls for the player.",
+	"bindings": [
+		{
+			"action": "Input Forward",
+			"type": "key",
+			"input": "KeyW",
+			"displayName": "Move Up"
+		},
+		{
+			"action": "Input Backward",
+			"type": "key",
+			"input": "KeyS",
+			"displayName": "Move Down / Crouch"
+		},
+		{
+			"action": "Input Left",
+			"type": "key",
+			"input": "KeyA",
+			"displayName": "Move Left"
+		},
+		{
+			"action": "Input Right",
+			"type": "key",
+			"input": "KeyD",
+			"displayName": "Move Right"
+		},
+		{
+			"action": "Input Jump",
+			"type": "key",
+			"input": "Space",
+			"displayName": "Jump"
+		},
+		{
+			"action": "Input MainAttack",
+			"type": "mouseButton",
+			"input": "mouse0",
+			"displayName": "Main Attack"
+		},
+		{
+			"action": "Input SecondaryAttack",
+			"type": "mouseButton",
+			"input": "mouse1",
+			"displayName": "Additional Attack"
+		},
+		{
+			"action": "Input Dash",
+			"type": "mouseButton",
+			"input": "mouse3",
+			"displayName": "Dash"
+		},
+		{
+			"action": "Input Hotbar1",
+			"type": "key",
+			"input": "Digit1",
+			"displayName": "Hotbar slot 1"
+		},
+		{
+			"action": "Input Hotbar2",
+			"type": "key",
+			"input": "Digit2",
+			"displayName": "Hotbar slot 2"
+		},
+		{
+			"action": "Input Hotbar3",
+			"type": "key",
+			"input": "Digit3",
+			"displayName": "Hotbar slot 3"
+		},
+		{
+			"action": "Input Hotbar4",
+			"type": "key",
+			"input": "Digit4",
+			"displayName": "Hotbar slot 4"
+		},
+		{
+			"action": "Input Hotbar5",
+			"type": "key",
+			"input": "Digit5",
+			"displayName": "Hotbar slot 5"
+		},
+		{
+			"action": "Input Hotbar6",
+			"type": "key",
+			"input": "Digit6",
+			"displayName": "Hotbar slot 6"
+		},
+		{
+			"action": "Input Hotbar7",
+			"type": "key",
+			"input": "Digit7",
+			"displayName": "Hotbar slot 7"
+		},
+		{
+			"action": "Input Hotbar8",
+			"type": "key",
+			"input": "Digit8",
+			"displayName": "Hotbar slot 8"
+		},
+		{
+			"action": "Input Hotbar9",
+			"type": "key",
+			"input": "Digit9",
+			"displayName": "Hotbar slot 9"
+		},
+		{
+			"action": "Input Hotbar0",
+			"type": "key",
+			"input": "Digit0",
+			"displayName": "Hotbar slot 0"
+		},
+		{
+			"action": "Input Toggle Cursor",
+			"type": "key",
+			"input": "Backquote",
+			"displayName": "Toggle Cursor"
+		},
+		{
+			"action": "Input TogglePlayerInterface",
+			"type": "key",
+			"input": "KeyI",
+			"displayName": "Toggle Player Interface"
+		},
+		{
+			"action": "Input SecretSequence",
+			"type": "sequence",
+			"input": ["KeyS", "KeyE", "KeyC", "KeyR", "KeyE", "KeyT"],
+			"displayName": "Secret Sequence"
+		},
+		{
+			"action": "Input CustomClose",
+			"type": "combination",
+			"input": ["AltLeft", "F4"],
+			"displayName": "Custom Window Close"
+		},
+		{
+			"action": "Input ToggleConsole",
+			"type": "key",
+			"input": "F12",
+			"displayName": "Toggle Console"
+		}
+	]
+}

@@ -1,0 +1,10 @@
+{
+	"components": {
+		"Projectile": {},
+		"Poolable": {},
+		"Position": {},
+		"Velocity": {},
+		"MaxDistance": { "value": 1000 },
+		"DistanceTraveled": { "value": 0 }
+	}
+}

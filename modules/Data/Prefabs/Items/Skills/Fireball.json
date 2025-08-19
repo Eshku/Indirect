@@ -1,0 +1,85 @@
+{
+	"extends": "item_base",
+	"dependencies": ["fireball_projectile"],
+	"components": {
+		"displayName": { "value": "Fireball" },
+		"icon": { "assetName": "fireball_icon" },
+		"cooldown": { "duration": 0.25 },
+		"usable": { "useTime": 0.1 },
+		"tooltip": {
+			"type": "ItemTooltip",
+			"description": {
+				"template": "Hurls a fiery orb that deals {damage} Fire damage.",
+				"values": {
+					"damage": {
+						"from": { "source": "child", "childKey": "dealDamage_fire", "path": "components.dealDamage" },
+						"transform": "calculateDamage"
+					}
+				}
+			},
+			"stats": [
+				{
+					"label": "Damage",
+					"value": {
+						"from": { "source": "child", "childKey": "dealDamage_fire", "path": "components.dealDamage" },
+						"transform": "calculateDamage"
+					}
+				},
+				{
+					"label": "Projectile Speed",
+					"value": {
+						"from": {
+							"source": "child",
+							"childKey": "spawnProjectile_main",
+							"path": "components.spawnProjectile.speed"
+						}
+					}
+				},
+				{
+					"label": "Cooldown",
+					"value": { "from": { "source": "self", "path": "components.cooldown.duration" } },
+					"suffix": "s"
+				}
+			],
+			"formulas": [
+				{
+					"label": "Damage Scaling",
+					"value": {
+						"from": { "source": "child", "childKey": "dealDamage_fire", "path": "components.dealDamage" },
+						"transform": "generateScalingFormula"
+					}
+				}
+			]
+		}
+	},
+	"children": [
+		{
+			"key": "spawnProjectile_main",
+			"components": {
+				"trigger": { "on": "OnUse" },
+				"spawnProjectile": {
+					"target": "Point",
+					"projectilePrefab": "fireball_projectile",
+					"speed": 750
+				}
+			},
+			"children": [
+				{
+					"key": "dealDamage_fire",
+					"components": {
+						"trigger": { "on": "OnHit" },
+						"dealDamage": {
+							"damageType": "Fire",
+							"baseValue": 40,
+							"scaling": [{ "stat": "Intelligence", "type": "Additive", "multiplier": 1.2 }]
+						}
+					}
+				}
+			]
+		}
+	],
+	"shared": {
+		"rarity": { "value": "common" },
+		"stack": { "size": 64 }
+	}
+}
