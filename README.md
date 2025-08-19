@@ -15,7 +15,7 @@ Readme might be outdated.
 
 - Drop cold-data completely, only typed arrays for components. AoS support was a mistake.
 - High-level API and support for more data types - interned strings (but not bytes, another mistake), asset access by pointer, audio and whatnot.
-- compiler \ transpiler to inline slow high-level API calls to win performance back (views are approximatly ~25x slower inside of per-entity loops, according to some limited benchmarks)
+- Compiler \ transpiler to inline slow high-level API calls to win performance back (views are approximatly ~25x slower inside of per-entity loops, according to some limited benchmarks)
 - Parrallelism.
 - Custom HMR, or in simple terms - hot reload.
 - Serialization \ Deserialization.
@@ -26,7 +26,7 @@ Readme might be outdated.
 
 - **Electron** - Main application framework.
 - **Pixi.js** - 2D rendering engine, but could be changed to any other rendeding engine, we are using our own update loops loops.
-- **Planck.js** - 2D physics engine. It there, but it is not yet used ¯\_(ツ)\_/¯
+- **Planck.js** - 2D physics engine. It is there, but it is not yet used ¯\_(ツ)\_/¯
 - **Vanila Javascript** - Yes.
 
 ## Architecture

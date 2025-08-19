@@ -381,10 +381,10 @@ export class EntityManager {
 
 		const entityIndex = this.entityIndexInArchetype[entityID]
 		if (entityIndex !== undefined) {
-			this.archetypeManager.setEntityComponents(
+			// Use the correct batch-update method, wrapping the single update in an array.
+			this.archetypeManager.setEntitiesComponents(
 				archetypeId,
-				entityIndex,
-				new Map([[componentTypeID, componentData]]),
+				[{ entityIndex: entityIndex, componentsToUpdate: new Map([[componentTypeID, componentData]]) }],
 				this.systemManager.currentTick
 			)
 			return true

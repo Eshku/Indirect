@@ -105,7 +105,7 @@ export class TheManager {
 	 */
 	async initializeManagers() {
 		for (const className of MANAGER_INIT_ORDER) {
-			const instance = this.managers.get(className) // Get the already instantiated manager
+			const instance = this.managers.get(className) // Get instantiated manager
 
 			if (instance) {
 				if (typeof instance.init === 'function') {

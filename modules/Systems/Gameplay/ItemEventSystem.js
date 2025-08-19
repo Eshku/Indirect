@@ -69,6 +69,7 @@ export class ItemEventSystem {
 			}
 
 			for (const actorEntityIndex of actorChunk) {
+				
 				if (!intents[actorEntityIndex]) continue
 
 				const activeIndex = activeIndices[actorEntityIndex]

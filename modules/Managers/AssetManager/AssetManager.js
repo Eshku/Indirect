@@ -11,7 +11,9 @@ export class AssetManager {
 		this.assetManifest = new Map() // Stores assetName -> assetPath
 	}
 
-	async init() {}
+	async init() {
+
+	}
 
 	/**
 	 * Registers the path for an asset name. This allows the AssetManager

@@ -59,33 +59,20 @@ const setupPlayer = async () => {
 	}
 }
 
-const setupPlatform = async () => {
+const setupPlatforms = async () => {
 	entityManager.instantiate('platform', { position: { x: 0, y: 0 } })
 	entityManager.instantiate('platform', { position: { x: 500, y: 50 } })
 	entityManager.instantiate('platform', { position: { x: -500, y: 50 } })
 	entityManager.instantiate('platform', { position: { x: 0, y: 300 } })
 }
 
-const setupUI = async () => {
-	// Initialize Hotbar
-	const { Hotbar } = await import(`${PATH_UI}/Hotbar.js`)
-	const hotbar = new Hotbar(gameManager.getApp(), layerManager.getLayer('ui'))
-	uiManager.register(hotbar)
-
-	const { ItemTooltip } = await import(`${PATH_UI}/ItemTooltip.js`)
-	const itemTooltip = new ItemTooltip(gameManager.getApp(), layerManager.getLayer('ui'))
-	uiManager.register(itemTooltip, 'ItemTooltip')
-}
-
 Logger.start('Setup')
 
 await preload()
-await setupBackground() // depends on game manager
+await setupBackground()
 await setupPlayer()
 
-await setupPlatform()
-
-await setupUI()
+await setupPlatforms()
 
 await systemManager.initAll()
 

@@ -1,6 +1,6 @@
 {
   "name": "pixi-2d-hero-defense-multiplayer",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "main": "app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
