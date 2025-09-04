@@ -31,8 +31,6 @@ const setupBackground = async () => {
 }
 
 const preload = async () => {
-	//assets
-
 	await assetManager.loadAssetAsync('test_player', `${PATH_ASSETS}/sprites/stickman.png`)
 
 	await assetManager.loadAssetAsync('fireball_icon', `${PATH_ICONS}/skills/64/fireball.png`)
