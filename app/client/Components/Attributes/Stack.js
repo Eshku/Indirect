@@ -1,7 +1,10 @@
 export class Stack {
 	static schema = {
 		current: 'u16',
-		size: 'u16',
+		size: {
+			type: 'u16',
+			shared: true,
+		},
 	}
 	/**
 	 * @param {object} data

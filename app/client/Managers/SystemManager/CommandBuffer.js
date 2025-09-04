@@ -1,346 +1,269 @@
+import { RawCommandBuffer } from './RawCommandBuffer.js';
+import { SortableCommandBuffer, SortKeyLayout, SortPhase } from './SortableCommandBuffer.js';
+import { OpCodes } from './CommandOpcodes.js';
+
 /**
- * @fileoverview A command buffer to defer structural changes to the ECS world.
- *
- * ---
- *
- * ### Architectural Overview
- *
- * The CommandBuffer is a cornerstone of the ECS architecture, designed to solve the
- * problem of structural changes during a frame. In a traditional loop, if a system
- * adds or removes a component from an entity, it could invalidate the iterators of
- * subsequent systems, leading to bugs or crashes.
- *
- * The CommandBuffer solves this by deferring all structural changes. Instead of
- * modifying the world state immediately, systems queue "commands" (e.g., create entity,
- * add component, destroy entity). At the end of the frame, the `SystemManager` calls
- * the `flush()` method, which applies all queued changes at once in a highly
- * optimized, deterministic order.
- *
- * This ensures that all systems within a single frame operate on a stable and
- * consistent view of the world.
- *
- * ---
- *
- * ### The Flush Lifecycle
- *
- * The `flush()` method is carefully orchestrated for maximum performance and correctness.
- * It does not simply iterate and execute commands. Instead, it follows a multi-phase process:
- *
- * 1.  **Consolidation (`_consolidateCommands`)**: A single pass is made over the raw command
- *     list. This pass resolves conflicts (e.g., an `addComponent` and `removeComponent` on
- *     the same entity cancel out) and groups commands into actionable batches: deletions,
- *     modifications, and various types of creations.
- *
- * 2.  **Execution (Ordered)**: The consolidated batches are executed in a specific order:
- *     a. **Deletions (`destroyEntitiesInBatch`)**: Destroying entities first is most efficient.
- *        It shrinks archetype data arrays, making subsequent operations (like moving entities
- *        between archetypes) faster.
- *     b. **Modifications (`_flushModifications`)**: Component additions, removals, and data
- *        updates are processed next. This is heavily optimized, grouping all entities that
- *        are making the *exact same structural change* (e.g., adding ComponentA and removing
- *        ComponentB) and moving them between archetypes in a single batch operation. In-place
- *        data updates (which don't change an entity's archetype) are also batched and
- *        are extremely fast.
- *     c. **Creations (`_flushCreations`, etc.)**: New entities are created last. This allows
- *        archetypes to resize their internal arrays just *once* at the end of the frame to
- *        accommodate all new entities, rather than resizing multiple times.
- *
- * ---
- *
- * ### Which Creation Method Should I Use?
- *
- * The CommandBuffer provides several methods for creating entities, each optimized for a
- * different use case. Choosing the right one is key to performance.
- *
- * - **`commands.createEntity(componentIdMap)`**
- *   - **Use Case**: The fundamental, low-level method for creating a single, unique entity
- *     from a specific set of component data.
- *   - **Performance**: **Batched**. If multiple systems create entities with the same component
- *     structure, the `CommandBuffer` groups them and creates them all in a single, highly
- *     efficient operation.
- *
- * - **`commands.instantiate(prefabName, overrides)`**
- *   - **Use Case**: The standard method for creating a *single* entity from a data-driven prefab.
- *   - **Performance**: **Fully Batched**. If multiple `instantiate` commands for the same prefab
- *     are issued in a single frame, they are grouped and created in one highly efficient operation.
- *     It is safe to use this in a loop.
- *
- * - **`commands.instantiateBatch(prefabName, count, overrides)`**
- *   - **Use Case**: The high-performance method for creating many **identical** instances of a
- *     **data-driven** prefab (e.g., a wave of enemies, a particle burst).
- *   - **Performance**: **Highest for Prefabs**. This is the most efficient way to spawn from
- *     prefabs. It recursively creates the entire entity hierarchy in a batched,
- *     archetype-grouped manner.
- *
- * - **`commands.createEntitiesWithData(creationDataArray)`**
- *   - **Use Case**: The most flexible high-performance method for creating many **heterogeneous**
- *     entities at once. Ideal for scenarios where each new entity needs slightly different
- *     initial data (e.g., creating 100 minions, each with a different `Owner` component pointing
- *     to its newly-created parent).
- *   - **Performance**: **Highest for Flexibility**. Groups entities by their final archetype and
- *     creates each group in a single batch operation.
+ * @fileoverview A high-level API for recording commands into a low-level byte buffer.
+ * This is the primary interface systems should use for deferred structural changes.
+ * It combines a RawCommandBuffer for data and a SortableCommandBuffer for execution order.
  */
-
-import { CommandBufferExecutor } from './CommandBufferExecutor.js'
-
 export class CommandBuffer {
-	constructor() {
-		/** @private @type {Array<object>} */
-		this.commands = []
+    /**
+     * @param {import('../ComponentManager/ComponentManager.js').ComponentManager} componentManager
+     * @param {import('../PrefabManager/PrefabManager.js').PrefabManager} prefabManager
+     */
+    constructor(componentManager, prefabManager) {
+        this.rawBuffer = new RawCommandBuffer(componentManager);
+        this.sortableBuffer = new SortableCommandBuffer();
+        this.componentManager = componentManager;
+        this.prefabManager = prefabManager;
+    }
 
-		/** @private @type {Array<Map<number, object>>} */
-		this._mapPool = []
-		/** @private @type {number} */
-		this._poolIndex = 0
+    /**
+     * Clears the buffers for the next frame. Called by the SystemManager after a flush.
+     */
+    clear() {
+        this.rawBuffer.reset();
+        this.sortableBuffer.clear();
+    }
 
-		/** @type {import('../../Managers/EntityManager/EntityManager.js').EntityManager | null} */
-		this.entityManager = null
-		/** @type {import('../../Managers/PrefabManager/PrefabManager.js').PrefabManager | null} */
-		this.prefabManager = null
-		/** @type {import('../../Managers/ComponentManager/ComponentManager.js').ComponentManager | null} */
-		this.componentManager = null
-		/** @type {import('../../Managers/ArchetypeManager/ArchetypeManager.js').ArchetypeManager | null} */
-		this.archetypeManager = null
-		/** @type {import('../../Managers/SystemManager/SystemManager.js').SystemManager | null} */
-		this.systemManager = null
+    /**
+     * Records a command to add a component to an entity.
+     * @param {number} entityId
+     * @param {number} componentTypeID
+     * @param {object} data
+     * @param {number} [layer=0] - Execution layer for fine-grained ordering.
+     */
+    addComponent(entityId, componentTypeID, data = {}, layer = 0) {
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
 
-		/**
-		 * The single, reusable executor instance. It's instantiated once in `init()`
-		 * and reused for all flush and immediate-mode operations to reduce GC pressure.
-		 * @private
-		 * @type {CommandBufferExecutor | null}
-		 */
-		this.executor = null
-	}
+        // Write OpCode and Payload
+        this.rawBuffer.writeU8(OpCodes.ADD_COMPONENT);
+        this.rawBuffer.writeU32(entityId);
+        this.rawBuffer.writeU16(componentTypeID);
+        this.rawBuffer.writeComponentData(componentTypeID, data);
 
-	/**
-	 * Initializes the command buffer by acquiring references to necessary managers.
-	 * This must be called before the command buffer can be used.
-	 */
-	async init() {
-		this.entityManager = (await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)).entityManager
-		this.prefabManager = (await import(`${PATH_MANAGERS}/PrefabManager/PrefabManager.js`)).prefabManager
-		this.componentManager = (await import(`${PATH_MANAGERS}/ComponentManager/ComponentManager.js`)).componentManager
-		this.archetypeManager = (await import(`${PATH_MANAGERS}/ArchetypeManager/ArchetypeManager.js`)).archetypeManager
-		this.systemManager = (await import(`${PATH_MANAGERS}/SystemManager/SystemManager.js`)).systemManager
+        // Calculate length and write sort key
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityId, 0);
+        this.sortableBuffer.add(key, offset, length);
+    }
 
-		// Instantiate the executor once all managers are available.
-		this.executor = new CommandBufferExecutor(this)
-	}
+    /**
+     * Records a command to set a component's data on an entity.
+     * Assumes the component already exists. For performance, this is not checked here.
+     * @param {number} entityId
+     * @param {number} componentTypeID
+     * @param {object} data
+     * @param {number} [layer=0]
+     */
+    setComponentData(entityId, componentTypeID, data, layer = 0) {
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
 
-	addComponent(entityId, componentTypeID, data = {}) {
-		if (componentTypeID === undefined) {
-			console.error(
-				'CommandBuffer.addComponent: componentTypeID cannot be undefined. This usually means the component was not registered.',
-				{ entityId, data }
-			)
-			throw new TypeError('CommandBuffer.addComponent: componentTypeID cannot be undefined.')
-		}
-		this.commands.push({ type: 'addComponent', entityId, componentTypeID, data })
-	}
+        this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_DATA);
+        this.rawBuffer.writeU32(entityId);
+        this.rawBuffer.writeU16(componentTypeID);
+        this.rawBuffer.writeComponentData(componentTypeID, data);
 
-	setComponentData(entityId, componentTypeID, data) {
-		if (componentTypeID === undefined) {
-			console.error(
-				'CommandBuffer.setComponentData: componentTypeID cannot be undefined. This usually means the component was not registered.',
-				{ entityId, data }
-			)
-			throw new TypeError('CommandBuffer.setComponentData: componentTypeID cannot be undefined.')
-		}
-		this.commands.push({ type: 'setComponentData', entityId, componentTypeID, data })
-	}
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityId, 2); // Secondary ID to sort after add/remove
+        this.sortableBuffer.add(key, offset, length);
+    }
 
-	removeComponent(entityId, componentTypeID) {
-		this.commands.push({ type: 'removeComponent', entityId, componentTypeID })
-	}
+    /**
+     * Records a command to remove a component from an entity.
+     * @param {number} entityId
+     * @param {number} componentTypeID
+     * @param {number} [layer=0]
+     */
+    removeComponent(entityId, componentTypeID, layer = 0) {
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
 
-	destroyEntity(entityId) {
-		this.commands.push({ type: 'destroyEntity', entityId })
-	}
+        this.rawBuffer.writeU8(OpCodes.REMOVE_COMPONENT);
+        this.rawBuffer.writeU32(entityId);
+        this.rawBuffer.writeU16(componentTypeID);
 
-	/**
-	 * Queues the creation of a single entity from a prefab.
-	 * This method is **fully batched**. If multiple `instantiate` commands for the same prefab
-	 * are issued in a frame, they will be grouped and created in a single, highly
-	 * efficient operation.
-	 *
-	 * For creating a very large number of *identical* prefabs (e.g., particle effects),
-	 * `instantiateBatch` can be slightly more performant as it has less per-entity overhead.
-	 * @param {string} prefabName The name of the pre-loaded prefab.
-	 * @param {object} [overrides={}] Optional additional or overriding component data.
-	 */
-	instantiate(prefabName, overrides = {}) {
-		this.commands.push({ type: 'instantiate', prefabName, overrides })
-	}
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityId, 1); // Use secondary ID to sort removes after adds
+        this.sortableBuffer.add(key, offset, length);
+    }
 
-	/**
-	 * Queues the high-performance, batched creation of multiple identical instances of a
-	 * **data-driven** prefab.
-	 * @param {string} prefabName - The name of the pre-loaded prefab.
-	 * @param {number} count - The number of entities to create.
-	 * @param {object} [overrides={}] - Optional or overriding component data for the ROOT entities.
-	 */
-	instantiateBatch(prefabName, count, overrides = {}) {
-		this.commands.push({ type: 'instantiateBatch', prefabName, count, overrides })
-	}
+    /**
+     * Records a command to destroy an entity.
+     * @param {number} entityId
+     * @param {number} [layer=0]
+     */
+    destroyEntity(entityId, layer = 0) {
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
 
-	/**
-	 * Queues the creation of multiple entities, each with its own data.
-	 * This is the most flexible high-performance method for bulk creation inside a system.
-	 * @param {Array<object>} creationData - An array where each element is an object
-	 *   representing the component data for one entity.
-	 */
-	createEntitiesWithData(creationData) {
-		this.commands.push({ type: 'createEntitiesWithData', creationData })
-	}
+        this.rawBuffer.writeU8(OpCodes.DESTROY_ENTITY);
+        this.rawBuffer.writeU32(entityId);
 
-	/**
-	 * Queues the creation of multiple **identical** entities with a given set of components.
-	 * This is the highest-performance method for creating many homogeneous entities from raw data.
-	 * @param {Map<number, object>} componentIdMap - A map where keys are componentTypeIDs and values are their data.
-	 * @param {number} count - The number of entities to create.
-	 */
-	createEntities(componentIdMap, count) {
-		this.commands.push({ type: 'createEntities', componentIdMap, count })
-	}
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.DESTROY, layer, entityId, 0);
+        this.sortableBuffer.add(key, offset, length);
+    }
 
-	/**
-	 * Queues the creation of a new entity with a given set of components. This is the fundamental,
-	 * low-level method for use within systems. It is automatically batched with other
-	 * `createEntity` calls that result in the same archetype.
-	 * @param {Map<number, object>} [componentIdMap=new Map()] - A map where keys are componentTypeIDs and values are their data.
-	 */
-	createEntity(componentIdMap = new Map()) {
-		// Note: The method name is kept simple for ergonomics inside systems.
-		this.commands.push({ type: 'createEntity', componentIdMap })
-	}
+    /**
+     * Records a command to create a new entity.
+     * @param {Map<number, object>} componentIdMap
+     * @param {number} [layer=0]
+     */
+    createEntity(componentIdMap, layer = 0) {
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
 
-	/**
-	 * Queues the creation of a new entity with a single component.
-	 * This is a high-performance convenience method that uses an internal pool of Map objects.
-	 * @param {number} componentTypeID - The type ID of the component to add.
-	 * @param {object} [data={}] - The data for the new component.
-	 */
-	createEntityWithComponent(componentTypeID, data = {}) {
-		const map = this.getMap()
-		map.set(componentTypeID, data)
-		// This pushes a command that is identical to `createEntity`, so the executor
-		// doesn't need to be changed.
-		this.commands.push({ type: 'createEntity', componentIdMap: map })
-	}
+        this.rawBuffer.writeU8(OpCodes.CREATE_ENTITY);
+        this.rawBuffer.writeComponentIdMap(componentIdMap);
 
-	/**
-	 * Queues the creation of a new entity in a pre-determined archetype.
-	 * This is a high-performance method for when the archetype is known ahead of time,
-	 * as it avoids the cost of archetype lookup during the flush.
-	 * @param {number} archetypeId - The ID of the archetype to create the entity in.
-	 * @param {Map<number, object>} componentIdMap - A map of component data.
-	 */
-	createEntityInArchetype(archetypeId, componentIdMap) {
-		this.commands.push({ type: 'createEntityInArchetype', archetypeId, componentIdMap })
-	}
+        const length = this.rawBuffer.offset - startOffset;
+        // For creation, primary/secondary IDs are less important, but could be used for batching.
+        const key = SortableCommandBuffer.encodeKey(SortPhase.CREATE, layer, 0, 0);
+        this.sortableBuffer.add(key, offset, length);
+    }
 
-	/**
-	 * Queues the creation of a new entity with a single component in a pre-determined archetype.
-	 * This is a high-performance convenience method that uses an internal pool of Map objects.
-	 * @param {number} archetypeId - The ID of the archetype to create the entity in.
-	 * @param {number} componentTypeID - The type ID of the component to add.
-	 * @param {object} [data={}] - The data for the new component.
-	 */
-	createEntityInArchetypeWithComponent(archetypeId, componentTypeID, data = {}) {
-		const map = this.getMap()
-		map.set(componentTypeID, data)
-		this.commands.push({ type: 'createEntityInArchetype', archetypeId, componentIdMap: map })
-	}
+    /**
+     * Records a command to instantiate a prefab with optional overrides.
+     * @param {string} prefabName The name of the prefab to instantiate.
+     * @param {Map<number, object>} [overrides=new Map()] A map of componentTypeID to data objects that override the prefab's defaults.
+     * @param {number} [layer=0]
+     */
+    instantiate(prefabName, overrides = new Map(), layer = 0) {
+        const numericId = this.prefabManager.getPrefabNumericId(prefabName);
+        if (numericId === undefined) {
+            console.error(`[CommandBuffer] Could not instantiate prefab. Name '${prefabName}' not found in PrefabManager.`);
+            return;
+        }
 
-	/**
-	 * Queues the addition of a component to all entities matching a query.
-	 * This is a high-level command that can be optimized more effectively by the engine
-	 * than issuing an `addComponent` command for each individual entity.
-	 * @param {import('../../Managers/QueryManager/Query.js').Query} query - The query matching entities to modify.
-	 * @param {number} componentTypeID - The type ID of the component to add.
-	 * @param {object} [data={}] - The data for the new component.
-	 */
-	addComponentToQuery(query, componentTypeID, data = {}) {
-		this.commands.push({ type: 'addComponentToQuery', query, componentTypeID, data })
-	}
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
 
-	/**
-	 * Queues the removal of a component from all entities matching a query.
-	 * @param {import('../../Managers/QueryManager/Query.js').Query} query - The query matching entities to modify.
-	 * @param {number} componentTypeID - The type ID of the component to remove.
-	 */
-	removeComponentFromQuery(query, componentTypeID) {
-		this.commands.push({ type: 'removeComponentFromQuery', query, componentTypeID })
-	}
+        this.rawBuffer.writeU8(OpCodes.INSTANTIATE_PREFAB);
+        this.rawBuffer.writeU16(numericId); // Write numeric ID instead of string
+        this.rawBuffer.writeComponentIdMap(overrides);
 
-	/**
-	 * Queues the destruction of all entities matching a query.
-	 * @param {import('../../Managers/QueryManager/Query.js').Query} query - The query matching entities to destroy.
-	 */
-	destroyEntitiesInQuery(query) {
-		this.commands.push({ type: 'destroyEntitiesInQuery', query })
-	}
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.CREATE, layer, 0, 3); // Another secondary ID
+        this.sortableBuffer.add(key, offset, length);
+    }
 
-	/**
-	 * Queues the update of component data for all entities matching a query.
-	 * This is a high-performance command for bulk data updates, ideal for scenarios
-	 * like resetting all entities of a certain type. It bypasses the per-entity
-	 * modification system and operates directly on whole chunks of archetype data.
-	 * @param {import('../../Managers/QueryManager/Query.js').Query} query - The query matching entities to modify.
-	 * @param {number} componentTypeID - The type ID of the component to update.
-	 * @param {object} data - The new data to set. This will be a partial update.
-	 */
-	setComponentDataOnQuery(query, componentTypeID, data) {
-		this.commands.push({ type: 'setComponentDataOnQuery', query, componentTypeID, data })
-	}
+    /**
+     * Records a command to create a new entity in a known archetype.
+     * This is an optimized path that avoids archetype lookup during execution.
+     * @param {number} archetypeId The ID of the archetype to create the entity in.
+     * @param {Map<number, object>} componentIdMap The component data for the new entity.
+     * @param {number} [layer=0]
+     */
+    createEntityInArchetype(archetypeId, componentIdMap, layer = 0) {
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
 
-	/**
-	 * Clears all queued commands from the buffer.
-	 * This is called automatically by `flush()` after all commands are processed.
-	 */
-	clear() {
-		this.commands.length = 0 // Only clear the commands, the pool is reset in flush()
-	}
+        this.rawBuffer.writeU8(OpCodes.CREATE_ENTITY_IN_ARCHETYPE);
+        this.rawBuffer.writeU16(archetypeId); // Archetype ID is known
+        this.rawBuffer.writeComponentIdMap(componentIdMap);
 
-	/**
-	 * Executes all queued commands by delegating to the CommandBufferExecutor.
-	 */
-	flush() {
-		if (this.commands.length === 0) return
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.CREATE, layer, 0, 2); // Secondary ID to distinguish
+        this.sortableBuffer.add(key, offset, length);
+    }
 
-		// Delegate to the single, reusable executor instance.
-		this.executor.execute()
+    /**
+     * Records a command to create a batch of identical entities.
+     * @param {Map<number, object>} componentIdMap The components to add to each entity.
+     * @param {number} count The number of entities to create.
+     * @param {number} [layer=0]
+     */
+    createEntities(componentIdMap, count, layer = 0) {
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
 
-		// After all commands are processed, clear the buffer to ready it for the next frame.
-		this.clear()
-		// Reset the map pool for the next frame.
-		this._resetPool()
-	}
+        this.rawBuffer.writeU8(OpCodes.CREATE_ENTITIES_IDENTICAL);
+        this.rawBuffer.writeU32(count);
+        this.rawBuffer.writeComponentIdMap(componentIdMap);
 
-	/**
-	 * Gets a reusable Map object from an internal pool.
-	 * This is a key performance optimization that avoids creating new Map objects in hot loops.
-	 * The pool is reset automatically after every `flush()`.
-	 * @returns {Map<number, object>} A cleared Map object ready for use.
-	 */
-	getMap() {
-		if (this._poolIndex >= this._mapPool.length) {
-			// Pool is empty, create a new map.
-			this._mapPool.push(new Map())
-		}
-		const map = this._mapPool[this._poolIndex++]
-		map.clear() // Ensure the map is clean before reuse.
-		return map
-	}
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.CREATE, layer, 0, 1); // Secondary ID to distinguish from single create
+        this.sortableBuffer.add(key, offset, length);
+    }
 
-	/**
-	 * Resets the map pool index, making all maps available for reuse in the next frame.
-	 * @private
-	 */
-	_resetPool() {
-		this._poolIndex = 0
-	}
+    /**
+     * A high-level helper that queues a destroy command for every entity matching a query.
+     * @param {import('../QueryManager/Query.js').Query} query The query to iterate.
+     * @param {number} [layer=0]
+     */
+    destroyEntitiesInQuery(query, layer = 0) {
+        for (const chunk of query.iter()) {
+            for (let i = 0; i < chunk.size; i++) {
+                this.destroyEntity(chunk.entities[i], layer);
+            }
+        }
+    }
+
+    /**
+     * A high-level helper that adds a component to every entity matching a query.
+     * @param {import('../QueryManager/Query.js').Query} query
+     * @param {number} componentTypeID
+     * @param {object} [data={}]
+     * @param {number} [layer=0]
+     */
+    addComponentToQuery(query, componentTypeID, data = {}, layer = 0) {
+        for (const chunk of query.iter()) {
+            for (let i = 0; i < chunk.size; i++) {
+                this.addComponent(chunk.entities[i], componentTypeID, data, layer);
+            }
+        }
+    }
+
+    /**
+     * A high-level helper that removes a component from every entity matching a query.
+     * @param {import('../QueryManager/Query.js').Query} query
+     * @param {number} componentTypeID
+     * @param {number} [layer=0]
+     */
+    removeComponentFromQuery(query, componentTypeID, layer = 0) {
+        for (const chunk of query.iter()) {
+            for (let i = 0; i < chunk.size; i++) {
+                this.removeComponent(chunk.entities[i], componentTypeID, layer);
+            }
+        }
+    }
+
+    /**
+     * A high-level helper that sets component data for every entity matching a query.
+     * This is an efficient way to apply in-place data changes to a group of entities.
+     * @param {import('../QueryManager/Query.js').Query} query
+     * @param {number} componentTypeID
+     * @param {object} data
+     * @param {number} [layer=0]
+     */
+    setComponentDataOnQuery(query, componentTypeID, data, layer = 0) {
+        for (const chunk of query.iter()) {
+            for (let i = 0; i < chunk.size; i++) {
+                this.setComponentData(chunk.entities[i], componentTypeID, data, layer);
+            }
+        }
+    }
+
+    /**
+     * Prepares the command buffer for execution by sorting the commands.
+     * @returns {{sortedOffsets: Uint32Array, sortedLengths: Uint32Array}}
+     */
+    getSortedCommands() {
+        this.sortableBuffer.sort();
+        return {
+            sortedOffsets: this.sortableBuffer.getSortedOffsets(),
+            sortedLengths: this.sortableBuffer.getSortedLengths(),
+        };
+    }
+
+    // --- Future Work Note ---
+    // The current API supports batch creation of identical entities. Future enhancements could include:
+    // - `createEntitiesWithData(archetypeId, dataArray)`: Creates a batch of entities in the same archetype
+    //   but with varied initial component data for each. This would correspond to `OpCodes.CREATE_ENTITIES_VARIED`.
+    // - `instantiateBatch(prefabName, count, overrides)`: A highly optimized path for instantiating many
+    //   copies of the same prefab, potentially with some shared overrides.
 }
-
-export const commandBuffer = new CommandBuffer()

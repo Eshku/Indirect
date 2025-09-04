@@ -31,19 +31,20 @@ Readme might be outdated.
 - Custom HMR, or in simple terms - hot reload.
 - Serialization \ Deserialization.
 - React on component addition \ changes as 2 separate things (?)
+- indirect everything 👀
 
 ## Tech Stack
 
 - **Electron** - Main application framework.
 - **Pixi.js** - 2D rendering engine, but could be changed to any other rendeding engine, we are using our own update loops.
-- **Planck.js** - 2D physics engine. It is there, but it is not yet used ¯\_(ツ)_/¯
+- **Planck.js** - 2D physics engine. It is there, but it is not yet used ¯\_(ツ)\_/¯
 - **Vanila Javascript** - Yes.
 
 ## Architecture
 
-### Core: Entity-Component-System ([ECS](app/client/Core/ECS)) Hybrid
+### Core: Entity-Component-System (ECS) Hybrid
 
-- **Entity**: ID that representing game object.
+- **Entity**: ID representing game object.
 - **Component**: Class that acts as a **schema** for component data, defining how it's stored in TypedArrays.
 - **Archetype**: All entities with the exact same set of components are categorized under same archetype.
 - **[System](app/client/Systems)**: Container for logic. Systems operate on entities that have a specific set of components.
@@ -52,7 +53,7 @@ Readme might be outdated.
 
 #### Archetypes: Defining Entity Structures
 
-**Archetype** defines a unique combination of components. Each Archetype manages a collection of **Chunks**, which are data containers.
+**Archetype** defines a unique combination of components. Each Archetype manages a collection of data containers - **Chunks**.
 
 - **Immortal Archetypes:** Archetype _definitions_ are "immortal". Once created, they are never destroyed, even if they contain no entities. This is a performance optimization that avoids "archetype churn"- expensive process of repeatedly creating and destroying archetypes, which would force `QueryManager` to constantly re-evaluate all active queries. This trades a small amount of memory for a gain in structural change performance.
 
@@ -85,7 +86,7 @@ Components are defined with a `static schema` that dictates how their data is st
   - **Supported Types:** `f64` (Float64Array), `f32` (Float32Array), `i32` (Int32Array), `u32` (Uint32Array), `i16` (Int16Array), `u16` (Uint16Array), `i8` (Int8Array), `u8` (Uint8Array). `boolean` is an alias for `u8`.
   - **Usage Note:** Choosing smallest appropriate data type is crucial for performance due to CPU cache lines and SIMD optimizations.
 
-- **Interned Strings:** For string data likely to be repeated across many entities (e.g., names, IDs). The engine stores a single copy of the string and uses an integer reference (`u32`) to it.
+- **Interned Strings:** For string data engine stores a single copy of the string and uses an integer reference (`u32`) to it.
 
   - **Definition:** `{ type: 'string' }` or shorthand `'string'`.
 
@@ -104,6 +105,7 @@ Components are defined with a `static schema` that dictates how their data is st
   - **`flat_array`**: For fixed-size collections of simple data.
     - **Definition:** `{ type: 'flat_array', of: 'u32', capacity: 10 }`.
     - Flattens array into individual properties (e.g., `myArray0`, `myArray1`, ..., `myArray9`) within component's `TypedArray`s. An implicit `_count` property (e.g., `myArray_count`) is also created to track number of elements used.
+      \*\*`dynamic_array`: ...not yet implemented (packed arrays).
 
 - **Tag Components:** A special type of component that contains no data. It serves only as a marker for queries (e.g., `PlayerTag`, `EnemyTag`). Defined as a class with no `static schema` or instance properties.
 
@@ -258,33 +260,75 @@ export class CombatSystem {
 }
 ```
 
-### [Command Buffer: Deferring Structural Changes](app/client/Managers/SystemManager/CommandBuffer.js)
+### Command Buffer: Safe and Efficient Structural Changes
 
-Command Buffer is a crucial mechanism for safely managing structural changes to ECS world. Modifying structure (e.g., adding or removing components, which changes an entity's archetype) while systems are iterating over it is unsafe and can lead to data corruption. Command Buffer addresses this by deferring all such changes to a safe point, typically at the end of a frame.
+The Command Buffer is a crucial mechanism for safely managing structural changes to the ECS world. Modifying the world's structure (e.g., adding/removing components, creating/destroying entities) while systems are iterating over it is unsafe and can lead to crashes or corrupted data. The command buffer solves this by recording all such changes and executing them at a safe point at the end of the frame.
 
-**Key Features of the Flush Process:**
+While the primary goal is safety, the command buffer is also designed for high performance through several key features:
 
-1.  **Consolidation:** Before executing anything, buffer consolidates all commands. For example, if an entity is created and then destroyed in the same frame, the commands cancel each other out, and no work is done. If a component is added and then removed, nothing happens.
-2.  **Batched Operations:** Buffer groups all structural changes (like adding/removing components, which cause archetype moves) by their source and target archetypes. It then moves entities in large, cache-friendly batches, which is significantly faster than moving them one by one.
-3.  **Updates:** Simple data updates that don't change an entity's archetype are handled separately using in-place update mechanism.
+1.  **Automatic Sorting**: Commands are not executed in the order they are recorded. Instead, they are automatically sorted to ensure a logical and safe sequence: all destructions happen first, then all modifications (adding/removing components), and finally all creations. This prevents errors like trying to modify an entity that has already been destroyed in the same frame. You can influence this order using a `layer` parameter in most command functions for more advanced control.
 
-#### Example Usage
+2.  **Command Consolidation**: If you record a command to add a component and later record a command to remove it from the same entity within the same frame, the buffer cancels them out. Similarly, creating and then immediately destroying an entity results in no work being done. This reduces unnecessary operations.
 
-A `CollisionSystem` might queue a `destroyEntity` command when two entities collide.
+3.  **Batched Operations**: To maximize performance, buffer groups similar operations together. Instead of moving entities between archetypes one by one, it identifies all entities that need the same structural change and moves them all at once in a large, cache-friendly batch. The same principle applies to creating and destroying entities.
+
+#### API and Examples
+
+Systems receive a `commands` object, which is an instance of `CommandBuffer`.
+
+**Basic Commands**
+
+To interact with the buffer, you need the `componentTypeID` for the components you want to modify.
 
 ```javascript
-export class CollisionSystem {
-	// ... query for collidable entities ...
+// In a system's constructor or init method:
+this.positionTypeID = componentManager.getComponentTypeID(Position)
+this.healthTypeID = componentManager.getComponentTypeID(Health)
 
-	update(deltaTime, currentTick) {
-		for (const chunk of this.query.iter()) {
-			// ... collision detection logic to find entityA and entityB ...
-			if (isColliding(entityA, entityB)) {
-				// Don't destroy immediately. Queue command instead.
-				this.commands.destroyEntity(entityB)
-			}
-		}
-	}
+// In the update loop:
+const newPlayer = this.commands.createEntity(
+	new Map([
+		[this.positionTypeID, { x: 100, y: 200 }],
+		[this.healthTypeID, { value: 100 }],
+	])
+)
+
+this.commands.addComponent(someEntity, this.healthTypeID, { value: 50 })
+
+this.commands.removeComponent(anotherEntity, this.positionTypeID)
+
+this.commands.destroyEntity(enemyEntity)
+```
+
+**Maps are subject to change.**
+
+**Instantiating Prefabs**
+
+Instantiating from a prefab is a common operation. Command buffer has a dedicated method for it.
+
+```javascript
+// In the update loop of a weapon system
+if (fireButtonPressed) {
+	const overrides = new Map([
+		[this.positionTypeID, { x: this.muzzlePoint.x, y: this.muzzlePoint.y }],
+		[this.velocityTypeID, { x: 1000, y: 0 }],
+	])
+	this.commands.instantiate('fireball_projectile', overrides)
+}
+```
+
+**Query-based Batch Operations**
+
+The `CommandBuffer` provides high-level helper methods to apply changes to all entities matching a query.
+
+```javascript
+// In a system that applies a "burning" effect
+const burningQuery = queryManager.getQuery({ with: [Flammable], without: [BurningEffect] })
+
+// ... some logic to determine if the area is on fire ...
+if (areaIsOnFire) {
+	// Add the BurningEffect component to all flammable entities that aren't already burning.
+	this.commands.addComponentToQuery(burningQuery, this.burningEffectTypeID, { duration: 5, damagePerSecond: 10 })
 }
 ```
 

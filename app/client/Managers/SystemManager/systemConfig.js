@@ -84,12 +84,13 @@ export const systemSchedule = {
 
 	Benchmark: [
 		/* { name: 'RWMBenchmark', frequency: 'logic' }, */
-		/* { name: 'StructuralChangeBenchmarkSystem', frequency: 'logic' }, */
-		/* { name: 'BatchStructuralChangeBenchmarkSystem', frequency: 'logic' }, */
 		/* { name: 'CreationDestructionBenchmarkSystem', frequency: 'logic' }, */
-		/* { name: 'BatchCreationDestructionBenchmarkSystem', frequency: 'logic' }, */
-		/* { name: 'QueryBasedDestructionBenchmarkSystem', frequency: 'logic' }, */
-		/* { name: 'RenderBenchmarkSystem', frequency: 'logic' }, */
+		/* { name: 'StructuralChangeBenchmarkSystem', frequency: 'logic' }, */
+	],
+
+	Test: [
+		/* { name: 'SharedComponentTestSystem', frequency: 'none' }, */
 		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
+		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
 	],
 }

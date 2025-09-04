@@ -2,6 +2,34 @@
  * @fileoverview A central processor for reading and writing component data.
  */
 
+/*
+ *
+ * This registry maps a type name (from a component's `static schema`)
+ * to a function that handles the transformation of raw, designer-friendly data
+ * into the engine's "hot", runtime-optimized format.
+ *
+ * These processors are **generic, runtime, and context-free**. They are used for
+ * all entity creations (dynamic or from prefabs, *after* any prefab-specific processing).
+ */
+
+//! experimental
+
+//! Component processing adds overhead to entity creation \ component additions.
+
+//! Idea - pre-compile prefabs to use low-level data(kinda, doubt it will be fully low-level, but shortcuts can be made)
+//! allow creation of new "prefabs" at runtime - add method which could save a new prefab as low-level reusable data (not as file, just cache).
+//! That will help with performance a bit, but wouldn't fully solve the issue.
+
+//! For overrides: entityManager.instantiate('Player', { Health: { current: 50 } }), the process would be:
+
+//! Load the pre-compiled, low-level data for the 'Player' prefab.
+//! Take the overrides object ({ Health: { current: 50 } }).
+//! Run the ComponentProcessor only on the Health component data from the override.
+//! Merge the processed override data into the low-level prefab data.
+
+//! similar thing for addComponent.
+
+
 const { compileFormulaToRPN } = await import(`${PATH_CORE}/Algorithms/FormulaParser.js`)
 
 // --- Global RPN Compiler Configuration ---
@@ -252,10 +280,17 @@ export class ComponentProcessor {
 
 		for (const propName of info.originalSchemaKeys) {
 			const rep = info.representations[propName]
-			if (!rep) continue
+		if (!rep) continue;
+
+		// If the original property was shared, it does not exist in the per-entity
+		// component arrays. Its data is in the SharedGroupManager. We skip it here,
+		// and read the 'groupId' property after the loop.
+		if (rep.shared) {
+			continue;
+		}
 
 			const componentArrays = chunk.componentArrays[componentTypeId]
-
+		
 			if (rep.type === 'rpn') {
 				const rpnData = {}
 				const streamLength = componentArrays[rep.streamLengthProperty][indexInChunk]
@@ -315,6 +350,15 @@ export class ComponentProcessor {
 				}
 			}
 		}
-		return componentData
+
+		// After processing all per-entity properties, check if this component type
+		// has any shared properties. If so, read the groupId from the storage.
+		if (info.sharedProperties.length > 0) {
+			const componentArrays = chunk.componentArrays[componentTypeId];
+			if (componentArrays && componentArrays.groupId) {
+				componentData.groupId = componentArrays.groupId[indexInChunk];
+			}
+		}
+		return componentData;
 	}
 }

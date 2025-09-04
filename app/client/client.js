@@ -65,8 +65,10 @@ await setupPlayer()
 
 await setupPlatforms()
 
+Logger.end('Setup')
+
+
 await systemManager.initAll()
 
-Logger.end('Setup')
 
 await systemManager.startLoop()

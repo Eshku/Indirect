@@ -3,6 +3,12 @@ const { queryManager, componentManager } = theManager.getManagers()
 
 const { ComponentA, ComponentB } = componentManager.getComponents()
 
+const benchmarkConfig = {
+	// Toggles which benchmark strategy to run. Only one should be true.
+	runPerEntity: false,
+	runQueryBased: false,
+}
+
 /**
  * @fileoverview A system for stress-testing structural changes (adding/removing components).
  */
@@ -19,9 +25,8 @@ export class StructuralChangeBenchmarkSystem {
 
 		this.componentATypeID = componentManager.getComponentTypeID(ComponentA)
 		this.componentBTypeID = componentManager.getComponentTypeID(ComponentB)
-		//prev 15k
-		//current 11k.
-		this.entityCount = 11_000
+
+		this.entityCount = 5_000
 
 		this.creationMap = new Map([[this.componentATypeID, {}]])
 	}
@@ -33,6 +38,15 @@ export class StructuralChangeBenchmarkSystem {
 	}
 
 	update(deltaTime, currentTick) {
+		if (benchmarkConfig.runPerEntity) {
+			this._updatePerEntity(currentTick)
+
+		} else if (benchmarkConfig.runQueryBased) {
+			this._updateQueryBased(currentTick)
+		}
+	}
+
+	_updatePerEntity(currentTick) {
 		if (currentTick % 2 === 0) {
 			for (const chunk of this.addQuery.iter()) {
 				for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
@@ -45,6 +59,14 @@ export class StructuralChangeBenchmarkSystem {
 					this.commands.removeComponent(chunk.entities[indexInChunk], this.componentBTypeID)
 				}
 			}
+		}
+	}
+
+	_updateQueryBased(currentTick) {
+		if (currentTick % 2 === 0) {
+			this.commands.addComponentToQuery(this.addQuery, this.componentBTypeID, {})
+		} else {
+			this.commands.removeComponentFromQuery(this.removeQuery, this.componentBTypeID)
 		}
 	}
 }

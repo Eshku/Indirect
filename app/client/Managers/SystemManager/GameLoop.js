@@ -263,10 +263,13 @@ export class GameLoop {
 		visualsGroup.lastTick = lastCompletedFixedTick
 
 		// --- Command Buffer Flush ---
-		const cbFlushStartTime = performance.now()
-		this.systemManager.commandBuffer.flush()
-		const cbFlushEndTime = performance.now()
-		this.systemManager.systemTimings['CommandBuffer.flush'] = cbFlushEndTime - cbFlushStartTime
+		const cbFlushStartTime = performance.now();
+		this.systemManager.commandBufferExecutor.execute(this.systemManager.commandBuffer);
+		const cbFlushEndTime = performance.now();
+		//this.systemManager.systemTimings['CommandBufferExecutor.execute'] = cbFlushEndTime - cbFlushStartTime;
+
+		//! just for performance monitor display for now, change it later
+				this.systemManager.systemTimings['CommandBuffer.flush'] = cbFlushEndTime - cbFlushStartTime
 
 		// --- Manual Render Call ---
 		const renderStartTime = performance.now()

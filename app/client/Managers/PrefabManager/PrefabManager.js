@@ -31,11 +31,9 @@ export class PrefabManager {
 	constructor({ cacheSize = 100 } = {}) {
 		// --- Permanent Caches for Prefab Templates ---
 		// These store the canonical, processed data for prefabs defined in files.
-		// They are stored in simple Maps because they are considered immutable definitions
-		// and should not be evicted from the cache.
-		this.processedComponentCache = new Map()
-		this.processedSharedDataCache = new Map()
-		this.processedChildrenCache = new Map()
+		// They are now stored in arrays, indexed by a numeric prefab ID for O(1) access.
+		this.processedPrefabCache = []
+		this.processedChildrenCache = []
 		// Cache for raw data from files to avoid repeated file system access.
 		this.rawPrefabDataCache = new Map()
 
@@ -55,10 +53,26 @@ export class PrefabManager {
 		 * @property {Map<string, object>} manifest - Stores the entire prefab manifest. Maps prefabId -> manifest entry.
 		 */
 		this.manifest = new Map()
+		/**
+		 * @property {Map<string, number>} prefabIdToNumericId - Maps string prefabId to a numeric ID for fast lookups.
+		 */
+		this.prefabIdToNumericId = new Map()
+		/**
+		 * @property {object[]} numericIdToManifestEntry - Maps a numeric ID back to its manifest entry.
+		 */
+		this.numericIdToManifestEntry = []
 	}
 
 	async init() {
 		await this.loader.loadManifest()
+		let currentId = 0
+		for (const [prefabId, manifestEntry] of this.manifest.entries()) {
+			this.prefabIdToNumericId.set(prefabId, currentId)
+			this.numericIdToManifestEntry[currentId] = manifestEntry
+			// Attach the numeric ID to the manifest entry for convenience
+			manifestEntry.numericId = currentId
+			currentId++
+		}
 	}
 	/**
 	 * Pre-loads a list of prefabs into the cache. This is intended to be called
@@ -77,22 +91,38 @@ export class PrefabManager {
 	 * This method does NOT perform file I/O and will only return data that
 	 * has been pre-loaded. It is used for the high-performance creation path.
 	 * @param {string} prefabId - The ID of the prefab from the manifest.
-	 * @returns {{components: object, shared: object, children: object[]} | null} The cached data or null if not found.
+	 * @returns {{components: object, children: object[]} | null} The cached data or null if not found.
 	 */
 	getPrefabData(prefabId) {
-		const manifestEntry = this.manifest.get(prefabId)
-		if (!manifestEntry) {
-			// This is a common case for prefabs that might not exist, so a simple return is fine.
+		const numericId = this.getPrefabNumericId(prefabId)
+		if (numericId === undefined) {
+			// This can be a valid case for external callers, so we don't error, just return null.
 			return null
 		}
+		return this.getPrefabDataByNumericId(numericId)
+	}
 
-		const canonicalPath = manifestEntry.path.toLowerCase()
-		const components = this.processedComponentCache.get(canonicalPath)
-		if (!components) {
-			console.error(`PrefabManager: Prefab '${prefabId}' was not preloaded. Use preload() during setup.`)
+	/**
+	 * Gets the numeric ID for a given string-based prefab ID.
+	 * @param {string} prefabId
+	 * @returns {number | undefined}
+	 */
+	getPrefabNumericId(prefabId) {
+		return this.prefabIdToNumericId.get(prefabId)
+	}
+
+	/**
+	 * The new internal, high-performance way to get prefab data, used by the CommandBufferExecutor.
+	 * @param {number} numericId The numeric ID of the prefab.
+	 * @returns {{components: object, children: object[]} | null}
+	 */
+	getPrefabDataByNumericId(numericId) {
+		const components = this.processedPrefabCache[numericId]
+		if (components === undefined) {
+			console.error(`PrefabManager: Prefab with numericId '${numericId}' was not preloaded. Use preload() during setup.`)
 			return null
 		}
-		return { components, shared: this.processedSharedDataCache.get(canonicalPath) || {}, children: this.processedChildrenCache.get(canonicalPath) || [] }
+		return { components, children: this.processedChildrenCache[numericId] || [] }
 	}
 
 	/**
@@ -100,7 +130,7 @@ export class PrefabManager {
 	 * This is intended to be used during a loading phase.
 	 * @param {string} prefabId - The name of the prefab (e.g., 'Items/Skills/Fireball').
 	 * @param {Set<string>} [visited=new Set()] - Used internally to detect circular dependencies.
-	 * @returns {Promise<{components: object, shared: object, children: object[]}|null>} The resolved prefab data or null if not found.
+	 * @returns {Promise<{components: object, children: object[]}|null>} The resolved prefab data or null if not found.
 	 * @private
 	 */
 	async _processPrefabData(prefabId, visited = new Set()) {
@@ -109,32 +139,30 @@ export class PrefabManager {
 			return null
 		}
 
-		const manifestEntry = this.manifest.get(prefabId)
-		if (!manifestEntry) {
-			console.error(
-				`PrefabManager: Could not find data prefab with ID '${prefabId}' in manifest. Ensure 'extends' properties use manifest IDs, not paths.`
-			)
+		const numericId = this.prefabIdToNumericId.get(prefabId)
+		if (numericId === undefined) {
+			console.error(`PrefabManager: Could not find prefab with ID '${prefabId}' in manifest.`)
 			return null
 		}
 
-		const prefabPath = manifestEntry.path
-		const canonicalPath = prefabPath.toLowerCase()
-
 		// Check cache for final, merged data first.
-		const cachedInstanceData = this.processedComponentCache.get(canonicalPath)
-		if (cachedInstanceData) {
+		const cachedComponents = this.processedPrefabCache[numericId]
+		if (cachedComponents) {
 			return {
-				components: cachedInstanceData,
-				shared: this.processedSharedDataCache.get(canonicalPath) || {},
-				children: this.processedChildrenCache.get(canonicalPath) || [],
+				components: cachedComponents,
+				children: this.processedChildrenCache[numericId] || [],
 			}
 		}
+
 		if (visited.has(prefabId)) {
 			console.error(`Circular prefab dependency detected: ${[...visited, prefabId].join(' -> ')}`)
 			return null // Abort to prevent infinite recursion
 		}
 		visited.add(prefabId)
 
+		const manifestEntry = this.numericIdToManifestEntry[numericId]
+		const prefabPath = manifestEntry.path
+		const canonicalPath = prefabPath.toLowerCase()
 		// Check cache for raw data. If not present, load it via IPC.
 		let rawData = this.rawPrefabDataCache.get(canonicalPath)
 		if (!rawData) rawData = await this.loader.loadAndCacheRawData(prefabPath)
@@ -152,7 +180,6 @@ export class PrefabManager {
 		}
 
 		let baseComponents = {}
-		let baseShared = {}
 		let baseChildren = []
 		if (rawData.extends) {
 			const extendNames = Array.isArray(rawData.extends) ? rawData.extends : [rawData.extends]
@@ -162,9 +189,6 @@ export class PrefabManager {
 				if (basePrefabData) {
 					if (basePrefabData.components) {
 						baseComponents = this._deepMerge(baseComponents, basePrefabData.components)
-					}
-					if (basePrefabData.shared) {
-						baseShared = this._deepMerge(baseShared, basePrefabData.shared)
 					}
 					if (basePrefabData.children) {
 						baseChildren = [...baseChildren, ...basePrefabData.children]
@@ -176,18 +200,16 @@ export class PrefabManager {
 		}
 
 		const mergedComponents = this._deepMerge(baseComponents, rawData.components || {})
-		const finalShared = this._deepMerge(baseShared, rawData.shared || {})
 
 		const resolvedOwnChildren = await this._resolveChildren(rawData.children || [], new Set(visited))
 		const finalChildren = [...baseChildren, ...resolvedOwnChildren]
 
 		const processedComponents = mergedComponents
 
-		this.processedComponentCache.set(canonicalPath, processedComponents)
-		this.processedSharedDataCache.set(canonicalPath, finalShared)
-		this.processedChildrenCache.set(canonicalPath, finalChildren)
+		this.processedPrefabCache[numericId] = processedComponents
+		this.processedChildrenCache[numericId] = finalChildren
 
-		return { components: processedComponents, shared: finalShared, children: finalChildren }
+		return { components: processedComponents, children: finalChildren }
 	}
 
 	/**
@@ -215,7 +237,7 @@ export class PrefabManager {
 				if (basePrefabData) {
 					// The base prefab data is the foundation.
 					// The child definition in the parent prefab acts as a set of overrides.
-					// _deepMerge will handle merging 'components', 'shared', and 'children' arrays correctly.
+					// _deepMerge will handle merging 'components' and 'children' arrays correctly.
 					const mergedChild = this._deepMerge(basePrefabData, currentChild)
 					delete mergedChild.extends // Clean up the extends property after merging
 					currentChild = mergedChild

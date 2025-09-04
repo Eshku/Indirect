@@ -15,10 +15,8 @@
 			"type": "ItemTooltip",
 			"description": "Hurls a fiery orb that deals Fire damage.",
 			"stats": ["Damage", "Cooldown", "Range"]
-		}
-	},
-	"shared": {
-		"rarity": { "value": "common" },
-		"stack": { "size": 64 }
+		},
+		"Rarity": { "value": "common" },
+		"Stack": { "size": 64 }
 	}
 }

@@ -65,6 +65,8 @@ export class SchemaParser {
 			originalSchemaKeys: [],
 			properties: {},
             byteSize: 0,
+			sharedProperties: [],
+			perEntityProperties: [],
 		}
 
 		const schema = ComponentClass.schema
@@ -90,6 +92,27 @@ export class SchemaParser {
 
 		// Sort final property keys for deterministic array layout and to remove duplicates
 		componentInfo.propertyKeys = [...new Set(componentInfo.propertyKeys)].sort()
+
+		// Separate properties into shared and per-entity lists
+		for (const propName of componentInfo.originalSchemaKeys) {
+			if (componentInfo.representations[propName]?.shared) {
+				componentInfo.sharedProperties.push(propName)
+			} else {
+				componentInfo.perEntityProperties.push(propName)
+			}
+		}
+
+		// If there are any shared properties, add the groupId to the component's storage schema.
+		// This is the core of the "Shared Components as Indirect References" pattern.
+		if (componentInfo.sharedProperties.length > 0) {
+			const groupIdPropName = 'groupId'
+			if (!componentInfo.properties[groupIdPropName]) {
+				const arrayConstructor = this.getTypedArrayConstructor('u32')
+				componentInfo.properties[groupIdPropName] = { type: 'u32', arrayConstructor }
+				componentInfo.propertyKeys.push(groupIdPropName)
+				componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
+			}
+		}
 
 		return componentInfo
 	}
@@ -164,6 +187,12 @@ export class SchemaParser {
 			const arrayConstructor = this.getTypedArrayConstructor(definitionObject.type)
 			if (arrayConstructor) {
 				// It's a primitive type.
+				// If it's a shared property, we don't add its own data to the SoA layout.
+				// The 'groupId' property will be added later at the end of the parse() method.
+				if (definitionObject.shared) {
+					return
+				}
+
 				componentInfo.properties[propName] = { type: definitionObject.type, arrayConstructor }
 				componentInfo.propertyKeys.push(propName)
                 componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT;
@@ -179,6 +208,11 @@ export class SchemaParser {
 	 * Parses an interned string representation.
 	 */
 	string(propName, propDefinition, componentInfo, implicitKeys, ComponentClass) {
+		// If it's a shared property, we don't add its own data to the SoA layout.
+		// The 'groupId' property will be added later.
+		if (propDefinition.shared) {
+			return
+		}
 		componentInfo.properties[propName] = { type: 'u32', arrayConstructor: Uint32Array }
 		componentInfo.propertyKeys.push(propName)
 		componentInfo.byteSize += Uint32Array.BYTES_PER_ELEMENT;
@@ -188,6 +222,9 @@ export class SchemaParser {
 	 * Parses a bitmask representation.
 	 */
 	bitmask(propName, propDefinition, componentInfo, implicitKeys, ComponentClass) {
+		if (propDefinition.shared) {
+			throw new Error(`SchemaParser: The 'shared' flag is not supported for bitmask properties like '${ComponentClass.name}.${propName}'.`)
+		}
 		const { storageType, of: values } = propDefinition
 		const arrayConstructor = this.getTypedArrayConstructor(storageType)
 		if (!arrayConstructor) {
@@ -212,7 +249,7 @@ export class SchemaParser {
 			flagMap[values[i]] = 1 << i
 		}
 
-		componentInfo.representations[propName] = { type: 'bitmask', originalKey: propName, flagMap: flagMap }
+		componentInfo.representations[propName] = { type: 'bitmask', originalKey: propName, flagMap: flagMap, values: values }
 
 		ComponentClass[propName.toUpperCase()] = Object.freeze(flagMap)
 	}
@@ -238,10 +275,6 @@ export class SchemaParser {
 			)
 		}
 
-		componentInfo.properties[propName] = { type: storageType, arrayConstructor }
-		componentInfo.propertyKeys.push(propName)
-		componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT;
-
 		const enumMap = {}
 		const valueMap = []
 		for (let i = 0; i < values.length; i++) {
@@ -250,14 +283,25 @@ export class SchemaParser {
 			valueMap[i] = valueName
 		}
 
-		componentInfo.representations[propName] = { type: 'enum', originalKey: propName, enumMap, valueMap }
+		componentInfo.representations[propName] = { type: 'enum', originalKey: propName, enumMap, valueMap, values: values }
 		ComponentClass[propName.toUpperCase()] = Object.freeze(enumMap)
+
+		// If it's a shared property, we don't add its own data to the SoA layout.
+		// The 'groupId' property will be added later.
+		if (propDefinition.shared) return
+
+		componentInfo.properties[propName] = { type: storageType, arrayConstructor }
+		componentInfo.propertyKeys.push(propName)
+		componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT;
 	}
 
 	/**
 	 * Parses a packed array representation.
 	 */
 	pack_array(propName, propDefinition, componentInfo, implicitKeys, ComponentClass) {
+		if (propDefinition.shared) {
+			throw new Error(`SchemaParser: The 'shared' flag is not supported for complex types like 'pack_array' in '${ComponentClass.name}.${propName}'.`)
+		}
 		const { of } = propDefinition
 
 		if (!of) {
@@ -321,6 +365,9 @@ export class SchemaParser {
 	 * Handles arrays of primitives (e.g., { of: 'u32' }) and arrays of complex types (e.g., { of: { type: 'enum', ... } }).
 	 */
 	flat_array(propName, propDefinition, componentInfo, implicitKeys, ComponentClass) {
+		if (propDefinition.shared) {
+			throw new Error(`SchemaParser: The 'shared' flag is not supported for complex types like 'flat_array' in '${ComponentClass.name}.${propName}'.`)
+		}
 		const { of, capacity, lengthProperty: userDefinedLengthProp } = propDefinition
 		const len = capacity ?? propDefinition.length
 
@@ -411,6 +458,9 @@ export class SchemaParser {
 	 * Parses a Reverse Polish Notation (RPN) formula representation.
 	 */
 	rpn(propName, propDefinition, componentInfo, implicitKeys, ComponentClass) {
+		if (propDefinition.shared) {
+			throw new Error(`SchemaParser: The 'shared' flag is not supported for complex types like 'rpn' in '${ComponentClass.name}.${propName}'.`)
+		}
 		// The `type` of the stream is defined by `streamDataType`, defaulting to 'f32'.
 		// This avoids collision with `propDefinition.type`, which is 'rpn'.
 		const { streamDataType = 'f32', streamCapacity, instanceCapacity } = propDefinition

@@ -15,11 +15,7 @@
 			"type": "ItemTooltip",
 			"description": "Launches a molten rock that deals Physical and Fire damage on impact.",
 			"stats": ["Damage", "Cooldown", "Range"]
-		}
-	},
-
-	"shared": {
-		"rarity": { "value": "uncommon" },
-		"stack": { "size": 64 }
+		},
+		"Rarity": { "value": "uncommon" }
 	}
 }

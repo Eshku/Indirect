@@ -5,6 +5,7 @@
  */
 
 const INITIAL_BUFFER_SIZE = 1024 * 1024 // 1 MB
+const textEncoder = new TextEncoder();
 
 export class RawCommandBuffer {
 	/**
@@ -97,6 +98,18 @@ export class RawCommandBuffer {
 		this.offset += 8
 	}
 
+	writeString(value) {
+        const encoded = textEncoder.encode(value);
+        this.ensureCapacity(2 + encoded.length);
+
+        // Write length prefix (U16)
+        this.view.setUint16(this.offset, encoded.length, true);
+        this.offset += 2;
+
+        // Write string bytes
+        new Uint8Array(this.buffer, this.offset).set(encoded);
+        this.offset += encoded.length;
+    }
 	/**
 	 * Serializes a component's data into the buffer based on its schema.
 	 * @param {number} typeID The component's type ID.
@@ -156,15 +169,12 @@ export class RawCommandBuffer {
 		//console.log('RawBuffer: Sorted entries:', sortedEntries);
 
 		for (const [typeID, data] of sortedEntries) {
-			//console.log(`RawBuffer: Writing component typeID ${typeID} at ${this.offset}`);
 			this.writeU16(typeID)
 
-			// Get component info to retrieve byteSize
-			const info = this.componentManager.componentInfo[typeID]
-			if (!info) throw new Error(`Component info not found for typeID: ${typeID}`)
-
-			// Write the byteSize of the component data
-			this.writeU16(info.byteSize) // Assuming byteSize fits in U16, adjust if needed
+			// Write the byteSize of the component data so the reader knows how much to skip.
+			const info = this.componentManager.componentInfo[typeID];
+			if (!info) throw new Error(`Component info not found for typeID: ${typeID}`);
+			this.writeU16(info.byteSize);
 
 			this.writeComponentData(typeID, data)
 		}

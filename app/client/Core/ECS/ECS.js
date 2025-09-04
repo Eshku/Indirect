@@ -1,7 +1,7 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { Entity } = await import(`${PATH_MANAGERS}/EntityManager/Entity.js`)
 
-const { entityManager, componentManager, prefabManager } = theManager.getManagers()
+const { entityManager, componentManager, prefabManager, sharedGroupManager } = theManager.getManagers()
 
 export const ECS = {
 
@@ -75,7 +75,7 @@ export const ECS = {
 		if (Object.keys(componentsInput).length === 0) {
 			return entityManager.createEntity()
 		}
-		const componentIdMap = entityManager._convertComponentDataToIdMap(componentsInput)
+		const componentIdMap = entityManager._convertComponentDataToIdMap(componentsInput);
 		return entityManager.createEntityWithComponentsByIds(componentIdMap)
 	},
 
@@ -102,7 +102,7 @@ export const ECS = {
 			)
 			return undefined
 		}
-		return this._instantiateChildRecursive(prefabData, { rootPrefabName: prefabId, overrides, parentId, ownerId })
+		return this._instantiateChildRecursive(prefabData, { rootPrefabName: prefabId, overrides, parentId, ownerId });
 	},
 
 	/**
@@ -122,7 +122,7 @@ export const ECS = {
 	 * @returns {boolean} True on success.
 	 */
 	addComponent(entityId, ComponentClass, data) {
-		const componentTypeId = componentManager.getComponentTypeId(ComponentClass)
+		const componentTypeId = componentManager.getComponentTypeID(ComponentClass)
 		if (componentTypeId === undefined) {
 			console.warn(`ECS.addComponent: Component "${ComponentClass.name}" not registered.`)
 			return false
@@ -137,7 +137,7 @@ export const ECS = {
 	 * @returns {boolean} True on success.
 	 */
 	removeComponent(entityId, ComponentClass) {
-		const componentTypeId = componentManager.getComponentTypeId(ComponentClass)
+		const componentTypeId = componentManager.getComponentTypeID(ComponentClass)
 		if (componentTypeId === undefined) {
 			// No need to warn, the component isn't even registered in the system.
 			return false
@@ -152,7 +152,7 @@ export const ECS = {
 	 * @returns {object|undefined} The component data instance.
 	 */
 	getComponent(entityId, ComponentClass) {
-		const componentTypeId = componentManager.getComponentTypeId(ComponentClass)
+		const componentTypeId = componentManager.getComponentTypeID(ComponentClass)
 		if (componentTypeId === undefined) {
 			// Component isn't registered, so no entity can have it.
 			return undefined
@@ -162,7 +162,17 @@ export const ECS = {
 			return undefined
 		}
 
-		return componentManager.readComponentData(entityId, componentTypeId, archetype)
+		const perEntityData = componentManager.readComponentData(entityId, componentTypeId, archetype)
+
+		// Check for and merge shared data
+		if (perEntityData && perEntityData.hasOwnProperty('groupId')) {
+			const groupId = perEntityData.groupId
+			const sharedGroup = sharedGroupManager.groups[groupId]
+			const sharedComponentData = sharedGroup ? sharedGroup[componentTypeId] : null
+			return { ...perEntityData, ...sharedComponentData }
+		}
+
+		return perEntityData
 	},
 
 	/**
@@ -172,7 +182,7 @@ export const ECS = {
 	 * @returns {boolean}
 	 */
 	hasComponent(entityId, ComponentClass) {
-		const componentTypeId = componentManager.getComponentTypeId(ComponentClass)
+		const componentTypeId = componentManager.getComponentTypeID(ComponentClass)
 		if (componentTypeId === undefined) {
 			return false
 		}
@@ -187,12 +197,15 @@ export const ECS = {
 		const componentData = { ...prefabData.components }
 
 		if (isRoot) {
-			Object.assign(componentData, overrides)
+			// Deep merge overrides
+			for (const compName in overrides) {
+				componentData[compName] = { ...(componentData[compName] || {}), ...overrides[compName] }
+			}
 			componentData.PrefabId = { id: rootPrefabName }
 		}
 
-		if (parentId) componentData.Parent = { entityId: parentId }
-		if (ownerId) componentData.Owner = { entityId: ownerId }
+		if (parentId) componentData.Parent = { entityId: parentId };
+		if (ownerId) componentData.Owner = { entityId: ownerId };
 
 		const entityId = this.createEntity(componentData)
 		if (entityId === undefined) return undefined

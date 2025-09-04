@@ -1,5 +1,5 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { entityManager, componentManager, archetypeManager } = theManager.getManagers()
+const { entityManager, componentManager, archetypeManager, sharedGroupManager } = theManager.getManagers()
 
 /**
  * A high-level wrapper around an entity ID, providing convenient methods for **inspecting**
@@ -42,7 +42,21 @@ export class Entity {
 			console.warn(`Entity ${this.id} is not active.`)
 			return []
 		}
-		return componentManager.getComponentNamesForArchetype(this.archetypeId).sort()
+		const perEntityNames = new Set(componentManager.getComponentNamesForArchetype(this.archetypeId))
+
+		// Also inspect shared components
+		const componentData = this.data
+		if (componentData) {
+			for (const componentName in componentData) {
+				const component = componentData[componentName]
+				// A component has shared data if it has a groupId property after merging.
+				if (component && component.hasOwnProperty('groupId')) {
+					perEntityNames.add(componentName)
+				}
+			}
+		}
+
+		return [...perEntityNames].sort()
 	}
 
 	/**
@@ -72,8 +86,16 @@ export class Entity {
 		// The browser console will typically sort these keys alphabetically for display.
 		for (const typeId of componentTypeIDs) {
 			const componentName = componentManager.getComponentNameByTypeID(typeId)
-			// Read the data for this specific entity and component type
-			allData[componentName] = componentManager.readComponentData(this.id, typeId, archetypeId)
+			const perEntityData = componentManager.readComponentData(this.id, typeId, archetypeId)
+
+			if (perEntityData && perEntityData.hasOwnProperty('groupId')) {
+				const groupId = perEntityData.groupId
+				const sharedGroup = sharedGroupManager.groups[groupId]
+				const sharedComponentData = sharedGroup ? sharedGroup[typeId] : null
+				allData[componentName] = { ...perEntityData, ...sharedComponentData }
+			} else {
+				allData[componentName] = perEntityData
+			}
 		}
 		return allData
 	}
@@ -101,11 +123,21 @@ export class Entity {
 		}
 
 		// Verify the entity's archetype actually has this component before trying to read it.
-		if (!archetypeManager.hasComponentType(this.archetypeId, componentTypeId)) {
-			// This is not an error, the entity just doesn't have this component.
+		const archetypeId = this.archetypeId
+		if (!archetypeManager.hasComponentType(archetypeId, componentTypeId)) {
 			return undefined
 		}
 
-		return componentManager.readComponentData(this.id, componentTypeId, this.archetypeId)
+		const perEntityData = componentManager.readComponentData(this.id, componentTypeId, archetypeId)
+
+		// Check for and merge shared data
+		if (perEntityData && perEntityData.hasOwnProperty('groupId')) {
+			const groupId = perEntityData.groupId
+			const sharedGroup = sharedGroupManager.groups[groupId]
+			const sharedComponentData = sharedGroup ? sharedGroup[componentTypeId] : null
+			return { ...perEntityData, ...sharedComponentData }
+		}
+
+		return perEntityData
 	}
 }

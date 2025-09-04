@@ -1,3 +1,6 @@
+//! not used, but could be at some point as single indirection layer thing.
+//! forgor it even exist tbh, been a while
+
 /**
  * @fileoverview A table for managing the lifecycle of complex JavaScript objects.
  *

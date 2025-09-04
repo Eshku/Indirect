@@ -41,7 +41,17 @@ export class Query {
 		return Object.freeze(typeIDs)
 	}
 
-	constructor(id, queryManager, componentManager, archetypeManager, withComponents, withoutComponents = [], anyComponents = [], reactComponents = []) {
+	constructor(
+		id,
+		queryManager,
+		componentManager,
+		archetypeManager,
+		withComponents,
+		withoutComponents = [],
+		anyComponents = [],
+		reactComponents = [],
+		constantsRequest = []
+	) {
 		this.id = id
         this.queryManager = queryManager
 		this.componentManager = componentManager
@@ -58,6 +68,7 @@ export class Query {
 
 		this.isReactiveQuery = this._reactiveMask > 0n
 		this.matchingArchetypeIds = []
+		this.constantsRequest = constantsRequest
 
 		if (this.isReactiveQuery) {
 			this._reactiveTypeIDsByArchetype = []
@@ -75,11 +86,27 @@ export class Query {
 		throw new Error('Query iterator not initialized.')
 	}
 
+	_populateChunkConstants(chunk) {
+		// This is a separate method to avoid duplicating logic in both iterators.
+		chunk.constants = {}
+		for (const { localName, componentTypeID, propertyName } of this.constantsRequest) {
+			const info = this.componentManager.componentInfo[componentTypeID]
+			if (info && info.representations[propertyName]) {
+				const rep = info.representations[propertyName]
+				if (rep.type === 'enum') {
+					chunk.constants[localName] = rep.enumMap
+				} else if (rep.type === 'bitmask') {
+					chunk.constants[localName] = rep.flagMap
+				}
+			}
+		}
+	}
 	*_iterAllArchetypes() {
 		for (const archetype of this.matchingArchetypeIds) {
 			const chunks = this.archetypeManager.archetypeChunks[archetype]
 			for (const chunk of chunks) {
 				if (chunk.size > 0) {
+					this._populateChunkConstants(chunk)
 					yield chunk
 				}
 			}
@@ -94,6 +121,7 @@ export class Query {
 			const chunks = this.archetypeManager.archetypeChunks[archetype]
 			for (const chunk of chunks) {
 				if (chunk.size > 0) {
+					this._populateChunkConstants(chunk)
 					yield chunk
 				}
 			}

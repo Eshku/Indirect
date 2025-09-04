@@ -28,5 +28,8 @@
 	},
 	"test_player_asset": {
 		"path": "client/Data/Prefabs/Playable/player.prefab.json"
+	},
+	"test_prefab": {
+		"path": "client/Data/Prefabs/Tests/TestPrefab.json"
 	}
 }

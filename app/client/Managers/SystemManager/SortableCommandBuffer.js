@@ -36,15 +36,17 @@ export class SortableCommandBuffer {
 
         this.keysBuffer = new BigUint64Array(this.capacity);
         this.offsetsBuffer = new Uint32Array(this.capacity);
+        this.lengthsBuffer = new Uint16Array(this.capacity); // To store command lengths
     }
 
-    add(key, offset) {
+    add(key, offset, length) {
         //console.log(`SortableCommandBuffer.add called. New size will be: ${this.size + 1}`);
         if (this.size >= this.capacity) {
             this.resize();
         }
         this.keysBuffer[this.size] = key;
         this.offsetsBuffer[this.size] = offset;
+        this.lengthsBuffer[this.size] = length;
         this.size++;
     }
 
@@ -52,11 +54,16 @@ export class SortableCommandBuffer {
         // We only sort the part of the buffer that is actually used.
         const keysView = new BigUint64Array(this.keysBuffer.buffer, 0, this.size);
         const offsetsView = new Uint32Array(this.offsetsBuffer.buffer, 0, this.size);
-        radixSort(keysView, offsetsView);
+        const lengthsView = new Uint16Array(this.lengthsBuffer.buffer, 0, this.size);
+        radixSort(keysView, offsetsView, lengthsView);
     }
 
     getSortedOffsets() {
         return new Uint32Array(this.offsetsBuffer.buffer, 0, this.size);
+    }
+
+    getSortedLengths() {
+        return new Uint16Array(this.lengthsBuffer.buffer, 0, this.size);
     }
 
     clear() {
@@ -67,12 +74,15 @@ export class SortableCommandBuffer {
         this.capacity *= 2;
         const newKeysBuffer = new BigUint64Array(this.capacity);
         const newOffsetsBuffer = new Uint32Array(this.capacity);
+        const newLengthsBuffer = new Uint16Array(this.capacity);
 
         newKeysBuffer.set(this.keysBuffer);
         newOffsetsBuffer.set(this.offsetsBuffer);
+        newLengthsBuffer.set(this.lengthsBuffer);
 
         this.keysBuffer = newKeysBuffer;
         this.offsetsBuffer = newOffsetsBuffer;
+        this.lengthsBuffer = newLengthsBuffer;
     }
 
 	static encodeKey(phase, layer, primaryId, secondaryId) {

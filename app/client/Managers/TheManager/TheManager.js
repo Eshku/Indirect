@@ -9,6 +9,7 @@ const MANAGER_INIT_ORDER = [
 	// and must be initialized in this specific order.
 	'ComponentManager',
 	'CooldownManager', // Depends on ComponentManager
+	'SharedGroupManager',
 	'LayerManager',
 	'GameManager',
 	'PhysicsManager',

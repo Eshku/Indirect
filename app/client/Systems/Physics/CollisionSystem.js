@@ -170,10 +170,9 @@ export class CollisionSystem {
 					isGroundedNow = true
 					if (!wasGrounded) {
 						// This is a landing event.
-						const entityId = charChunk.entities[charIndexInChunk]
-						this.commands.createEntityInArchetypeWithComponent(this.landedEventArchetypeID, this.landedEventTypeID, {
-							entityId,
-						})
+						const entityId = charChunk.entities[charIndexInChunk];
+						const componentMap = new Map([[this.landedEventTypeID, { entityId }]]);
+						this.commands.createEntityInArchetype(this.landedEventArchetypeID, componentMap);
 					}
 				} else {
 					// Character is airborne for one of three reasons:
@@ -183,12 +182,9 @@ export class CollisionSystem {
 					isGroundedNow = false
 					if (wasGrounded && !justJumped && !isOverlapping) {
 						// This is the "walked off a ledge" case.
-						const entityId = charChunk.entities[charIndexInChunk]
-						this.commands.createEntityInArchetypeWithComponent(
-							this.leftSurfaceEventArchetypeID,
-							this.leftSurfaceEventTypeID,
-							{ entityId }
-						)
+						const entityId = charChunk.entities[charIndexInChunk];
+						const componentMap = new Map([[this.leftSurfaceEventTypeID, { entityId }]]);
+						this.commands.createEntityInArchetype(this.leftSurfaceEventArchetypeID, componentMap);
 					}
 				}
 

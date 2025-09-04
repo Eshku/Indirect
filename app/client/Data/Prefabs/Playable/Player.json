@@ -19,7 +19,6 @@
 		"strength": { "value": 5 },
 		"dexterity": { "value": 5 }
 	},
-	"shared": {},
 	"children": [
 		{
 			"extends": "fireball",
