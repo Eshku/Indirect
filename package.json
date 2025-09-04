@@ -1,6 +1,6 @@
 {
   "name": "indirect-engine",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "main": "./app/app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -14,8 +14,7 @@
   "devDependencies": {
     "chokidar": "^4.0.3",
     "electron": "^35.1.1",
-    "electron-builder": "^26.0.12",
-    "electron-reload": "^2.0.0-alpha.1"
+    "electron-builder": "^26.0.12"
   },
   "dependencies": {
     "install": "^0.13.0",
