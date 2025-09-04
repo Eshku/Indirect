@@ -1,0 +1,24 @@
+{
+	"extends": "item_base",
+	"dependencies": ["fireball_projectile"],
+	"components": {
+		"displayName": { "value": "Fireball" },
+		"icon": { "assetName": "fireball_icon" },
+		"cooldown": { "duration": 0.25 },
+		"Damage": {
+			"types": ["Fire"],
+			"baseValues": [40],
+			"formulas": ["BASE + (INT * 1.0)"]
+		},
+		"Range": 1000,
+		"tooltip": {
+			"type": "ItemTooltip",
+			"description": "Hurls a fiery orb that deals Fire damage.",
+			"stats": ["Damage", "Cooldown", "Range"]
+		}
+	},
+	"shared": {
+		"rarity": { "value": "common" },
+		"stack": { "size": 64 }
+	}
+}

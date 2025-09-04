@@ -3,4 +3,4 @@ directories:
   buildResources: electron
 win:
   target: portable
-  icon: assets/electron/icon.ico
+  icon: app/client/assets/electron/icon.ico

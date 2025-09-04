@@ -1,0 +1,32 @@
+{
+	"player_character": {
+		"path": "client/Data/Prefabs/Playable/Player.json"
+	},
+	"item_base": {
+		"path": "client/Data/Prefabs/Items/Item.json"
+	},
+	"projectile_base": {
+		"path": "client/Data/Prefabs/Projectiles/BaseProjectile.json"
+	},
+	"fire_trail_effect": {
+		"path": "client/Data/Prefabs/Effects/FireTrail.json"
+	},
+	"platform": {
+		"path": "client/Data/Prefabs/Objects/Platform.json"
+	},
+	"fireball": {
+		"path": "client/Data/Prefabs/Items/Skills/Fireball.json"
+	},
+	"searing_boulder": {
+		"path": "client/Data/Prefabs/Items/Skills/SearingBoulder.json"
+	},
+	"fireball_projectile": {
+		"path": "client/Data/Prefabs/Projectiles/FireballProjectile.json"
+	},
+	"searing_boulder_projectile": {
+		"path": "client/Data/Prefabs/Projectiles/SearingBoulderProjectile.json"
+	},
+	"test_player_asset": {
+		"path": "client/Data/Prefabs/Playable/player.prefab.json"
+	}
+}

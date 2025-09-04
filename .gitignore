@@ -5,7 +5,7 @@
 /exe
 
 #asset sources
-/assets/icons/skills/source
+/app/client/assets/icons/skills/source
 
 #weird stuffs
-TODO.MD
+todo.md

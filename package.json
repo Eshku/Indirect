@@ -1,7 +1,7 @@
 {
-  "name": "pixi-2d-hero-defense-multiplayer",
-  "version": "0.1.7",
-  "main": "app.js",
+  "name": "indirect-engine",
+  "version": "0.1.6",
+  "main": "./app/app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "set NODE_ENV=development&& electron .",
@@ -12,6 +12,7 @@
   "license": "ISC",
   "description": "",
   "devDependencies": {
+    "chokidar": "^4.0.3",
     "electron": "^35.1.1",
     "electron-builder": "^26.0.12",
     "electron-reload": "^2.0.0-alpha.1"

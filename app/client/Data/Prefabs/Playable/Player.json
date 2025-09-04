@@ -1,0 +1,55 @@
+{
+	"components": {
+		"position": { "x": 0, "y": 100 },
+		"speed": { "value": 150 },
+		"rotation": { "angle": 0 },
+		"scale": { "x": 1, "y": 1 },
+		"velocity": { "x": 0, "y": 0 },
+		"spriteDescriptor": { "assetName": "test_player" },
+		"viewable": {},
+		"CollisionFlags": {},
+		"isGrounded": {},
+		"jump": {},
+		"collider": { "width": 64, "height": 160 },
+		"movementIntent": {},
+		"actionIntent": {},
+		"playerTag": {},
+		"activeSet": {},
+		"intelligence": { "value": 5 },
+		"strength": { "value": 5 },
+		"dexterity": { "value": 5 }
+	},
+	"shared": {},
+	"children": [
+		{
+			"extends": "fireball",
+			"components": {
+				"InActiveSet": { "slot": 0 }
+			}
+		},
+		{
+			"extends": "fireball",
+			"components": {
+				"InActiveSet": { "slot": 1 }
+			}
+		},
+		{
+			"extends": "fireball",
+			"components": {
+				"InActiveSet": { "slot": 2 }
+			}
+		},
+		{
+			"extends": "searing_boulder",
+			"components": {
+				"InActiveSet": { "slot": 3 }
+			}
+		},
+		{
+			"extends": "searing_boulder",
+			"components": {
+				"InActiveSet": { "slot": 4 }
+			}
+		}
+	]
+}

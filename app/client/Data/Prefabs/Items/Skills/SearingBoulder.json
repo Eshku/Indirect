@@ -1,0 +1,25 @@
+{
+	"extends": "item_base",
+	"dependencies": ["searing_boulder_projectile"],
+	"components": {
+		"displayName": { "value": "Searing Boulder" },
+		"icon": { "assetName": "searing_boulder_icon" },
+		"cooldown": { "duration": 1.0 },
+		"Damage": {
+			"types": ["Physical", "Fire"],
+			"baseValues": [25, 25],
+			"formulas": ["BASE + (STR * 1.0)", "BASE + (INT * 1.0)"]
+		},
+		"range": 1000,
+		"tooltip": {
+			"type": "ItemTooltip",
+			"description": "Launches a molten rock that deals Physical and Fire damage on impact.",
+			"stats": ["Damage", "Cooldown", "Range"]
+		}
+	},
+
+	"shared": {
+		"rarity": { "value": "uncommon" },
+		"stack": { "size": 64 }
+	}
+}

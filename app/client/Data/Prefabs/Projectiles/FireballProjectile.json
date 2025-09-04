@@ -1,0 +1,11 @@
+{
+	"extends": ["projectile_base", "fire_trail_effect"],
+	"components": {
+		"shapeDescriptor": {
+			"shape": "circle",
+			"radius": 8,
+			"color": "0xff8800",
+			"zIndex": 10
+		}
+	}
+}
