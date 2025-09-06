@@ -84,8 +84,8 @@ export const systemSchedule = {
 
 	Benchmark: [
 		/* { name: 'RWMBenchmark', frequency: 'logic' }, */
-		/* { name: 'CreationDestructionBenchmarkSystem', frequency: 'logic' }, */
 		/* { name: 'StructuralChangeBenchmarkSystem', frequency: 'logic' }, */
+		/* { name: 'CreationDestructionBenchmarkSystem', frequency: 'logic' }, */
 	],
 
 	Test: [

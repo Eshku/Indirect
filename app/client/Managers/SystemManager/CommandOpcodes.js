@@ -20,7 +20,7 @@ export const OpCodes = Object.freeze({
 	CREATE_ENTITIES_VARIED: 21, // createEntitiesInArchetype
 	INSTANTIATE_PREFAB_BATCH: 22,
 
-	// Query-Based Modifications
+	// Query-Based Modifications (Future Work - currently handled by CommandBuffer helpers)
 	ADD_COMPONENT_TO_QUERY: 30,
 	REMOVE_COMPONENT_FROM_QUERY: 31,
 	SET_COMPONENT_DATA_ON_QUERY: 32,

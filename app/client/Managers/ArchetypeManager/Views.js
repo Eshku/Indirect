@@ -1,3 +1,6 @@
+//! Outdated.
+
+
 /**
  * @fileoverview Defines reusable "view" objects for accessing component data.
  *

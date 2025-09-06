@@ -1,15 +1,29 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager } = theManager.getManagers()
 
-const { Position, Velocity, CreationDestructionTag, ComponentA } = componentManager.getComponents()
+const { Position, Velocity, CreationDestructionTag, ComponentA, ComponentB } = componentManager.getComponents()
 
 /**
  * Configuration to enable or disable specific creation/destruction benchmarks.
  */
 const benchmarkConfig = {
 	// true / false
-	runPerEntityChurn: true,
-	runQueryBasedSpike: false,
+	runPerEntityChurn: false, // Creates/destroys N entities per frame, one by one.
+	runQueryBasedChurn: true, // Creates/destroys N entities per frame using batch commands.
+
+	runQueryBasedSpike: false, // Creates/destroys a large pool of entities every few seconds.
+
+	// --- Test-Specific Settings ---
+	perEntityChurn: {
+		poolSize: 20_000,
+		churnRate: 2_000,
+	},
+	queryBasedChurn: {
+		churnRate: 20_000, // How many to create/destroy each frame
+	},
+	queryBasedSpike: {
+		poolSize: 50_000,
+	},
 }
 
 /**
@@ -27,9 +41,7 @@ export class CreationDestructionBenchmarkSystem {
 		this.velocityTypeID = componentManager.getComponentTypeID(Velocity)
 		this.tagTypeID = componentManager.getComponentTypeID(CreationDestructionTag)
 		this.componentATypeID = componentManager.getComponentTypeID(ComponentA)
-
-		this.churnPoolSize = 20_000
-		this.churnRate = 2_000
+		this.componentBTypeID = componentManager.getComponentTypeID(ComponentB)
 
 		this.churnCreationMap = new Map([
 			[this.positionTypeID, { x: 0, y: 0 }],
@@ -42,21 +54,30 @@ export class CreationDestructionBenchmarkSystem {
 			with: [ComponentA], // Use ComponentA as a tag for this test
 		})
 
-		this.spikePoolSize = 5_000
-
 		this.spikeCreationMap = new Map([
 			[this.positionTypeID, { x: 0, y: 0 }],
 			[this.velocityTypeID, { x: 0, y: 0 }],
 			[this.componentATypeID, {}],
 		])
+
+		// --- Query-Based Churn Test ---
+		this.churnQueryBased = queryManager.getQuery({
+			with: [ComponentB], // Use ComponentB as a tag for this test
+		})
+
+		this.churnBasedCreationMap = new Map([
+			[this.positionTypeID, { x: 0, y: 0 }],
+			[this.velocityTypeID, { x: 0, y: 0 }],
+			[this.componentBTypeID, {}],
+		])
 	}
 
 	init() {
 		if (benchmarkConfig.runPerEntityChurn) {
-			this._spawnChurn(this.churnPoolSize)
+			this._spawnChurn(benchmarkConfig.perEntityChurn.poolSize)
 		}
 		if (benchmarkConfig.runQueryBasedSpike) {
-			this._spawnSpike(this.spikePoolSize)
+			this._spawnSpike(benchmarkConfig.queryBasedSpike.poolSize)
 		}
 	}
 
@@ -67,6 +88,9 @@ export class CreationDestructionBenchmarkSystem {
 		if (benchmarkConfig.runQueryBasedSpike) {
 			this._updateSpike(currentTick)
 		}
+		if (benchmarkConfig.runQueryBasedChurn) {
+			this._updateQueryBasedChurn()
+		}
 	}
 
 	// --- Per-Entity Churn Logic ---
@@ -75,7 +99,7 @@ export class CreationDestructionBenchmarkSystem {
 		let destroyedCount = 0
 		destructionLoop: for (const chunk of this.churnQuery.iter()) {
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (destroyedCount >= this.churnRate) {
+				if (destroyedCount >= benchmarkConfig.perEntityChurn.churnRate) {
 					break destructionLoop
 				}
 				this.commands.destroyEntity(chunk.entities[indexInChunk])
@@ -101,7 +125,7 @@ export class CreationDestructionBenchmarkSystem {
 			this.commands.destroyEntitiesInQuery(this.spikeQuery)
 		} else if (currentTick > 0 && currentTick % 120 === 1) {
 			// On the very next frame, respawn them all.
-			this._spawnSpike(this.spikePoolSize)
+			this._spawnSpike(benchmarkConfig.queryBasedSpike.poolSize)
 		}
 	}
 
@@ -109,5 +133,14 @@ export class CreationDestructionBenchmarkSystem {
 		if (count === 0) return
 		// Use the hyper-optimized batch creation command.
 		this.commands.createEntities(this.spikeCreationMap, count)
+	}
+
+	// --- Query-Based Churn Logic ---
+
+	_updateQueryBasedChurn() {
+		// Destroy all entities from the previous frame.
+		this.commands.destroyEntitiesInQuery(this.churnQueryBased)
+		// Create a new batch for this frame.
+		this.commands.createEntities(this.churnBasedCreationMap, benchmarkConfig.queryBasedChurn.churnRate)
 	}
 }

@@ -34,10 +34,14 @@ const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
  * to be parallelized when their dependencies don't conflict. This is the long-term vision
  * for handling mutable queries.
  */
+
+
+//! Query mutability going to be decided later on.
 class QueryManager {
 	constructor() {
 		this.queryCache = new Map() // Maps canonical key to a Query object
-		this.nextMutableQueryId = 0 // For generating unique keys for mutable queries
+		this.queriesById = [] // Maps numeric ID to Query
+		this.nextQueryId = 0
 	}
 
 	async init() {
@@ -46,12 +50,6 @@ class QueryManager {
 	}
 
 	_generateQueryKey(options) {
-		// If the query is marked as mutable, give it a guaranteed unique key
-		// so it is never shared, but still benefits from the ref-counting lifecycle.
-		if (options.mutable) {
-			return `mutable:${this.nextMutableQueryId++}`
-		}
-
 		const {
 			with: withComponents = [],
 			without: withoutComponents = [],
@@ -114,7 +112,7 @@ class QueryManager {
 	getQuery({ with: withComponents = [], without = [], any = [], react = [], constants = {}, mutable = false }) {
 		try {
 			const options = { with: withComponents, without, any, react, constants, mutable }
-			const queryKey = this._generateQueryKey(options)
+			const queryKey = mutable ? `mutable:${this.nextQueryId}` : this._generateQueryKey(options)
 
 			const cachedQuery = this.queryCache.get(queryKey)
 			if (cachedQuery) {
@@ -122,10 +120,12 @@ class QueryManager {
 				return cachedQuery
 			}
 
+			const queryId = this.nextQueryId++;
+
 			const constantsRequest = this._parseConstants(options.constants)
 
 			const newQuery = new Query(
-				queryKey, // Use the key as the ID
+				queryId,
 				this,
 				this.componentManager,
 				this.archetypeManager,
@@ -137,7 +137,9 @@ class QueryManager {
 			)
 
 			newQuery.refCount = 1
+			newQuery.cacheKey = queryKey;
 			this.queryCache.set(queryKey, newQuery)
+			this.queriesById[queryId] = newQuery;
 
 			for (const archetypeId of this.archetypeManager.archetypeLookup.values()) {
 				newQuery.registerArchetype(archetypeId)
@@ -148,6 +150,10 @@ class QueryManager {
 			console.error(`QueryManager: Error creating query:`, error)
 			return undefined
 		}
+	}
+
+	getQueryById(id) {
+		return this.queriesById[id];
 	}
 
 	/**
@@ -188,7 +194,8 @@ class QueryManager {
 		queryToRelease.refCount--
 
 		if (queryToRelease.refCount <= 0) {
-			this.queryCache.delete(queryToRelease.id)
+			this.queryCache.delete(queryToRelease.cacheKey)
+			this.queriesById[queryToRelease.id] = undefined;
 		}
 	}
 }

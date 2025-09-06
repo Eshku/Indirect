@@ -45,6 +45,23 @@ class Modification {
 		this.additions.clear();
 		this.removals.clear();
 	}
+
+	/**
+	 * Generates a unique signature string for this modification based on a source archetype.
+	 * This allows us to cache the target archetype calculation.
+	 * @param {number} sourceArchetypeId
+	 * @param {bigint[]} componentBitFlags
+	 * @returns {string}
+	 */
+	getSignature(sourceArchetypeId, componentBitFlags) {
+		// Sort keys to ensure canonical signature
+		const addKeys = [...this.additions.keys()].sort((a, b) => a - b).join(',');
+		const removeKeys = [...this.removals].sort((a, b) => a - b).join(',');
+
+		// The signature must include the source archetype, as the same modification
+		// (e.g., "add Velocity") will result in different target archetypes depending on the source.
+		return `${sourceArchetypeId}>A[${addKeys}]>R[${removeKeys}]`;
+	}
 }
 
 /**
@@ -72,6 +89,7 @@ export class CommandBufferExecutor {
 		this._identicalCreations = new Map(); // Map<archetypeId, Array<{map, count}>>
 		this._inPlaceUpdates = new Map(); // Map<archetypeId, Array<{entityId, updates}>>
 		this._modifications = new Map(); // Map<entityId, Modification>
+		this._queryOperations = []; // Array of { opCode, query, componentTypeID, data }
 
 		this._modificationPool = [];
 		this._modificationPoolIndex = 0;
@@ -112,6 +130,7 @@ export class CommandBufferExecutor {
 		this._identicalCreations.clear();
 		this._inPlaceUpdates.clear();
 		this._modifications.clear();
+		this._queryOperations.length = 0;
 		this._resetModPool();
 
 		for (let i = 0; i < sortedOffsets.length; i++) {
@@ -197,6 +216,17 @@ export class CommandBufferExecutor {
 					break;
 				}
 
+				case OpCodes.DESTROY_ENTITIES_IN_QUERY: {
+					const queryId = reader.readU32();
+					const query = this.systemManager.queryManager.getQueryById(queryId);
+					if (query) {
+						for (const chunk of query.iter()) {
+							for (let i = 0; i < chunk.size; i++) this._deletions.add(chunk.entities[i]);
+						}
+					}
+					break;
+				}
+
 				case OpCodes.ADD_COMPONENT:
 				case OpCodes.SET_COMPONENT_DATA: {
 					const entityId = reader.readU32();
@@ -232,6 +262,31 @@ export class CommandBufferExecutor {
 					mod.additions.delete(componentTypeID);
 					break;
 				}
+
+				// --- Query-Based Operations (Consolidation) ---
+				// These are queued up and executed during the flush phase.
+				case OpCodes.ADD_COMPONENT_TO_QUERY: {
+					const queryId = reader.readU32();
+					const componentTypeID = reader.readU16();
+					const data = reader.readComponentData(componentTypeID);
+					this._queryOperations.push({ opCode, queryId, componentTypeID, data });
+					break;
+				}
+				case OpCodes.REMOVE_COMPONENT_FROM_QUERY: {
+					const queryId = reader.readU32();
+					const componentTypeID = reader.readU16();
+					this._queryOperations.push({ opCode, queryId, componentTypeID, data: null });
+					break;
+				}
+				case OpCodes.SET_COMPONENT_DATA_ON_QUERY: {
+					const queryId = reader.readU32();
+					const componentTypeID = reader.readU16();
+					const data = reader.readComponentData(componentTypeID);
+					this._queryOperations.push({ opCode, queryId, componentTypeID, data });
+					break;
+				}
+				// Note: DESTROY_ENTITIES_IN_QUERY is handled directly in the consolidation pass
+				// by populating the _deletions set, which is highly efficient.
 			}
 		}
 	}
@@ -244,43 +299,78 @@ export class CommandBufferExecutor {
 		const moves = this._moves;
 		const inPlaceUpdates = this._inPlaceUpdates;
 		const componentBitFlags = this.componentManager.componentBitFlags;
+		const targetArchetypeCache = new Map(); // Cache for target archetype lookups
 
-		for (const [entityId, mod] of this._modifications.entries()) {
+		// --- 1. Execute Query-Based Operations ---
+		// These are large-scale structural changes and in-place updates.
+		// They are executed first to ensure any subsequent per-entity modifications
+		// for the same frame operate on the correct, new archetypes.
+		for (const op of this._queryOperations) {
+			const query = this.systemManager.queryManager.getQueryById(op.queryId);
+			if (!query) continue;
+
+			switch (op.opCode) {
+				case OpCodes.ADD_COMPONENT_TO_QUERY:
+					this.archetypeManager.addComponentToQuery(query, op.componentTypeID, op.data);
+					break;
+				case OpCodes.REMOVE_COMPONENT_FROM_QUERY:
+					this.archetypeManager.removeComponentFromQuery(query, op.componentTypeID);
+					break;
+				case OpCodes.SET_COMPONENT_DATA_ON_QUERY:
+					this.archetypeManager.setComponentDataOnQuery(query, op.componentTypeID, op.data);
+					break;
+			}
+		}
+
+		// --- 2. Process Per-Entity Modifications ---
+
+		for (const [entityId, modification] of this._modifications.entries()) {
 			const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId);
 			if (sourceArchetypeId === undefined) continue;
 
-			let addMask = 0n
-			for (const typeId of mod.additions.keys()) {
-				if (!this.archetypeManager.hasComponentType(sourceArchetypeId, typeId)) addMask |= componentBitFlags[typeId];
+			// --- OPTIMIZATION: Calculate target archetype only once per unique modification signature ---
+			const modSignature = modification.getSignature(sourceArchetypeId, componentBitFlags);
+			let targetArchetypeId = targetArchetypeCache.get(modSignature);
+
+			if (targetArchetypeId === undefined) {
+				let addMask = 0n;
+				for (const typeId of modification.additions.keys()) {
+					if (!this.archetypeManager.hasComponentType(sourceArchetypeId, typeId)) {
+						addMask |= componentBitFlags[typeId];
+					}
+				}
+
+				let removeMask = 0n;
+				for (const typeId of modification.removals) {
+					if (this.archetypeManager.hasComponentType(sourceArchetypeId, typeId)) {
+						removeMask |= componentBitFlags[typeId];
+					}
+				}
+
+				if (addMask === 0n && removeMask === 0n) {
+					targetArchetypeId = sourceArchetypeId; // In-place update
+				} else {
+					const sourceArchetypeMask = this.archetypeManager.archetypeMasks[sourceArchetypeId];
+					const targetArchetypeMask = (sourceArchetypeMask | addMask) & ~removeMask;
+					targetArchetypeId = this.archetypeManager.getArchetypeByMask(targetArchetypeMask);
+				}
+				targetArchetypeCache.set(modSignature, targetArchetypeId);
 			}
 
-			let removeMask = 0n
-			for (const typeId of mod.removals) {
-				if (this.archetypeManager.hasComponentType(sourceArchetypeId, typeId)) removeMask |= componentBitFlags[typeId];
-			}
-
-			if (addMask === 0n && removeMask === 0n) {
-				if (mod.additions.size > 0) {
+			if (targetArchetypeId === sourceArchetypeId) {
+				// This is an in-place update (only setting data on existing components).
+				if (modification.additions.size > 0) {
 					if (!inPlaceUpdates.has(sourceArchetypeId)) inPlaceUpdates.set(sourceArchetypeId, []);
-					inPlaceUpdates.get(sourceArchetypeId).push({ entityId, componentsToUpdate: mod.additions });
+					inPlaceUpdates.get(sourceArchetypeId).push({ entityId, componentsToUpdate: modification.additions });
 				}
 			} else {
-				const sourceArchetypeMask = this.archetypeManager.archetypeMasks[sourceArchetypeId];
-				const targetArchetypeMask = (sourceArchetypeMask | addMask) & ~removeMask;
-				const location = this.archetypeManager.archetypeEntityMaps[sourceArchetypeId].get(entityId);
-				if (!location) continue;
-
-				const targetArchetypeId = this.archetypeManager.getArchetypeByMask(targetArchetypeMask);
-
+				// This is a structural change (archetype move).
 				if (!moves.has(sourceArchetypeId)) moves.set(sourceArchetypeId, new Map());
 				const sourceMoves = moves.get(sourceArchetypeId);
-				if (!sourceMoves.has(targetArchetypeId)) {
-					sourceMoves.set(targetArchetypeId, { entityIds: [], sourceLocations: [], componentsToAssignArrays: [] });
-				}
+				if (!sourceMoves.has(targetArchetypeId)) sourceMoves.set(targetArchetypeId, { entityIds: [], componentsToAssignArrays: [] });
 				const targetMoveData = sourceMoves.get(targetArchetypeId);
 				targetMoveData.entityIds.push(entityId);
-				targetMoveData.sourceLocations.push(location);
-				targetMoveData.componentsToAssignArrays.push(mod.additions);
+				targetMoveData.componentsToAssignArrays.push(modification.additions);
 			}
 		}
 
@@ -299,6 +389,15 @@ export class CommandBufferExecutor {
 	 */
 	_flushDeletions() {
 		if (this._deletions.size > 0) {
+			// Before destroying, remove any pending modifications for these entities.
+			// This prevents wasted work in _flushModifications.
+			for (const entityId of this._deletions) {
+				const mod = this._modifications.get(entityId);
+				if (mod) {
+					this._modifications.delete(entityId);
+					this._returnModObject(mod);
+				}
+			}
 			this.entityManager.destroyEntitiesInBatch(this._deletions);
 		}
 	}
@@ -307,11 +406,7 @@ export class CommandBufferExecutor {
 	 * Executes all batched creation commands.
 	 * @private
 	 */
-	_flushCreations() {
-		for (const [archetypeId, componentIdMaps] of this._creations.entries()) {
-			this.entityManager.createEntitiesInArchetype(archetypeId, componentIdMaps);
-		}
-
+	_flushCreations() {		for (const [archetypeId, componentIdMaps] of this._creations.entries()) {			this.entityManager.createEntitiesInArchetype(archetypeId, componentIdMaps);		}
 		for (const [archetypeId, batches] of this._identicalCreations.entries()) {
 			for (const batch of batches) {
 				// This calls the hyper-optimized batch creation method on the entity manager.
@@ -333,6 +428,15 @@ export class CommandBufferExecutor {
 		this._modificationPool.push(mod);
 		this._modificationPoolIndex++;
 		return mod;
+	}
+
+	/**
+	 * Returns a modification object to the pool.
+	 * @param {Modification} mod
+	 * @private
+	 */
+	_returnModObject(mod) {
+		// This is a simple implementation. A more robust pool might check for duplicates.
 	}
 
 	_resetModPool() {

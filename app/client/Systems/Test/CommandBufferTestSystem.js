@@ -85,7 +85,7 @@ export class CommandBufferTestSystem {
 					const pos = componentInterpreter.read(createdEntity, this.PositionTypeID, createdEntityArchetype)
 					expect(pos).toEqual({ x: 10, y: 20 })
 
-					entityManager.destroyEntity(createdEntity) 
+					this.commands.destroyEntity(createdEntity)
 					flush()
 				})
 			}
@@ -116,7 +116,7 @@ export class CommandBufferTestSystem {
 						entityManager.getArchetypeForEntity(entity)
 					)
 					expect(vel).toEqual({ x: 5, y: 5 })
-					entityManager.destroyEntity(entity) 
+					this.commands.destroyEntity(entity)
 					flush()
 				})
 			}
@@ -134,7 +134,8 @@ export class CommandBufferTestSystem {
 					this.commands.removeComponent(entity, this.VelocityTypeID)
 					flush()
 					expect(entityManager.hasComponent(entity, this.VelocityTypeID)).toBe(false)
-					entityManager.destroyEntity(entity) 
+					this.commands.destroyEntity(entity)
+					entityManager.destroyEntity(entity)
 					flush()
 				})
 			}
@@ -156,7 +157,7 @@ export class CommandBufferTestSystem {
 						entityManager.getArchetypeForEntity(entity)
 					)
 					expect(pos).toEqual({ x: 999, y: -999 })
-					entityManager.destroyEntity(entity) 
+					this.commands.destroyEntity(entity)
 					flush()
 				})
 			}
@@ -189,7 +190,7 @@ export class CommandBufferTestSystem {
 						if (instantiatedEntity) break
 					}
 					expect(instantiatedEntity).not.toBe(undefined)
-					entityManager.destroyEntity(instantiatedEntity) 
+					this.commands.destroyEntity(instantiatedEntity)
 					flush()
 				})
 			}
@@ -224,14 +225,14 @@ export class CommandBufferTestSystem {
 					const pos = componentInterpreter.read(foundEntity, this.PositionTypeID, foundEntityArchetype)
 					expect(pos).toEqual({ x: 111, y: 222 })
 
-					entityManager.destroyEntity(foundEntity) 
+					this.commands.destroyEntity(foundEntity)
 					flush()
 				})
 			}
 
 			// --- Test 8 & 9: Batch and Query-Based Modifications (Isolated) ---
 			if (testConfig.runCreateEntitiesTest && testConfig.runQueryBasedModificationTest) {
-				it('should handle batch creation and query-based modifications', () => {
+				it('creation and all query-based modifications (add, set, remove, destroy)', () => {
 					const { QueryTestTag, QueryTestToggle } = componentManager.getComponents()
 					if (!QueryTestTag || !QueryTestToggle) throw new Error('Test components not found')
 

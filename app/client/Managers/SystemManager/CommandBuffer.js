@@ -197,11 +197,16 @@ export class CommandBuffer {
      * @param {number} [layer=0]
      */
     destroyEntitiesInQuery(query, layer = 0) {
-        for (const chunk of query.iter()) {
-            for (let i = 0; i < chunk.size; i++) {
-                this.destroyEntity(chunk.entities[i], layer);
-            }
-        }
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
+
+        this.rawBuffer.writeU8(OpCodes.DESTROY_ENTITIES_IN_QUERY);
+        this.rawBuffer.writeU32(query.id); // Write query's numeric ID
+
+        const length = this.rawBuffer.offset - startOffset;
+        // Sort by phase, then layer. Primary/secondary IDs are not needed for query ops.
+        const key = SortableCommandBuffer.encodeKey(SortPhase.DESTROY, layer, 0, 0);
+        this.sortableBuffer.add(key, offset, length);
     }
 
     /**
@@ -212,11 +217,17 @@ export class CommandBuffer {
      * @param {number} [layer=0]
      */
     addComponentToQuery(query, componentTypeID, data = {}, layer = 0) {
-        for (const chunk of query.iter()) {
-            for (let i = 0; i < chunk.size; i++) {
-                this.addComponent(chunk.entities[i], componentTypeID, data, layer);
-            }
-        }
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
+
+        this.rawBuffer.writeU8(OpCodes.ADD_COMPONENT_TO_QUERY);
+        this.rawBuffer.writeU32(query.id);
+        this.rawBuffer.writeU16(componentTypeID);
+        this.rawBuffer.writeComponentData(componentTypeID, data);
+
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, 0, 0);
+        this.sortableBuffer.add(key, offset, length);
     }
 
     /**
@@ -226,11 +237,16 @@ export class CommandBuffer {
      * @param {number} [layer=0]
      */
     removeComponentFromQuery(query, componentTypeID, layer = 0) {
-        for (const chunk of query.iter()) {
-            for (let i = 0; i < chunk.size; i++) {
-                this.removeComponent(chunk.entities[i], componentTypeID, layer);
-            }
-        }
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
+
+        this.rawBuffer.writeU8(OpCodes.REMOVE_COMPONENT_FROM_QUERY);
+        this.rawBuffer.writeU32(query.id);
+        this.rawBuffer.writeU16(componentTypeID);
+
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, 0, 0);
+        this.sortableBuffer.add(key, offset, length);
     }
 
     /**
@@ -242,11 +258,17 @@ export class CommandBuffer {
      * @param {number} [layer=0]
      */
     setComponentDataOnQuery(query, componentTypeID, data, layer = 0) {
-        for (const chunk of query.iter()) {
-            for (let i = 0; i < chunk.size; i++) {
-                this.setComponentData(chunk.entities[i], componentTypeID, data, layer);
-            }
-        }
+        const offset = this.rawBuffer.offset;
+        const startOffset = offset;
+
+        this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_DATA_ON_QUERY);
+        this.rawBuffer.writeU32(query.id);
+        this.rawBuffer.writeU16(componentTypeID);
+        this.rawBuffer.writeComponentData(componentTypeID, data);
+
+        const length = this.rawBuffer.offset - startOffset;
+        const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, 0, 0);
+        this.sortableBuffer.add(key, offset, length);
     }
 
     /**

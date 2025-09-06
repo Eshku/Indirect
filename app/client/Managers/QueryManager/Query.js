@@ -13,8 +13,10 @@
  *     within them. This allows for a perfectly consistent inner loop, regardless of
  *     whether the query is reactive or not.
  *
- * 
+ *
  */
+
+
 
 export class Query {
 	static _createSimpleMask(componentManager, componentClasses, categoryName) {
@@ -49,10 +51,10 @@ export class Query {
 		withComponents,
 		withoutComponents = [],
 		anyComponents = [],
-		reactComponents = [],
+		reactComponents = []
 	) {
 		this.id = id
-        this.queryManager = queryManager
+		this.queryManager = queryManager
 		this.componentManager = componentManager
 		this.archetypeManager = archetypeManager
 		this.iterationLastTick = null

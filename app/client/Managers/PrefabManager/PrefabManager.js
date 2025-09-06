@@ -270,7 +270,7 @@ export class PrefabManager {
 				// This is a critical data error. We will log a detailed error and skip this component entirely,
 				// rather than assigning a default or empty value, to ensure the error is noticed and fixed at the source.
 				console.error(
-					`PrefabManager: Invalid shorthand for component "${componentName}" in prefab "${prefabId}". Components with no schema are treated as "Tag Components" and cannot have data. Please remove the value for this component.`
+					`PrefabManager: Invalid shorthand for component "${componentName}" in prefab "${prefabId}". Components with no schema are treated as "Tag Components" and cannot have data.`
 				)
 			} else {
 				// The component data is already in its full object form, so we keep it as is.

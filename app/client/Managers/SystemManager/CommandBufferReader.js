@@ -2,7 +2,6 @@
  * @fileoverview Reads and deserializes commands from a RawCommandBuffer.
  */
 
-const textDecoder = new TextDecoder();
 export class CommandBufferReader {
 	/**
 	 * @param {import('./RawCommandBuffer.js').RawCommandBuffer} rawBuffer
@@ -75,15 +74,6 @@ export class CommandBufferReader {
 		this.offset += 8
 		return value
 	}
-
-	readString() {
-        const length = this.readU16();
-        if (this.offset + length > this.buffer.byteLength) throw new Error("Buffer read overflow");
-        const stringBytes = new Uint8Array(this.buffer, this.offset, length);
-        const value = textDecoder.decode(stringBytes);
-        this.offset += length;
-        return value;
-    }
 
 	/**
 	 * Reads and fully deserializes a component's data from the current offset.

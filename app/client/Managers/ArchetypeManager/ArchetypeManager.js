@@ -46,7 +46,7 @@ export class ArchetypeManager {
 		this.archetypeChunks = []
 		this.archetypeEntityMaps = []
 		this.archetypeTransitions = []
-        this.archetypeLastNonFullChunk = [] // OPTIMIZATION
+		this.archetypeLastNonFullChunk = [] // OPTIMIZATION
 	}
 
 	async init() {
@@ -100,7 +100,7 @@ export class ArchetypeManager {
 		this.archetypeChunks[id] = []
 		this.archetypeEntityMaps[id] = new Map()
 		this.archetypeTransitions[id] = { add: {}, remove: {} }
-        this.archetypeLastNonFullChunk[id] = 0 // OPTIMIZATION
+		this.archetypeLastNonFullChunk[id] = 0 // OPTIMIZATION
 
 		this.archetypeLookup.set(archetypeMask, id)
 		this.queryManager.registerArchetype(id)
@@ -117,143 +117,182 @@ export class ArchetypeManager {
 		}
 	}
 
-    moveEntitiesInBatch(moves) {
-        for (const [sourceArchetypeId, targets] of moves.entries()) {
-            for (const [targetArchetypeId, moveData] of targets.entries()) {
-                const { entityIds, sourceLocations, componentsToAssignArrays } = moveData
-                if (entityIds.length === 0) continue
+	moveEntitiesInBatch(moves) {
+		for (const [sourceArchetypeId, targets] of moves.entries()) {
+			for (const [targetArchetypeId, moveData] of targets.entries()) {
+				const { entityIds, componentsToAssignArrays } = moveData
+				if (entityIds.length === 0) continue
 
-                // Group moves by their source chunk for cache-friendly operations
-                const movesByChunk = new Map()
-                for (let i = 0; i < entityIds.length; i++) {
-                    const sourceLocation = sourceLocations[i]
-                    if (!sourceLocation) continue // Should not happen with the new executor
+				// The executor no longer provides source locations, so we fetch them here.
+				// This is more robust as the ArchetypeManager is the source of truth for locations.
+				const sourceLocations = []
+				const sourceEntityMap = this.archetypeEntityMaps[sourceArchetypeId]
+				for (const entityId of entityIds) {
+					sourceLocations.push(sourceEntityMap.get(entityId))
+				}
 
-                    const sourceChunk = sourceLocation.chunk
-                    if (!movesByChunk.has(sourceChunk)) {
-                        movesByChunk.set(sourceChunk, {
-                            entityIds: [],
-                            sourceLocations: [],
-                            componentsToAssignArrays: [],
-                        })
-                    }
-                    const group = movesByChunk.get(sourceChunk)
-                    group.entityIds.push(entityIds[i])
-                    group.sourceLocations.push(sourceLocation)
-                    group.componentsToAssignArrays.push(componentsToAssignArrays[i])
-                }
+				// Group moves by their source chunk for cache-friendly operations
+				const movesByChunk = new Map()
+				for (let i = 0; i < entityIds.length; i++) {
+					const sourceLocation = sourceLocations[i]
+					if (!sourceLocation) continue
 
-                // Process one source chunk at a time
-                for (const [sourceChunk, chunkMoveData] of movesByChunk.entries()) {
-                    // 1. Add entities to the target archetype by copying data from the source chunk.
-                    const newLocationsMap = this._addEntitiesByCopyingBatch(
-                        targetArchetypeId,
-                        sourceArchetypeId,
-                        chunkMoveData.sourceLocations,
-                        chunkMoveData.entityIds,
-                        chunkMoveData.componentsToAssignArrays,
-                        this.systemManager.currentTick
-                    )
+					const sourceChunk = sourceLocation.chunk
+					if (!movesByChunk.has(sourceChunk)) {
+						movesByChunk.set(sourceChunk, {
+							entityIds: [],
+							sourceLocations: [],
+							componentsToAssignArrays: [],
+						})
+					}
+					const group = movesByChunk.get(sourceChunk)
+					group.entityIds.push(entityIds[i])
+					group.sourceLocations.push(sourceLocation)
+					group.componentsToAssignArrays.push(componentsToAssignArrays[i])
+				}
 
-                    // 2. Update the central entity-to-archetype mapping.
-                    // This is safe to do here because the entity IDs are unique.
-                    for (const entityId of newLocationsMap.keys()) {
-                        this.entityManager.entityArchetype[entityId] = targetArchetypeId
-                    }
+				// Process one source chunk at a time
+				for (const [sourceChunk, chunkMoveData] of movesByChunk.entries()) {
+					// 1. Add entities to the target archetype by copying data from the source chunk.
+					const newLocationsMap = this._addEntitiesByCopyingBatch(
+						targetArchetypeId,
+						sourceArchetypeId,
+						chunkMoveData.sourceLocations,
+						chunkMoveData.entityIds,
+						chunkMoveData.componentsToAssignArrays,
+						this.systemManager.currentTick
+					)
 
-                    // 3. Remove the entities from the source archetype in a single batch.
-                    this._removeEntitiesBatch(sourceArchetypeId, chunkMoveData.entityIds)
-                }
-            }
-        }
-    }
+					// 2. Update the central entity-to-archetype mapping.
+					// This is safe to do here because the entity IDs are unique.
+					for (const entityId of newLocationsMap.keys()) {
+						this.entityManager.entityArchetype[entityId] = targetArchetypeId
+					}
 
-    addComponentToEntities(entities, componentTypeID, data) {
-        const moves = new Map();
-        const entitiesByArchetype = this._groupEntitiesByArchetype(entities);
+					// 3. Remove the entities from the source archetype in a single batch.
+					this._removeEntitiesBatch(sourceArchetypeId, chunkMoveData.entityIds)
+				}
+			}
+		}
+	}
 
-        for (const [sourceArchetypeId, archetypeEntities] of entitiesByArchetype.entries()) {
-            if (this.hasComponentType(sourceArchetypeId, componentTypeID)) continue;
+	_groupEntitiesByArchetype(entities) {
+		const entitiesByArchetype = new Map()
+		for (const entityId of entities) {
+			const archetypeId = this.entityManager.getArchetypeForEntity(entityId)
+			if (archetypeId === undefined) continue
 
-            const sourceArchetypeMask = this.archetypeMasks[sourceArchetypeId];
-            const componentMask = this.componentManager.componentBitFlags[componentTypeID];
-            const targetArchetypeMask = sourceArchetypeMask | componentMask;
-            const targetArchetypeId = this.getArchetypeByMask(targetArchetypeMask);
+			if (!entitiesByArchetype.has(archetypeId)) {
+				entitiesByArchetype.set(archetypeId, [])
+			}
+			entitiesByArchetype.get(archetypeId).push(entityId)
+		}
+		return entitiesByArchetype
+	}
 
-            const locations = archetypeEntities.map(id => this.archetypeEntityMaps[sourceArchetypeId].get(id));
-            const componentsToAssign = new Map([[componentTypeID, data]]);
+	/**
+	 * Efficiently adds a component to all entities matching a query.
+	 * This operates by moving entire chunks of entities between archetypes.
+	 * @param {import('../QueryManager/Query.js').Query} query
+	 * @param {number} componentTypeID
+	 * @param {object} data
+	 */
+	addComponentToQuery(query, componentTypeID, data) {
+		const moves = new Map()
+		const componentsToAssign = new Map([[componentTypeID, data]])
 
-            moves.set(sourceArchetypeId, new Map([[targetArchetypeId, {
-                entityIds: archetypeEntities,
-                sourceLocations: locations,
-                componentsToAssignArrays: Array(archetypeEntities.length).fill(componentsToAssign)
-            }]]));
-        }
+		for (const sourceArchetypeId of query.matchingArchetypeIds) {
+			// This archetype already has the component, so we can skip it.
+			if (this.hasComponentType(sourceArchetypeId, componentTypeID)) continue
 
-        if (moves.size > 0) {
-            this.moveEntitiesInBatch(moves);
-        }
-    }
+			const sourceArchetypeMask = this.archetypeMasks[sourceArchetypeId]
+			const targetArchetypeMask = sourceArchetypeMask | this.componentManager.componentBitFlags[componentTypeID]
+			const targetArchetypeId = this.getArchetypeByMask(targetArchetypeMask)
 
-    removeComponentFromEntities(entities, componentTypeID) {
-        const moves = new Map();
-        const entitiesByArchetype = this._groupEntitiesByArchetype(entities);
+			const sourceChunks = this.archetypeChunks[sourceArchetypeId]
+			if (!sourceChunks || sourceChunks.length === 0) continue
 
-        for (const [sourceArchetypeId, archetypeEntities] of entitiesByArchetype.entries()) {
-            if (!this.hasComponentType(sourceArchetypeId, componentTypeID)) continue;
+			const entityIds = []
+			const componentsToAssignArrays = []
 
-            const sourceArchetypeMask = this.archetypeMasks[sourceArchetypeId];
-            const componentMask = this.componentManager.componentBitFlags[componentTypeID];
-            const targetArchetypeMask = sourceArchetypeMask & ~componentMask;
-            const targetArchetypeId = this.getArchetypeByMask(targetArchetypeMask);
+			for (const chunk of sourceChunks) {
+				for (let i = 0; i < chunk.size; i++) {
+					entityIds.push(chunk.entities[i])
+					componentsToAssignArrays.push(componentsToAssign)
+				}
+			}
 
-            const locations = archetypeEntities.map(id => this.archetypeEntityMaps[sourceArchetypeId].get(id));
+			if (!moves.has(sourceArchetypeId)) moves.set(sourceArchetypeId, new Map())
+			const sourceMoves = moves.get(sourceArchetypeId)
+			sourceMoves.set(targetArchetypeId, { entityIds, componentsToAssignArrays })
+		}
 
-            moves.set(sourceArchetypeId, new Map([[targetArchetypeId, {
-                entityIds: archetypeEntities,
-                sourceLocations: locations,
-                componentsToAssignArrays: Array(archetypeEntities.length).fill(new Map())
-            }]]));
-        }
+		if (moves.size > 0) {
+			this.moveEntitiesInBatch(moves)
+		}
+	}
 
-        if (moves.size > 0) {
-            this.moveEntitiesInBatch(moves);
-        }
-    }
+	/**
+	 * Efficiently removes a component from all entities matching a query.
+	 * @param {import('../QueryManager/Query.js').Query} query
+	 * @param {number} componentTypeID
+	 */
+	removeComponentFromQuery(query, componentTypeID) {
+		const moves = new Map()
+		// When removing, there is no new data to assign.
+		const emptyComponentsToAssign = new Map()
 
-    setComponentDataForEntities(entities, componentTypeID, data) {
-        const updatesByArchetype = new Map();
-        const entitiesByArchetype = this._groupEntitiesByArchetype(entities);
+		for (const sourceArchetypeId of query.matchingArchetypeIds) {
+			// This archetype doesn't have the component, so we can skip it.
+			if (!this.hasComponentType(sourceArchetypeId, componentTypeID)) continue
 
-        for (const [archetypeId, archetypeEntities] of entitiesByArchetype.entries()) {
-            if (!this.hasComponentType(archetypeId, componentTypeID)) continue;
+			const sourceArchetypeMask = this.archetypeMasks[sourceArchetypeId]
+			// Calculate target by REMOVING the component's bit flag.
+			const targetArchetypeMask = sourceArchetypeMask & ~this.componentManager.componentBitFlags[componentTypeID]
+			const targetArchetypeId = this.getArchetypeByMask(targetArchetypeMask)
 
-            const batchedUpdates = archetypeEntities.map(entityId => ({
-                entityId,
-                componentsToUpdate: new Map([[componentTypeID, data]])
-            }));
+			const sourceChunks = this.archetypeChunks[sourceArchetypeId]
+			if (!sourceChunks || sourceChunks.length === 0) continue
 
-            updatesByArchetype.set(archetypeId, batchedUpdates);
-        }
+			const entityIds = []
+			const componentsToAssignArrays = []
 
-        for (const [archetypeId, batchedUpdates] of updatesByArchetype.entries()) {
-            this._setEntitiesComponents(archetypeId, batchedUpdates, this.systemManager.currentTick);
-        }
-    }
+			for (const chunk of sourceChunks) {
+				for (let i = 0; i < chunk.size; i++) {
+					entityIds.push(chunk.entities[i])
+					// Every entity gets an empty map since we are not adding data.
+					componentsToAssignArrays.push(emptyComponentsToAssign)
+				}
+			}
 
-    _groupEntitiesByArchetype(entities) {
-        const entitiesByArchetype = new Map();
-        for (const entityId of entities) {
-            const archetypeId = this.entityManager.getArchetypeForEntity(entityId);
-            if (archetypeId === undefined) continue;
+			if (!moves.has(sourceArchetypeId)) moves.set(sourceArchetypeId, new Map())
+			const sourceMoves = moves.get(sourceArchetypeId)
+			sourceMoves.set(targetArchetypeId, { entityIds, componentsToAssignArrays })
+		}
 
-            if (!entitiesByArchetype.has(archetypeId)) {
-                entitiesByArchetype.set(archetypeId, []);
-            }
-            entitiesByArchetype.get(archetypeId).push(entityId);
-        }
-        return entitiesByArchetype;
-    }
+		if (moves.size > 0) {
+			this.moveEntitiesInBatch(moves)
+		}
+	}
+
+	setComponentDataOnQuery(query, componentTypeID, data) {
+		const currentTick = this.systemManager.currentTick
+
+		for (const archetypeId of query.matchingArchetypeIds) {
+			// This is an in-place update, so skip archetypes that don't have the component.
+			if (!this.hasComponentType(archetypeId, componentTypeID)) continue
+
+			this.updateArchetypeMaxTick(archetypeId, currentTick)
+
+			const chunks = this.archetypeChunks[archetypeId]
+			for (const chunk of chunks) {
+				if (chunk.size === 0) continue
+
+				// This is the most efficient way: set data for the entire chunk at once.
+				this._setComponentDataForChunk(chunk, componentTypeID, data, currentTick)
+			}
+		}
+	}
 
 	clearAll() {
 		for (const archetype of this.archetypeLookup.values()) {
@@ -266,7 +305,7 @@ export class ArchetypeManager {
 		this.archetypeEntityMaps.length = 0
 		this.archetypeTransitions.length = 0
 		this.nextArchetype = 0
-        this.archetypeLastNonFullChunk.length = 0
+		this.archetypeLastNonFullChunk.length = 0
 	}
 
 	_setComponentData(chunk, indexInChunk, typeID, componentData) {
@@ -282,28 +321,44 @@ export class ArchetypeManager {
 		}
 	}
 
-    _findOrCreateChunk(archetypeId) {
-        const chunks = this.archetypeChunks[archetypeId]
-        if (!chunks) return null; // Archetype might not exist yet
-        const lastNonFullChunkIndex = this.archetypeLastNonFullChunk[archetypeId] || 0
+	_setComponentDataForChunk(chunk, typeID, componentData, currentTick) {
+		const info = this.componentManager.componentInfo[typeID]
+		const defaultInstance = this.componentManager.getDefaultInstance(typeID)
+		const propArrays = chunk.componentArrays[typeID]
 
-        // Start search from the last known non-full chunk
-        for (let i = 0; i < chunks.length; i++) {
-            const chunkIndex = (lastNonFullChunkIndex + i) % chunks.length
-            const chunk = chunks[chunkIndex]
-            if (chunk && !chunk.isFull()) {
-                this.archetypeLastNonFullChunk[archetypeId] = chunkIndex
-                return chunk
-            }
-        }
+		// Use TypedArray.fill for maximum performance on the whole chunk.
+		for (const propName of info.propertyKeys) {
+			const value = componentData?.[propName] ?? defaultInstance[propName]
+			if (propArrays[propName]) {
+				propArrays[propName].fill(value ?? 0, 0, chunk.size)
+			}
+		}
 
-        // If no non-full chunk is found, create a new one
-        const newChunk = new Chunk(archetypeId, this, DEFAULT_CHUNK_CAPACITY)
-        chunks.push(newChunk)
-        this.archetypeLastNonFullChunk[archetypeId] = chunks.length - 1
-        return newChunk
-    }
+		// Mark all entities in the chunk as dirty for this component.
+		chunk.dirtyTicksArrays[typeID].fill(currentTick, 0, chunk.size)
+	}
 
+	_findOrCreateChunk(archetypeId) {
+		const chunks = this.archetypeChunks[archetypeId]
+		if (!chunks) return null // Archetype might not exist yet
+		const lastNonFullChunkIndex = this.archetypeLastNonFullChunk[archetypeId] || 0
+
+		// Start search from the last known non-full chunk
+		for (let i = 0; i < chunks.length; i++) {
+			const chunkIndex = (lastNonFullChunkIndex + i) % chunks.length
+			const chunk = chunks[chunkIndex]
+			if (chunk && !chunk.isFull()) {
+				this.archetypeLastNonFullChunk[archetypeId] = chunkIndex
+				return chunk
+			}
+		}
+
+		// If no non-full chunk is found, create a new one
+		const newChunk = new Chunk(archetypeId, this, DEFAULT_CHUNK_CAPACITY)
+		chunks.push(newChunk)
+		this.archetypeLastNonFullChunk[archetypeId] = chunks.length - 1
+		return newChunk
+	}
 
 	_addEntity(archetype, entityID, componentsDataMap, currentTick) {
 		const chunk = this._findOrCreateChunk(archetype)
@@ -341,10 +396,10 @@ export class ArchetypeManager {
 			const chunkIndex = chunks.indexOf(chunk)
 			if (chunkIndex > -1) {
 				chunks.splice(chunkIndex, 1)
-                // Adjust last non-full chunk index if needed
-                if (this.archetypeLastNonFullChunk[archetype] >= chunkIndex) {
-                    this.archetypeLastNonFullChunk[archetype]--
-                }
+				// Adjust last non-full chunk index if needed
+				if (this.archetypeLastNonFullChunk[archetype] >= chunkIndex) {
+					this.archetypeLastNonFullChunk[archetype]--
+				}
 			}
 		}
 	}
@@ -429,31 +484,31 @@ export class ArchetypeManager {
 		}
 	}
 
-    _getOrCreateCopyPlan(sourceArchetypeId, targetArchetypeId) {
-        const sourceTransitions = this.archetypeTransitions[sourceArchetypeId]
-        if (sourceTransitions.add[targetArchetypeId]) {
-            return sourceTransitions.add[targetArchetypeId]
-        }
+	_getOrCreateCopyPlan(sourceArchetypeId, targetArchetypeId) {
+		const sourceTransitions = this.archetypeTransitions[sourceArchetypeId]
+		if (sourceTransitions.add[targetArchetypeId]) {
+			return sourceTransitions.add[targetArchetypeId]
+		}
 
-        const sourceComponents = this.archetypeComponentTypeIDs[sourceArchetypeId]
-        const targetComponents = this.archetypeComponentTypeIDs[targetArchetypeId]
+		const sourceComponents = this.archetypeComponentTypeIDs[sourceArchetypeId]
+		const targetComponents = this.archetypeComponentTypeIDs[targetArchetypeId]
 
-        const plan = {
-            toCopy: [],
-            toInitialize: [],
-        }
+		const plan = {
+			toCopy: [],
+			toInitialize: [],
+		}
 
-        for (const typeID of targetComponents) {
-            if (sourceComponents.has(typeID)) {
-                plan.toCopy.push(typeID)
-            } else {
-                plan.toInitialize.push(typeID)
-            }
-        }
+		for (const typeID of targetComponents) {
+			if (sourceComponents.has(typeID)) {
+				plan.toCopy.push(typeID)
+			} else {
+				plan.toInitialize.push(typeID)
+			}
+		}
 
-        sourceTransitions.add[targetArchetypeId] = plan
-        return plan
-    }
+		sourceTransitions.add[targetArchetypeId] = plan
+		return plan
+	}
 
 	_addEntitiesByCopyingBatch(
 		targetArchetype,
@@ -468,7 +523,7 @@ export class ArchetypeManager {
 
 		this.updateArchetypeMaxTick(targetArchetype, currentTick)
 
-        const copyPlan = this._getOrCreateCopyPlan(sourceArchetype, targetArchetype)
+		const copyPlan = this._getOrCreateCopyPlan(sourceArchetype, targetArchetype)
 		const newLocationsMap = new Map()
 		const targetEntityMap = this.archetypeEntityMaps[targetArchetype]
 		let entityCursor = 0
@@ -493,26 +548,26 @@ export class ArchetypeManager {
 				targetEntityMap.set(entityId, newLocation)
 				newLocationsMap.set(entityId, newLocation)
 
-                // 2. Copy component data for shared components
-                for (const typeID of copyPlan.toCopy) {
-                    const sourcePropArrays = sourceChunk.componentArrays[typeID]
-                    const targetPropArrays = targetChunk.componentArrays[typeID]
-                    const info = this.componentManager.componentInfo[typeID]
-                    for (const propKey of info.propertyKeys) {
-                        if (targetPropArrays?.[propKey] && sourcePropArrays?.[propKey]) {
-                            const sourceSubarray = sourcePropArrays[propKey].subarray(sourceIndex, sourceIndex + 1)
-                            targetPropArrays[propKey].set(sourceSubarray, targetIndex)
-                        }
-                    }
-                    targetChunk.dirtyTicksArrays[typeID][targetIndex] = currentTick
-                }
+				// 2. Copy component data for shared components
+				for (const typeID of copyPlan.toCopy) {
+					const sourcePropArrays = sourceChunk.componentArrays[typeID]
+					const targetPropArrays = targetChunk.componentArrays[typeID]
+					const info = this.componentManager.componentInfo[typeID]
+					for (const propKey of info.propertyKeys) {
+						if (targetPropArrays?.[propKey] && sourcePropArrays?.[propKey]) {
+							const sourceSubarray = sourcePropArrays[propKey].subarray(sourceIndex, sourceIndex + 1)
+							targetPropArrays[propKey].set(sourceSubarray, targetIndex)
+						}
+					}
+					targetChunk.dirtyTicksArrays[typeID][targetIndex] = currentTick
+				}
 
-                // 3. Initialize new components with assigned data or defaults
-                for (const typeID of copyPlan.toInitialize) {
-                    const data = componentsToAssign.get(typeID)
-                    this._setComponentData(targetChunk, targetIndex, typeID, data) // `data` can be undefined, which is handled
-                    targetChunk.dirtyTicksArrays[typeID][targetIndex] = currentTick
-                }
+				// 3. Initialize new components with assigned data or defaults
+				for (const typeID of copyPlan.toInitialize) {
+					const data = componentsToAssign.get(typeID)
+					this._setComponentData(targetChunk, targetIndex, typeID, data) // `data` can be undefined, which is handled
+					targetChunk.dirtyTicksArrays[typeID][targetIndex] = currentTick
+				}
 			}
 
 			targetChunk.size += entitiesToAddInChunk
@@ -541,25 +596,6 @@ export class ArchetypeManager {
 
 				this._setComponentData(chunk, indexInChunk, typeID, cData)
 				chunk.dirtyTicksArrays[typeID][indexInChunk] = currentTick
-			}
-		}
-	}
-
-	_setChunkComponents(archetype, chunk, componentTypeID, updateData, currentTick) {
-		if (!this.hasComponentType(archetype, componentTypeID) || !updateData) {
-			return
-		}
-
-		this.updateArchetypeMaxTick(archetype, currentTick)
-		chunk.dirtyTicksArrays[componentTypeID]?.fill(currentTick, 0, chunk.size)
-
-		const info = this.componentManager.componentInfo[componentTypeID]
-		const propArrays = chunk.componentArrays[componentTypeID]
-
-		for (const propName in updateData) {
-			const value = updateData[propName]
-			if (propArrays[propName]) {
-				propArrays[propName].fill(value ?? 0, 0, chunk.size)
 			}
 		}
 	}
@@ -593,9 +629,9 @@ export class ArchetypeManager {
 				const chunkIndex = chunks.indexOf(chunk)
 				if (chunkIndex > -1) {
 					chunks.splice(chunkIndex, 1)
-                    if (this.archetypeLastNonFullChunk[archetype] >= chunkIndex) {
-                        this.archetypeLastNonFullChunk[archetype]--
-                    }
+					if (this.archetypeLastNonFullChunk[archetype] >= chunkIndex) {
+						this.archetypeLastNonFullChunk[archetype]--
+					}
 				}
 			}
 		}

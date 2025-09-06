@@ -5,8 +5,11 @@ const { ComponentA, ComponentB } = componentManager.getComponents()
 
 const benchmarkConfig = {
 	// true / false
-	runPerEntity: true,
-	runQueryBased: false,
+	runPerEntity: false,
+	runQueryBased: true,
+
+	perEntityCount: 5_000,
+	queryBasedCount: 15_000,
 }
 
 /**
@@ -26,13 +29,13 @@ export class StructuralChangeBenchmarkSystem {
 		this.componentATypeID = componentManager.getComponentTypeID(ComponentA)
 		this.componentBTypeID = componentManager.getComponentTypeID(ComponentB)
 
-		this.entityCount = 5_000
-
 		this.creationMap = new Map([[this.componentATypeID, {}]])
 	}
 
 	init() {
-		for (let i = 0; i < this.entityCount; i++) {
+		const count = benchmarkConfig.runPerEntity ? benchmarkConfig.perEntityCount : benchmarkConfig.queryBasedCount
+
+		for (let i = 0; i < count; i++) {
 			this.commands.createEntity(this.creationMap)
 		}
 	}

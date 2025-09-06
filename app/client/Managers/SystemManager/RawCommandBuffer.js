@@ -5,7 +5,6 @@
  */
 
 const INITIAL_BUFFER_SIZE = 1024 * 1024 // 1 MB
-const textEncoder = new TextEncoder();
 
 export class RawCommandBuffer {
 	/**
@@ -98,18 +97,6 @@ export class RawCommandBuffer {
 		this.offset += 8
 	}
 
-	writeString(value) {
-        const encoded = textEncoder.encode(value);
-        this.ensureCapacity(2 + encoded.length);
-
-        // Write length prefix (U16)
-        this.view.setUint16(this.offset, encoded.length, true);
-        this.offset += 2;
-
-        // Write string bytes
-        new Uint8Array(this.buffer, this.offset).set(encoded);
-        this.offset += encoded.length;
-    }
 	/**
 	 * Serializes a component's data into the buffer based on its schema.
 	 * @param {number} typeID The component's type ID.

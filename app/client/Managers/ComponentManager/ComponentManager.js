@@ -79,12 +79,9 @@
  */
 
 const { StringManager } = await import('./StringManager.js')
-const { SchemaParser } = await import(`${PATH_MANAGERS}/ComponentManager/SchemaParser.js`)
 const { loadAllComponents } = await import(`${PATH_MANAGERS}/ComponentManager/componentLoader.js`)
 const { SchemaCompiler } = await import('./SchemaCompiler.js')
 const { componentInterpreter } = await import('./ComponentInterpreter.js')
-const { Opcodes } = await import('./SchemaCompiler.js')
-const PROCESSABLE_TYPES = new Set(Object.values(Opcodes))
 
 /**
  * The maximum number of unique component types the engine can support.
@@ -117,8 +114,6 @@ export class ComponentManager {
 		this.nextComponentTypeID = 0
 		this.sharedGroupManager = null // self-reference after init
 		this.archetypeManager = null // self-reference after init
-		this.schemaParser = new SchemaParser()
-		this.schemaCompiler = new SchemaCompiler()
 		this._cachedComponentsObject = null
 		this.EMPTY_BITMASK = 0n
 	}
@@ -192,11 +187,12 @@ export class ComponentManager {
 	 * @private
 	 */
 	async _parseAndStoreSchema(ComponentClass, typeID) {
-		const info = await this.schemaParser.parse(ComponentClass, typeID, this.stringManager)
-		this.componentInfo[typeID] = info
+		// Instantiate the unified compiler. It handles both parsing and program generation.
+		const schemaCompiler = new SchemaCompiler()
 
-		// Compile the schema info into a "program" (instruction list)
-		const program = this.schemaCompiler.compile(info)
+		// The compile method now returns both the memory blueprint and the interpreter program.
+		const { componentInfo, program } = schemaCompiler.compile(ComponentClass, typeID, this.stringManager)
+		this.componentInfo[typeID] = componentInfo
 		this.componentPrograms[typeID] = program
 	}
 
@@ -211,24 +207,7 @@ export class ComponentManager {
 		if (program) {
 			const componentName = this.getComponentNameByTypeID(typeID)
 			componentInterpreter.execute(program, data, componentName)
-		} /* else if (data && Object.keys(data).length > 0) {
-			// No program exists. We only issue a warning if a program was *expected*.
-			// A program is expected if the schema contains non-primitive types that require processing.
-			const info = this.componentInfo[typeID]
-			if (!info) return
-
-			const requiresProcessing = Object.values(info.representations).some(rep => PROCESSABLE_TYPES.has(rep.type))
-
-			if (requiresProcessing) {
-				// This is a potential bug. A component with complex types has no processing program.
-				const componentName = this.getComponentNameByTypeID(typeID)
-				console.error(
-					`ComponentManager: A processing program was expected for component "${componentName}" (ID: ${typeID}) but was not found. This is likely a bug in the SchemaCompiler.`
-				)
-			}
-			// If `requiresProcessing` is false, it means the component is either a tag or contains only
-			// primitive types. In this case, it's correct that there is no program, and no warning is needed.
-		} */
+		}
 	}
 
 	/**
