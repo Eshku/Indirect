@@ -6,6 +6,8 @@ const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManag
 
 const { Position, Rarity, Stack } = componentManager.getComponents()
 
+const { componentInterpreter } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
+
 /**
  * A system to test the "Shared Components as Indirect References" architecture.
  * It verifies that we can query for components with shared data and correctly
@@ -34,7 +36,7 @@ export class SharedComponentTestSystem {
 			ECS.createEntity({
 				Position: { x: 100, y: 100 },
 				Rarity: { value: 'common' },
-				Stack: { current: 10, size: 64 },
+				Stack: { amount: 10, size: 64 },
 			})
 		)
 
@@ -44,7 +46,7 @@ export class SharedComponentTestSystem {
 			ECS.createEntity({
 				Position: { x: 200, y: 100 },
 				Rarity: { value: 'rare' },
-				Stack: { current: 5, size: 64 },
+				Stack: { amount: 5, size: 64 },
 			})
 		)
 
@@ -54,7 +56,7 @@ export class SharedComponentTestSystem {
 			ECS.createEntity({
 				Position: { x: 300, y: 100 },
 				Rarity: { value: 'rare' },
-				Stack: { current: 20, size: 32 },
+				Stack: { amount: 20, size: 32 },
 			})
 		)
 
@@ -64,7 +66,7 @@ export class SharedComponentTestSystem {
 			ECS.createEntity({
 				Position: { x: 400, y: 100 },
 				Rarity: { value: 'common' },
-				Stack: { current: 15, size: 64 }, // Different 'current', same 'size'
+				Stack: { amount: 15, size: 64 }, // Different 'amount', same 'size'
 			})
 		)
 
@@ -82,7 +84,7 @@ export class SharedComponentTestSystem {
 		this.testEntityIds.push(
 			ECS.createEntity({
 				Position: { x: 600, y: 100 },
-				Stack: { current: 25, size: 64 },
+				Stack: { amount: 25, size: 64 },
 			})
 		)
 
@@ -100,7 +102,7 @@ export class SharedComponentTestSystem {
 			ECS.createEntity({
 				Position: { x: 800, y: 100 },
 				Rarity: { value: 'rare' },
-				Stack: { current: 30, size: 32 }, // Different 'current', same 'size'
+				Stack: { amount: 30, size: 32 }, // Different 'amount', same 'size'
 			})
 		)
 
@@ -152,14 +154,14 @@ export class SharedComponentTestSystem {
 			})
 
 			it('should correctly merge shared and per-entity data', () => {
-				const entityId = this.testEntityIds[0] // Entity 1: { Rarity: 'common', Stack.size: 64, current: 10 }
+				const entityId = this.testEntityIds[0] // Entity 1: { Rarity: 'common', Stack.size: 64, amount: 10 }
 				const rarity = ECS.getComponent(entityId, Rarity)
 				const stack = ECS.getComponent(entityId, Stack)
 				const rarityValue = this.componentManager.stringManager.get(rarity.value)
 
-				const mergedData = { rarity: rarityValue, stackSize: stack.size, stackCurrent: stack.current }
+				const mergedData = { rarity: rarityValue, stackSize: stack.size, stackAmount: stack.amount }
 
-				expect(mergedData).toEqual({ rarity: 'common', stackSize: 64, stackCurrent: 10 })
+				expect(mergedData).toEqual({ rarity: 'common', stackSize: 64, stackAmount: 10 })
 			})
 
 			it('should return undefined for components that are not on an entity', () => {

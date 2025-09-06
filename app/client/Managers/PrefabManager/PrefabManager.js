@@ -61,9 +61,16 @@ export class PrefabManager {
 		 * @property {object[]} numericIdToManifestEntry - Maps a numeric ID back to its manifest entry.
 		 */
 		this.numericIdToManifestEntry = []
+
+		/**
+		 * @property {ComponentManager} componentManager - A reference to the component manager for schema lookups.
+		 * This is populated during the init phase.
+		 */
+		this.componentManager = null
 	}
 
 	async init() {
+		this.componentManager = (await import(`${PATH_MANAGERS}/ComponentManager/ComponentManager.js`)).componentManager
 		await this.loader.loadManifest()
 		let currentId = 0
 		for (const [prefabId, manifestEntry] of this.manifest.entries()) {
@@ -119,7 +126,9 @@ export class PrefabManager {
 	getPrefabDataByNumericId(numericId) {
 		const components = this.processedPrefabCache[numericId]
 		if (components === undefined) {
-			console.error(`PrefabManager: Prefab with numericId '${numericId}' was not preloaded. Use preload() during setup.`)
+			console.error(
+				`PrefabManager: Prefab with numericId '${numericId}' was not preloaded. Use preload() during setup.`
+			)
 			return null
 		}
 		return { components, children: this.processedChildrenCache[numericId] || [] }
@@ -199,7 +208,10 @@ export class PrefabManager {
 			}
 		}
 
-		const mergedComponents = this._deepMerge(baseComponents, rawData.components || {})
+		// Process shorthand notations (e.g., "range": 500) into their full object form.
+		const processedOwnComponents = this._processShorthands(rawData.components || {}, prefabId)
+
+		const mergedComponents = this._deepMerge(baseComponents, processedOwnComponents)
 
 		const resolvedOwnChildren = await this._resolveChildren(rawData.children || [], new Set(visited))
 		const finalChildren = [...baseChildren, ...resolvedOwnChildren]
@@ -210,6 +222,62 @@ export class PrefabManager {
 		this.processedChildrenCache[numericId] = finalChildren
 
 		return { components: processedComponents, children: finalChildren }
+	}
+
+	/**
+	 * Processes a component data object, expanding any shorthand notations into their full object form.
+	 * For example, it converts `"range": 500` into `"range": { "value": 500 }`.
+	 * @param {object} components - The components object from a raw prefab file.
+	 * @param {string} prefabId - The ID of the prefab being processed, for error logging.
+	 * @returns {object} A new components object with all shorthands expanded.
+	 * @private
+	 */
+	_processShorthands(components, prefabId) {
+		if (!this.componentManager) {
+			console.error('PrefabManager: componentManager reference is missing. Cannot process shorthands.')
+			return components // Return original data if manager is not set
+		}
+
+		const processedComponents = {}
+		for (const componentName in components) {
+			const componentData = components[componentName]
+			const dataType = typeof componentData
+
+			// If the component's data is a primitive (not an object), it's a potential shorthand.
+			if (dataType === 'number' || dataType === 'string' || dataType === 'boolean') {
+				const info = this.componentManager.componentInfo[this.componentManager.getComponentTypeIDByName(componentName)]
+
+				if (info && info.originalSchemaKeys && info.originalSchemaKeys.length > 0) {
+					// --- Universal Shorthand Rule ---
+					// The shorthand value is always applied to the *first* property defined in the component's schema.
+					// This covers both the unambiguous case (one property) and the ambiguous case (multiple properties).
+					//
+					// DEVELOPER NOTE: This creates a dependency on the order of properties in the component's
+					// static schema. The property intended for shorthand use MUST be listed first.
+					// e.g., For `Stack: 64`, the schema must be `{ size: 'u16', amount: 'u16' }`, not the other way around.
+
+					//We could've went with more strict approach, where shorthands are only allowed for
+					//components with single property, but in some cases for prefab definitions only one matters
+					//and the other one is defined at runtime through overrides
+					//example - stack. On prefab it only makes sense to define capacity
+					//but amount is runtime-only thing - how many items dropped from the thing.
+					const key = info.originalSchemaKeys[0]
+					processedComponents[componentName] = { [key]: componentData }
+					continue // Move to the next component
+				}
+
+				// If we're here, we couldn't resolve the shorthand because the component has no schema properties.
+				// This is a critical data error. We will log a detailed error and skip this component entirely,
+				// rather than assigning a default or empty value, to ensure the error is noticed and fixed at the source.
+				console.error(
+					`PrefabManager: Invalid shorthand for component "${componentName}" in prefab "${prefabId}". Components with no schema are treated as "Tag Components" and cannot have data. Please remove the value for this component.`
+				)
+			} else {
+				// The component data is already in its full object form, so we keep it as is.
+				processedComponents[componentName] = componentData
+			}
+		}
+		return processedComponents
 	}
 
 	/**

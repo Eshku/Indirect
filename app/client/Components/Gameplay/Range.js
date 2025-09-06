@@ -6,7 +6,7 @@ export class Range {
 	static schema = {
 		value: 'f32',
 	}
-	constructor({ value = 1000 } = {}) {
+	constructor({ value = 1 } = {}) {
 		this.value = value
 	}
 }
