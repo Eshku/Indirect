@@ -218,6 +218,7 @@ export class TooltipSystem {
 			const statRef = tooltipArrays[`stats${i}`][indexInChunk]
 			const statName = this.stringStorage[statRef]
 			const resolvedStat = this.resolveStat(statName, resolutionContext)
+
 			if (resolvedStat) {
 				viewModel.stats.push(resolvedStat)
 			}

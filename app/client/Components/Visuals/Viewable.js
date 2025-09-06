@@ -3,6 +3,10 @@
  * This allows an entity to be represented visually on the screen. The actual sprite
  * object is stored and managed by the AssetManager.
  */
+
+//! for serialization \ desir would need
+//! store asset name too or map refs to names
+//! idk, gonna figure it out at some point.
 export class Viewable {
 	/**
 	 * The schema defines the data stored in the archetype's TypedArrays.

@@ -50,6 +50,46 @@ export function expect(actual) {
 				)
 			}
 		},
+		/**
+		 * Checks if an object has a specified property.
+		 * @param {string} propertyKey - The name of the property to check for.
+		 * @throws {AssertionError} If the assertion fails.
+		 * @example
+		 * expect({ a: 1 }).toHaveProperty('a'); // Passes
+		 * expect({ a: 1 }).not.toHaveProperty('b'); // Passes
+		 */
+		toHaveProperty(propertyKey) {
+			if (typeof actual !== 'object' || actual === null) {
+				throw new AssertionError(
+					`Expected value to be an object but got ${actual === null ? 'null' : typeof actual}`,
+					'object',
+					typeof actual
+				)
+			}
+			const passed = propertyKey in actual
+			if (passed === inverted) {
+				throw new AssertionError(
+					`Expected object ${inverted ? 'not ' : ''}to have property "${propertyKey}"`,
+					`An object ${inverted ? 'without' : 'with'} property "${propertyKey}"`,
+					actual
+				)
+			}
+		},
+		/**
+		 * Checks if a value is not undefined.
+		 * @throws {AssertionError} If the assertion fails.
+		 * @example
+		 * expect({}).toBeDefined(); // Passes
+		 * expect(undefined).not.toBeDefined(); // Passes
+		 */
+		toBeDefined() {
+			const passed = actual !== undefined
+			if (passed === inverted) {
+				const message = `Expected value ${inverted ? 'not ' : ''}to be defined`
+				const expectedValue = inverted ? undefined : 'a defined value'
+				throw new AssertionError(message, expectedValue, actual)
+			}
+		},
 	})
 
 	return {

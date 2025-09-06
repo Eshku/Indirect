@@ -35,6 +35,7 @@ export class CommandBuffer {
      * @param {number} [layer=0] - Execution layer for fine-grained ordering.
      */
     addComponent(entityId, componentTypeID, data = {}, layer = 0) {
+
         const offset = this.rawBuffer.offset;
         const startOffset = offset;
 

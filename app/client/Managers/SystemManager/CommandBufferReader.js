@@ -1,7 +1,6 @@
 /**
  * @fileoverview Reads and deserializes commands from a RawCommandBuffer.
  */
-import { ComponentDataProxy } from './ComponentDataProxy.js';
 
 const textDecoder = new TextDecoder();
 export class CommandBufferReader {
@@ -120,14 +119,11 @@ export class CommandBufferReader {
 		//console.log(`Reader: Map size: ${size}`);
 		for (let i = 0; i < size; i++) {
 			const typeID = this.readU16();
-			const componentDataSize = this.readU16(); // Read the byteSize of the data block
+			this.readU16(); // Read and discard the byteSize of the data block.
 
-			// Create a zero-copy proxy for the data instead of a full object.
-			const proxy = new ComponentDataProxy(this, typeID, this.offset);
-			map.set(typeID, proxy);
-
-			// Advance the reader's offset past this component's data block.
-			this.offset += componentDataSize;
+			// Directly deserialize the component data into a plain object.
+			const data = this.readComponentData(typeID);
+			map.set(typeID, data);
 		}
 
 		return map

@@ -1,5 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { Entity } = await import(`${PATH_MANAGERS}/EntityManager/Entity.js`)
+const { componentInterpreter } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
 
 const { entityManager, componentManager, prefabManager, sharedGroupManager } = theManager.getManagers()
 
@@ -75,7 +76,7 @@ export const ECS = {
 		if (Object.keys(componentsInput).length === 0) {
 			return entityManager.createEntity()
 		}
-		const componentIdMap = entityManager._convertComponentDataToIdMap(componentsInput);
+		const componentIdMap = componentManager.createIdMapFromData(componentsInput);
 		return entityManager.createEntityWithComponentsByIds(componentIdMap)
 	},
 
@@ -162,7 +163,7 @@ export const ECS = {
 			return undefined
 		}
 
-		const perEntityData = componentManager.readComponentData(entityId, componentTypeId, archetype)
+		const perEntityData = componentInterpreter.read(entityId, componentTypeId, archetype)
 
 		// Check for and merge shared data
 		if (perEntityData && perEntityData.hasOwnProperty('groupId')) {

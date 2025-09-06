@@ -40,7 +40,6 @@ export class EntityManager {
 		this.componentManager = (await import(`${PATH_MANAGERS}/ComponentManager/ComponentManager.js`)).componentManager
 		this.prefabManager = (await import(`${PATH_MANAGERS}/PrefabManager/PrefabManager.js`)).prefabManager
 		this.systemManager = (await import(`${PATH_MANAGERS}/SystemManager/SystemManager.js`)).systemManager
-		this.sharedGroupManager = (await import(`${PATH_MANAGERS}/SharedGroupManager/SharedGroupManager.js`)).sharedGroupManager
 	}
 
 	createEntity() {
@@ -262,62 +261,6 @@ export class EntityManager {
 		this.archetypeManager.moveEntitiesInBatch(moveMap)
 		this.entityArchetype[entityID] = targetArchetype
 	}
-
-    _convertComponentDataToIdMap(componentsInput) {
-        const perEntityDataMap = new Map()
-        const sharedDataPayload = {}
-
-        if (!componentsInput) {
-            return perEntityDataMap
-        }
-
-        // --- Stage 1: Process and Separate ---
-        for (const componentName in componentsInput) {
-            if (!Object.prototype.hasOwnProperty.call(componentsInput, componentName)) continue
-
-            const ComponentClass = this.componentManager.getComponentClassByName(componentName)
-            if (!ComponentClass) continue
-
-            const typeID = this.componentManager.getComponentTypeID(ComponentClass)
-            const info = this.componentManager.componentInfo[typeID]
-
-            let rawData = { ...componentsInput[componentName] } // Work on a copy
-            const specializedProcessor = this.componentManager.componentProcessors[typeID]
-            if (specializedProcessor) {
-                rawData = specializedProcessor(rawData, componentName)
-            }
-
-            const perEntityPart = {}
-            const sharedPart = {}
-            let hasSharedPart = false
-
-            for (const propName of info.originalSchemaKeys) {
-                if (rawData[propName] === undefined) continue
-
-                if (info.sharedProperties.includes(propName)) {
-                    sharedPart[propName] = rawData[propName]
-                    hasSharedPart = true
-                } else if (info.propertyKeys.includes(propName)) {
-                    perEntityPart[propName] = rawData[propName]
-                }
-            }
-
-            perEntityDataMap.set(typeID, perEntityPart)
-            if (hasSharedPart) {
-                sharedDataPayload[typeID] = sharedPart
-            }
-        }
-
-        // --- Stage 2: Group Shared Data and Inject groupId ---
-        if (Object.keys(sharedDataPayload).length > 0) {
-            const groupId = this.sharedGroupManager.getGroupId(sharedDataPayload)
-            for (const typeIDStr in sharedDataPayload) {
-                perEntityDataMap.get(Number(typeIDStr)).groupId = groupId
-            }
-        }
-
-        return perEntityDataMap
-    }
 }
 
 export const entityManager = new EntityManager()

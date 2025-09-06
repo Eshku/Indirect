@@ -4,10 +4,13 @@ const { componentManager, entityManager, queryManager, prefabManager, archetypeM
 const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManager/TestAPI.js`)
 const { testManager } = await import(`${PATH_CLIENT}/Managers/TestManager/TestManager.js`)
 
+const { componentInterpreter } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
+
 /**
  * A simple configuration object to enable or disable specific command buffer tests.
  */
 const testConfig = {
+	//true / false
 	runCreateEntityTest: true,
 	runDestroyEntityTest: true,
 	runAddComponentTest: true,
@@ -67,15 +70,22 @@ export class CommandBufferTestSystem {
 					flush()
 
 					let createdEntity
+					let createdEntityArchetype
 					for (const chunk of this.creationQuery.iter()) {
 						if (chunk.size > 0) {
 							createdEntity = chunk.entities[0]
+							createdEntityArchetype = chunk.archetype
 							break
 						}
 					}
 
 					expect(createdEntity).not.toBe(undefined)
-					entityManager.destroyEntity(createdEntity) // Cleanup
+
+					// Verify the component data was written correctly.
+					const pos = componentInterpreter.read(createdEntity, this.PositionTypeID, createdEntityArchetype)
+					expect(pos).toEqual({ x: 10, y: 20 })
+
+					entityManager.destroyEntity(createdEntity) 
 					flush()
 				})
 			}
@@ -95,10 +105,18 @@ export class CommandBufferTestSystem {
 				it('should add a component to an entity via addComponent', () => {
 					const entity = entityManager.createEntityWithComponentsByIds(new Map([[this.PositionTypeID, { x: 1, y: 1 }]]))
 					this.commands.addComponent(entity, this.TestEntityTagTypeID, {}) // Add tag for safety, though not strictly needed here
-					this.commands.addComponent(entity, this.VelocityTypeID, { dx: 5, dy: 5 })
+					this.commands.addComponent(entity, this.VelocityTypeID, { x: 5, y: 5 })
 					flush()
 					expect(entityManager.hasComponent(entity, this.VelocityTypeID)).toBe(true)
-					entityManager.destroyEntity(entity) // Cleanup
+
+					// Verify the component data was written correctly.
+					const vel = componentInterpreter.read(
+						entity,
+						this.VelocityTypeID,
+						entityManager.getArchetypeForEntity(entity)
+					)
+					expect(vel).toEqual({ x: 5, y: 5 })
+					entityManager.destroyEntity(entity) 
 					flush()
 				})
 			}
@@ -116,7 +134,7 @@ export class CommandBufferTestSystem {
 					this.commands.removeComponent(entity, this.VelocityTypeID)
 					flush()
 					expect(entityManager.hasComponent(entity, this.VelocityTypeID)).toBe(false)
-					entityManager.destroyEntity(entity) // Cleanup
+					entityManager.destroyEntity(entity) 
 					flush()
 				})
 			}
@@ -132,13 +150,13 @@ export class CommandBufferTestSystem {
 					)
 					this.commands.setComponentData(entity, this.PositionTypeID, { x: 999, y: -999 })
 					flush()
-					const pos = componentManager.readComponentData(
+					const pos = componentInterpreter.read(
 						entity,
 						this.PositionTypeID,
 						entityManager.getArchetypeForEntity(entity)
 					)
 					expect(pos).toEqual({ x: 999, y: -999 })
-					entityManager.destroyEntity(entity) // Cleanup
+					entityManager.destroyEntity(entity) 
 					flush()
 				})
 			}
@@ -162,7 +180,7 @@ export class CommandBufferTestSystem {
 					let instantiatedEntity
 					for (const chunk of this.instantiateQuery.iter()) {
 						for (let i = 0; i < chunk.size; i++) {
-							const pos = componentManager.readComponentData(chunk.entities[i], this.PositionTypeID, chunk.archetype)
+							const pos = componentInterpreter.read(chunk.entities[i], this.PositionTypeID, chunk.archetype)
 							if (pos.x === 123 && pos.y === 456) {
 								instantiatedEntity = chunk.entities[i]
 								break
@@ -171,7 +189,7 @@ export class CommandBufferTestSystem {
 						if (instantiatedEntity) break
 					}
 					expect(instantiatedEntity).not.toBe(undefined)
-					entityManager.destroyEntity(instantiatedEntity) // Cleanup
+					entityManager.destroyEntity(instantiatedEntity) 
 					flush()
 				})
 			}
@@ -184,18 +202,29 @@ export class CommandBufferTestSystem {
 						this.VelocityTypeID,
 						this.TestEntityTagTypeID,
 					])
-					this.commands.createEntityInArchetype(targetArchetypeId, new Map())
+					const initialData = new Map([
+						[this.PositionTypeID, { x: 111, y: 222 }],
+						[this.VelocityTypeID, { x: 333, y: 444 }],
+					])
+					this.commands.createEntityInArchetype(targetArchetypeId, initialData)
 					flush()
 
 					let foundEntity
+					let foundEntityArchetype
 					for (const chunk of this.instantiateQuery.iter()) {
 						if (chunk.archetype === targetArchetypeId) {
 							foundEntity = chunk.entities[0]
+							foundEntityArchetype = chunk.archetype
 							break
 						}
 					}
 					expect(foundEntity).not.toBe(undefined)
-					entityManager.destroyEntity(foundEntity) // Cleanup
+
+					// Verify the component data was written correctly.
+					const pos = componentInterpreter.read(foundEntity, this.PositionTypeID, foundEntityArchetype)
+					expect(pos).toEqual({ x: 111, y: 222 })
+
+					entityManager.destroyEntity(foundEntity) 
 					flush()
 				})
 			}
@@ -225,7 +254,7 @@ export class CommandBufferTestSystem {
 					// SET
 					this.commands.setComponentDataOnQuery(removeQuery, QueryTestTagTypeID, { value: 777 })
 					flush()
-					const data = componentManager.readComponentData(
+					const data = componentInterpreter.read(
 						removeQuery.iter().next().value.entities[0],
 						QueryTestTagTypeID,
 						removeQuery.iter().next().value.archetype

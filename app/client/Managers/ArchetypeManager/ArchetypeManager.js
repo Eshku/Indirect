@@ -545,10 +545,6 @@ export class ArchetypeManager {
 		}
 	}
 
-	_getRawComponentDataForEntity(archetype, entityId, componentTypeId) {
-		return this.componentManager.readComponentData(entityId, componentTypeId, archetype)
-	}
-
 	_setChunkComponents(archetype, chunk, componentTypeID, updateData, currentTick) {
 		if (!this.hasComponentType(archetype, componentTypeID) || !updateData) {
 			return

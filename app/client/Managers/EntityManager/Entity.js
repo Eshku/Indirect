@@ -1,4 +1,5 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+const { componentInterpreter } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
 const { entityManager, componentManager, archetypeManager, sharedGroupManager } = theManager.getManagers()
 
 /**
@@ -86,7 +87,7 @@ export class Entity {
 		// The browser console will typically sort these keys alphabetically for display.
 		for (const typeId of componentTypeIDs) {
 			const componentName = componentManager.getComponentNameByTypeID(typeId)
-			const perEntityData = componentManager.readComponentData(this.id, typeId, archetypeId)
+			const perEntityData = componentInterpreter.read(this.id, typeId, archetypeId)
 
 			if (perEntityData && perEntityData.hasOwnProperty('groupId')) {
 				const groupId = perEntityData.groupId
@@ -128,7 +129,7 @@ export class Entity {
 			return undefined
 		}
 
-		const perEntityData = componentManager.readComponentData(this.id, componentTypeId, archetypeId)
+		const perEntityData = componentInterpreter.read(this.id, componentTypeId, archetypeId)
 
 		// Check for and merge shared data
 		if (perEntityData && perEntityData.hasOwnProperty('groupId')) {

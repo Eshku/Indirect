@@ -7,10 +7,9 @@ const { Position, Velocity, CreationDestructionTag, ComponentA } = componentMana
  * Configuration to enable or disable specific creation/destruction benchmarks.
  */
 const benchmarkConfig = {
-	/** Tests continuous, per-entity creation and destruction. Simulates a "bad" approach. */
-	runPerEntityChurn: false,
-	/** Tests large, infrequent spikes of batch creation and query-based destruction. */
-	runQueryBasedSpike: true,
+	// true / false
+	runPerEntityChurn: true,
+	runQueryBasedSpike: false,
 }
 
 /**

@@ -57,7 +57,7 @@ Readme might be outdated.
 
 - **Immortal Archetypes:** Archetype _definitions_ are "immortal". Once created, they are never destroyed, even if they contain no entities. This is a performance optimization that avoids "archetype churn"- expensive process of repeatedly creating and destroying archetypes, which would force `QueryManager` to constantly re-evaluate all active queries. This trades a small amount of memory for a gain in structural change performance.
 
-#### [Chunks: Unit of Iteration (and Parallelism)](app/client/Managers/ArchetypeManager/Chunk.js)
+#### [Chunks](app/client/Managers/ArchetypeManager/Chunk.js): Unit of Iteration (and Parallelism)
 
 Each archetype's data is organized into fixed-size **Chunks**. A Chunk is a contiguous block of memory that directly stores entities and their associated component data in a Structure of Arrays (SoA) layout.
 
@@ -72,11 +72,9 @@ Each archetype's data is organized into fixed-size **Chunks**. A Chunk is a cont
 
 ### Data Handling
 
-#### Component Schemas and Data Access
+#### [Component](./app/client/Components/) Schemas and Data Access
 
 Components are defined with a `static schema` that dictates how their data is stored and accessed. Complex data stored as numeric references to objects managed elsewhere.
-
-**Component Files:** Component definitions are located in the [./app/client/Components/](./app/client/Components/) directory.
 
 **Schema Types:**
 
@@ -266,9 +264,9 @@ The Command Buffer is a crucial mechanism for safely managing structural changes
 
 While the primary goal is safety, the command buffer is also designed for high performance through several key features:
 
-1.  **Automatic Sorting**: Commands are not executed in the order they are recorded. Instead, they are automatically sorted to ensure a logical and safe sequence: all destructions happen first, then all modifications (adding/removing components), and finally all creations. This prevents errors like trying to modify an entity that has already been destroyed in the same frame. You can influence this order using a `layer` parameter in most command functions for more advanced control.
+1.  **Automatic Sorting**: Commands are not executed in the order they are recorded. Instead, they are automatically sorted to ensure a logical and safe sequence: all destructions happen first, then all modifications (adding/removing components), and finally all creations. This prevents errors like trying to modify an entity that has already been destroyed in the same frame. Order can be influenced by using a `layer` parameter in most command functions for more advanced control.
 
-2.  **Command Consolidation**: If you record a command to add a component and later record a command to remove it from the same entity within the same frame, the buffer cancels them out. Similarly, creating and then immediately destroying an entity results in no work being done. This reduces unnecessary operations.
+2.  **Command Consolidation**: If a command recorded to add a component and later record a command to remove it from the same entity within the same frame, the buffer cancels them out. Similarly, creating and then immediately destroying an entity results in no work being done. This reduces unnecessary operations.
 
 3.  **Batched Operations**: To maximize performance, buffer groups similar operations together. Instead of moving entities between archetypes one by one, it identifies all entities that need the same structural change and moves them all at once in a large, cache-friendly batch. The same principle applies to creating and destroying entities.
 
@@ -278,7 +276,7 @@ Systems receive a `commands` object, which is an instance of `CommandBuffer`.
 
 **Basic Commands**
 
-To interact with the buffer, you need the `componentTypeID` for the components you want to modify.
+To interact with the buffer, `componentTypeID` used for the components to be modified.
 
 ```javascript
 // In a system's constructor or init method:

@@ -80,8 +80,11 @@
 
 const { StringManager } = await import('./StringManager.js')
 const { SchemaParser } = await import(`${PATH_MANAGERS}/ComponentManager/SchemaParser.js`)
-const { ComponentProcessor } = await import('./ComponentProcessor.js')
 const { loadAllComponents } = await import(`${PATH_MANAGERS}/ComponentManager/componentLoader.js`)
+const { SchemaCompiler } = await import('./SchemaCompiler.js')
+const { componentInterpreter } = await import('./ComponentInterpreter.js')
+const { Opcodes } = await import('./SchemaCompiler.js')
+const PROCESSABLE_TYPES = new Set(Object.values(Opcodes))
 
 /**
  * The maximum number of unique component types the engine can support.
@@ -105,17 +108,17 @@ export class ComponentManager {
 		this.componentTypes = new Map()
 		this.componentClasses = [] // Indexed by typeID
 		this.componentInfo = [] // Indexed by typeID, stores parsed schema info
-		this.componentProcessors = [] // Indexed by typeID, stores generated processor functions
+		this.componentPrograms = [] // Indexed by typeID, stores compiled instruction lists
 		this.componentBitFlags = [] // Indexed by typeID, stores BigInt bit flags
 		this.componentNameToTypeID = new Map() // Maps lowercase name to typeID
 		this.componentNameToClass = new Map()
-		this.statNameToClassMap = new Map()
 		this.stringManager = new StringManager()
 		this.defaultInstances = [] // Indexed by typeID
 		this.nextComponentTypeID = 0
+		this.sharedGroupManager = null // self-reference after init
 		this.archetypeManager = null // self-reference after init
-		this.componentProcessor = new ComponentProcessor(this)
 		this.schemaParser = new SchemaParser()
+		this.schemaCompiler = new SchemaCompiler()
 		this._cachedComponentsObject = null
 		this.EMPTY_BITMASK = 0n
 	}
@@ -123,7 +126,15 @@ export class ComponentManager {
 	async init() {
 		const componentModules = await loadAllComponents()
 		await this.registerComponents(componentModules)
+		this.sharedGroupManager = (
+			await import(`${PATH_MANAGERS}/SharedGroupManager/SharedGroupManager.js`)
+		).sharedGroupManager
 		this.archetypeManager = (await import(`${PATH_MANAGERS}/ArchetypeManager/ArchetypeManager.js`)).archetypeManager
+		componentInterpreter.init({
+			stringManager: this.stringManager,
+			componentInfo: this.componentInfo,
+			archetypeManager: this.archetypeManager,
+		})
 	}
 
 	async registerComponents(componentModules) {
@@ -168,11 +179,6 @@ export class ComponentManager {
 			this.componentNameToClass.set(ComponentClass.name.toLowerCase(), ComponentClass)
 			this.componentNameToTypeID.set(ComponentClass.name.toLowerCase(), typeID)
 
-			// If the component self-identifies as a stat, register it for fast lookup.
-			if (ComponentClass.statName) {
-				this.statNameToClassMap.set(ComponentClass.statName, ComponentClass)
-			}
-
 			// Invalidate the cache whenever a new component is registered.
 			this._cachedComponentsObject = null
 			//console.log(`Component registered: ${ComponentClass.name} with ID ${typeID}`)
@@ -188,58 +194,99 @@ export class ComponentManager {
 	async _parseAndStoreSchema(ComponentClass, typeID) {
 		const info = await this.schemaParser.parse(ComponentClass, typeID, this.stringManager)
 		this.componentInfo[typeID] = info
-		this._generateComponentProcessor(ComponentClass, typeID, info)
+
+		// Compile the schema info into a "program" (instruction list)
+		const program = this.schemaCompiler.compile(info)
+		this.componentPrograms[typeID] = program
 	}
 
 	/**
-	 * Generates and caches a processor function for a specific component type.
-	 * This function is a "pipeline" that calls the necessary generic processors from the
-	 * registry in a fixed order, avoiding all runtime loops and lookups.
-	 * @param {Function} ComponentClass - The component class.
+	 * Processes a "designer-friendly" component data object into its "engine-friendly" raw format, in-place.
+	 * This is the primary entry point for the "write" path of the interpreter pattern.
 	 * @param {number} typeID - The component's type ID.
- * @param {object} info - The parsed schema information from SchemaParser.
-	 * @private
+	 * @param {object} data - The data object to process.
 	 */
-	_generateComponentProcessor(ComponentClass, typeID, info) {
-		const processingSteps = []
+	processComponentData(typeID, data) {
+		const program = this.componentPrograms[typeID]
+		if (program) {
+			const componentName = this.getComponentNameByTypeID(typeID)
+			componentInterpreter.execute(program, data, componentName)
+		} /* else if (data && Object.keys(data).length > 0) {
+			// No program exists. We only issue a warning if a program was *expected*.
+			// A program is expected if the schema contains non-primitive types that require processing.
+			const info = this.componentInfo[typeID]
+			if (!info) return
 
-		// Use representations which is the source of truth for processors
-		for (const propName in info.representations) {
-			const rep = info.representations[propName]
+			const requiresProcessing = Object.values(info.representations).some(rep => PROCESSABLE_TYPES.has(rep.type))
 
-			if (rep.type) {
-				const typeProcessorFunc = this.componentProcessor.typeRegistry[rep.type]
-				// Only include processors that exist in the generic, runtime registry.
-				//! Prefab-specific processors should be processed at build \ load time once.
-				if (typeProcessorFunc) {
-					processingSteps.push({
-						typeProcessor: typeProcessorFunc,
-						propName,
-						propSchema: rep,
-					})
+			if (requiresProcessing) {
+				// This is a potential bug. A component with complex types has no processing program.
+				const componentName = this.getComponentNameByTypeID(typeID)
+				console.error(
+					`ComponentManager: A processing program was expected for component "${componentName}" (ID: ${typeID}) but was not found. This is likely a bug in the SchemaCompiler.`
+				)
+			}
+			// If `requiresProcessing` is false, it means the component is either a tag or contains only
+			// primitive types. In this case, it's correct that there is no program, and no warning is needed.
+		} */
+	}
+
+	/**
+	 * Takes a high-level, "designer-friendly" component data object and converts it
+	 * into a "engine-friendly" map of componentTypeID -> rawData. This involves
+	 * processing the data (e.g., interning strings, converting enums) and handling
+	 * shared component data grouping.
+	 * @param {object} componentsInput - e.g., `{ Position: { x: 10 }, Rarity: { value: 'common' } }`
+	 * @returns {Map<number, object>} A map of componentTypeID to its processed, raw data object.
+	 */
+	createIdMapFromData(componentsInput) {
+		const perEntityDataMap = new Map()
+		const sharedDataPayload = {}
+
+		if (!componentsInput) {
+			return perEntityDataMap
+		}
+
+		// --- Stage 1: Process and Separate ---
+		for (const componentName in componentsInput) {
+			if (!Object.prototype.hasOwnProperty.call(componentsInput, componentName)) continue
+
+			const ComponentClass = this.getComponentClassByName(componentName)
+			if (!ComponentClass) continue
+
+			const typeID = this.getComponentTypeID(ComponentClass)
+			const info = this.componentInfo[typeID]
+
+			let rawData = { ...componentsInput[componentName] } // Work on a copy
+			this.processComponentData(typeID, rawData)
+
+			const perEntityPart = { ...rawData }
+			const sharedPart = {}
+			let hasSharedPart = false
+
+			for (const sharedPropName of info.sharedProperties) {
+				if (perEntityPart[sharedPropName] !== undefined) {
+					sharedPart[sharedPropName] = perEntityPart[sharedPropName]
+					delete perEntityPart[sharedPropName]
+					hasSharedPart = true
 				}
 			}
-		}
 
-		if (processingSteps.length === 0) {
-			this.componentProcessors[typeID] = null // No processor needed for this component.
-			return
-		}
-
-		const specializedProcessor = (rawData, componentName) => {
-			// OPTIMIZATION: Mutate the original rawData object directly.
-			// The shallow copy `{ ...rawData }` was identified as a major performance bottleneck,
-			// causing excessive garbage collection during entity creation.
-			// The type processors in ComponentProcessor.js are designed to mutate the object they receive.
-			for (const step of processingSteps) {
-				// Pass the specific property and its schema to the processor.
-				// This is much more efficient than having the processor loop through the whole schema.
-				step.typeProcessor(rawData, step.propName, step.propSchema, componentName)
+			perEntityDataMap.set(typeID, perEntityPart)
+			if (hasSharedPart) {
+				sharedDataPayload[typeID] = sharedPart
 			}
-			return rawData
 		}
 
-		this.componentProcessors[typeID] = specializedProcessor
+		// --- Stage 2: Group Shared Data and Inject groupId ---
+		if (Object.keys(sharedDataPayload).length > 0) {
+			const groupId = this.sharedGroupManager.getGroupId(sharedDataPayload)
+			for (const typeIDStr in sharedDataPayload) {
+				perEntityDataMap.get(Number(typeIDStr)).groupId = groupId
+			}
+		}
+
+		return perEntityDataMap
 	}
 
 	/**
@@ -251,7 +298,9 @@ export class ComponentManager {
 		const typeID = this.componentTypes.get(ComponentClass)
 		if (typeID === undefined) {
 			const componentName = ComponentClass ? ComponentClass.name : 'undefined'
-			console.warn(`ComponentManager: Could not get type ID for component "${componentName}". It might not be registered.`)
+			console.warn(
+				`ComponentManager: Could not get type ID for component "${componentName}". It might not be registered.`
+			)
 		}
 		return typeID
 	}
@@ -307,16 +356,6 @@ export class ComponentManager {
 	}
 
 	/**
-	 * Gets the component class for a given stat name.
-	 * This is a highly performant lookup for data-driven systems.
-	 * @param {string} statName - The canonical (lowercase) name of the stat.
-	 * @returns {Function | undefined} The component class constructor, or undefined if not found.
-	 */
-	getComponentClassByStatName(statName) {
-		return this.statNameToClassMap.get(statName)
-	}
-
-	/**
 	 * Retrieves an object containing all registered component classes,
 	 * keyed by their class names.
 	 * @returns {Object.<string, Function>} An object mapping class names to ComponentClasses.
@@ -329,13 +368,40 @@ export class ComponentManager {
 		const components = {}
 		for (const [ComponentClass] of this.componentTypes.entries()) {
 			if (!ComponentClass || !ComponentClass.name) {
-				console.warn(`ComponentManager: An invalid component class was found during getComponents(). It has been skipped.`)
+				console.warn(
+					`ComponentManager: An invalid component class was found during getComponents(). It has been skipped.`
+				)
 				continue
 			}
 			components[ComponentClass.name] = ComponentClass
 		}
 		this._cachedComponentsObject = components
 		return this._cachedComponentsObject
+	}
+
+	/**
+	 * Retrieves the static constant map (for enums or bitmasks) for a specific component property.
+	 * This is a developer-friendly helper for system initialization, providing a clean way to
+	 * cache constants without exposing the internal structure of `componentInfo`.
+	 * @param {Function} ComponentClass - The component class to get constants from.
+	 * @param {string} propertyName - The name of the property in the component's schema (e.g., 'collisionFlags').
+	 * @returns {object | undefined} The read-only constant map (e.g., `{ LEFT: 1, RIGHT: 2, ... }`), or undefined if not found.
+	 */
+	getConstantsFor(ComponentClass, propertyName) {
+		const typeID = this.getComponentTypeID(ComponentClass)
+		if (typeID === undefined) return undefined
+
+		const info = this.componentInfo[typeID]
+		const rep = info?.representations?.[propertyName]
+
+		if (rep?.type === 'enum') {
+			return rep.enumMap
+		} else if (rep?.type === 'bitmask') {
+			return rep.flagMap
+		}
+
+		console.warn(`ComponentManager: Could not find constants for "${ComponentClass.name}.${propertyName}".`)
+		return undefined
 	}
 
 	/**
@@ -420,10 +486,6 @@ export class ComponentManager {
 			return false
 		}
 		return this.archetypeManager.hasComponentType(archetype, componentTypeID)
-	}
-
-	readComponentData(entityId, componentTypeId, archetype) {
-		return this.componentProcessor.read(entityId, componentTypeId, archetype)
 	}
 }
 

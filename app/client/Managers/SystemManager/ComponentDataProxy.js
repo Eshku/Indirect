@@ -5,7 +5,7 @@
  * ---
  * ### ARCHITECTURAL NOTE: The Performance Trade-Off of Proxies
  *
- * This file is currently **not used** by the `CommandBufferReader`, but is kept as a reference
+ * This file is currently **not used** by the `CommandBufferReader` and is kept as a reference
  * for a potential future optimization pattern.
  *
  * **The Goal:** The primary goal of a zero-copy proxy is to reduce Garbage Collector (GC) pressure.

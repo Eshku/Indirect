@@ -26,7 +26,6 @@ export class Chunk {
         // Caches for flyweight objects to reduce allocations
         this.accessorCache = []
         this.markerCache = []
-		this.constants = {} // Populated by Query iterators for zero-overhead access in systems.
 
         // Array to store the entity IDs.
         this.entities = new Uint32Array(capacity)

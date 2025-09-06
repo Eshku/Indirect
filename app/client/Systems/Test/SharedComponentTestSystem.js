@@ -173,8 +173,8 @@ export class SharedComponentTestSystem {
 				const entityId = this.testEntityIds[0] // Has both Rarity and Stack
 				const archetype = entityManager.getArchetypeForEntity(entityId)
 
-				const rarityComp = componentManager.readComponentData(entityId, this.rarityTypeID, archetype)
-				const stackComp = componentManager.readComponentData(entityId, this.stackTypeID, archetype)
+				const rarityComp = componentInterpreter.read(entityId, this.rarityTypeID, archetype)
+				const stackComp = componentInterpreter.read(entityId, this.stackTypeID, archetype)
 
 				expect(rarityComp.groupId).toBe(stackComp.groupId)
 			})

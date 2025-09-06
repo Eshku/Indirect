@@ -4,8 +4,8 @@ const { queryManager, componentManager } = theManager.getManagers()
 const { ComponentA, ComponentB } = componentManager.getComponents()
 
 const benchmarkConfig = {
-	// Toggles which benchmark strategy to run. Only one should be true.
-	runPerEntity: false,
+	// true / false
+	runPerEntity: true,
 	runQueryBased: false,
 }
 
@@ -40,7 +40,6 @@ export class StructuralChangeBenchmarkSystem {
 	update(deltaTime, currentTick) {
 		if (benchmarkConfig.runPerEntity) {
 			this._updatePerEntity(currentTick)
-
 		} else if (benchmarkConfig.runQueryBased) {
 			this._updateQueryBased(currentTick)
 		}
