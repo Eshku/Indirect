@@ -23,7 +23,6 @@ Readme might be outdated.
 **Next significant steps:**
 
 - Introduce dynamic (packed) arrays, stored on chunk (?).
-- Figure something out about processors, schemas and all that. Current situation leads to ever increasing entity creation overhead as more data types are introduced.
 - Generational Entity IDs
 - Parrallelism.
 - Custom HMR, or in simple terms - hot reload.
@@ -204,7 +203,7 @@ export class ApplyVelocity {
 
 In the example above, `ApplyVelocity` first retrieves the component Type IDs it needs using `componentManager.getTypeIDs()`. It then uses these IDs to define a **reactive query** that will only yield entities whose `Velocity` component has changed.
 
-The `update` method iterates through chunks, and for each entity, it performs a cheap `hasChanged()` check before proceeding. If the check passes, it performs the calculation and marks the `Position` component as "dirty," allowing other systems to react to the change.
+The `update` method iterates through chunks, and for each entity, it performs `hasChanged()` check before proceeding. If the check passes, it performs calculation and marks the `Position` component as "dirty," allowing other systems to react to the change.
 
 ### Working with Enums and Bitmasks
 
@@ -268,11 +267,11 @@ this.commands.createEntity({
 	Health: { value: 100 },
 })
 
-this.commands.addComponent(someEntity, this.healthTypeID, { value: 50 })
+this.commands.addComponent(entityID, this.healthTypeID, { value: 50 })
 
-this.commands.removeComponent(anotherEntity, this.positionTypeID)
+this.commands.removeComponent(entityID, this.positionTypeID)
 
-this.commands.destroyEntity(enemyEntity)
+this.commands.destroyEntity(entityID)
 ```
 
 **Instantiating Prefabs**
