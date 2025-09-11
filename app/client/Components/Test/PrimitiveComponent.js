@@ -1,31 +1,14 @@
-export class PrimitiveComponent {
-	static schema = {
-		f64: 'f64',
-		f32: 'f32',
-		i32: 'i32',
-		u32: 'u32',
-		i16: 'i16',
-		u16: 'u16',
-		i8: 'i8',
-		u8: 'u8',
-		boolean: 'boolean',
-	}
-
-	constructor(data = {}) {
-		Object.assign(
-			this,
-			{
-				f64: 0,
-				f32: 0,
-				i32: 0,
-				u32: 0,
-				i16: 0,
-				u16: 0,
-				i8: 0,
-				u8: 0,
-				boolean: false,
-			},
-			data
-		)
-	}
+/**
+ * A component for testing all primitive data types supported by the schema system.
+ */
+export const PrimitiveComponent = {
+	f64: { type: 'f64', default: 0 },
+	f32: { type: 'f32', default: 0 },
+	i32: { type: 'i32', default: 0 },
+	u32: { type: 'u32', default: 0 },
+	i16: { type: 'i16', default: 0 },
+	u16: { type: 'u16', default: 0 },
+	i8: { type: 'i8', default: 0 },
+	u8: { type: 'u8', default: 0 },
+	boolean: { type: 'boolean', default: false },
 }

@@ -1,7 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, cooldownManager, archetypeManager, entityManager } = theManager.getManagers()
-
-const { ActionIntent, PrefabId, ActiveSet, Cooldown } = componentManager.getComponents()
+const { queryManager, componentManager, cooldownManager, archetypeManager, entityManager, prefabManager } =
+	theManager.getManagers()
 
 /**
  * This system is the first step in the action pipeline. It finds an entity's
@@ -10,17 +9,19 @@ const { ActionIntent, PrefabId, ActiveSet, Cooldown } = componentManager.getComp
  */
 export class ItemEventSystem {
 	constructor() {
+		const { ActionIntent, ActiveSet, Prefab, Cooldown } = componentManager.getTypeIDs()
+
 		this.actorsQuery = queryManager.getQuery({ with: [ActionIntent, ActiveSet], react: [ActionIntent] })
 
-		this.actionIntentTypeID = componentManager.getComponentTypeID(ActionIntent)
-		this.activeSetTypeID = componentManager.getComponentTypeID(ActiveSet)
-		this.prefabIdTypeID = componentManager.getComponentTypeID(PrefabId)
-		this.cooldownTypeID = componentManager.getComponentTypeID(Cooldown)
-		this.stringStorage = componentManager.stringManager.storage
+		this.actionIntentTypeID = ActionIntent
+		this.activeSetTypeID = ActiveSet
+		this.prefabIdTypeID = Prefab
+		this.cooldownTypeID = Cooldown
 
 		this.archetypeManager = archetypeManager
 		this.cooldownManager = cooldownManager
 		this.entityManager = entityManager
+		this.prefabManager = prefabManager
 	}
 
 	init() {}
@@ -69,24 +70,24 @@ export class ItemEventSystem {
 				// Get PrefabId first, as it's needed for logging and cooldowns.
 				const prefabIdArrays = itemChunk.componentArrays[this.prefabIdTypeID]
 				if (!prefabIdArrays) {
-					console.warn(`ItemEventSystem: Item ${itemEntityId} is missing a PrefabId component. Cannot process action.`)
+					console.warn(`ItemEventSystem: Item ${itemEntityId} is missing a Prefab component. Cannot process action.`)
 					continue
 				}
 
-				const itemPrefabIdRef = prefabIdArrays.id[itemIndexInChunk]
-				const itemPrefabIdString = this.stringStorage[itemPrefabIdRef]
+				const itemPrefabId = prefabIdArrays.id[itemIndexInChunk]
 
 				const cooldownArrays = itemChunk.componentArrays[this.cooldownTypeID]
 
 				// Read cooldown value directly on the item if it is present.
 				if (cooldownArrays) {
-					if (this.cooldownManager.isOnCooldown(actorId, itemPrefabIdRef)) continue
+					if (this.cooldownManager.isOnCooldown(actorId, itemPrefabId)) continue
 
 					const itemCooldownDuration = cooldownArrays.duration[itemIndexInChunk]
-					this.cooldownManager.startCooldown(actorId, itemPrefabIdRef, itemCooldownDuration)
+					this.cooldownManager.startCooldown(actorId, itemPrefabId, itemCooldownDuration)
 				}
 
-				console.log(`Entity ${actorId} used ${itemPrefabIdString} with ID ${itemEntityId}`)
+				const itemPrefabName = this.prefabManager.getPrefabNameById(itemPrefabId)
+				console.log(`Entity ${actorId} used ${itemPrefabName} with ID ${itemEntityId}`)
 			}
 		}
 	}

@@ -1,18 +1,20 @@
-export class Stack {
-	static schema = {
-		size: {
-			type: 'u16',
-			shared: true,
-		},
-		amount: 'u16',
-	}
+/**
+ * A component that defines stackable behavior for items or abilities.
+ */
+export const Stack = {
 	/**
-	 * @param {object} data
-	 * @param {number} [data.size=1] - The maximum size for this stack.
-	 * @param {number} [data.amount=1] - The current amount of items in the stack.
+	 * The maximum size of the stack. This is often shared among all instances of a particular item type.
 	 */
-	constructor({ size = 1, amount = 1 } = {}) {
-		this.size = size
-		this.amount = amount
-	}
+	size: {
+		type: 'u16',
+		shared: true,
+		default: 1,
+	},
+	/**
+	 * The current number of items in this specific stack.
+	 */
+	amount: {
+		type: 'u16',
+		default: 1,
+	},
 }

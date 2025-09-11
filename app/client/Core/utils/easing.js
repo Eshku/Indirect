@@ -1,5 +1,5 @@
 /**
- * @fileoverview A collection of common easing functions.
+ * A collection of common easing functions.
  * These functions take a value `t` from 0 to 1 and return an eased value.
  * They are useful for creating smooth, natural-feeling animations and transitions.
  *

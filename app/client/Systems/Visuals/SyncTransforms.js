@@ -1,8 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, assetManager } = theManager.getManagers()
 
-const { Viewable, Position, Rotation, Scale } = componentManager.getComponents()
-
 /**
  * Synchronizes the visual properties (position, rotation, scale) of a PIXI.Sprite
  * with the data from an entity's components. This system is highly optimized to
@@ -10,6 +8,8 @@ const { Viewable, Position, Rotation, Scale } = componentManager.getComponents()
  */
 export class SyncTransforms {
 	constructor() {
+		const { Viewable, Position, Rotation, Scale } = componentManager.getTypeIDs()
+
 		this.positionQuery = queryManager.getQuery({
 			with: [Viewable, Position],
 			react: [Position],
@@ -23,10 +23,10 @@ export class SyncTransforms {
 			react: [Scale],
 		})
 
-		this.viewableTypeID = componentManager.getComponentTypeID(Viewable)
-		this.positionTypeID = componentManager.getComponentTypeID(Position)
-		this.rotationTypeID = componentManager.getComponentTypeID(Rotation)
-		this.scaleTypeID = componentManager.getComponentTypeID(Scale)
+		this.viewableTypeID = Viewable
+		this.positionTypeID = Position
+		this.rotationTypeID = Rotation
+		this.scaleTypeID = Scale
 		this.displayObjectStorage = assetManager.displayObjectStorage
 	}
 

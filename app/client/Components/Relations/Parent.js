@@ -1,14 +1,13 @@
 /**
- * A "hot" component that creates a parent-child relationship between entities.
- * This is fundamental to the relational ECS pattern, used to link effects
- * to their owners or to other effects.
+ * A component that creates a parent-child relationship between entities.
  */
-export class Parent {
-	static schema = {
-		entityId: 'u32',
-	}
-	constructor({ entityId = 0 } = {}) {
-		this.entityId = entityId
-	}
+export const Parent = {
+	/**
+	 * The entity ID of the parent.
+	 */
+	entityId: {
+		type: 'u32',
+		default: 0,
+	},
 }
 

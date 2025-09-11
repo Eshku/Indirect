@@ -1,15 +1,15 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager } = theManager.getManagers()
 
-const { IsGrounded, Velocity } = componentManager.getComponents()
-
 export class GravitySystem {
 	constructor() {
+		const { IsGrounded, Velocity } = componentManager.getTypeIDs()
+
 		this.query = queryManager.getQuery({
 			with: [IsGrounded, Velocity],
 		})
-		this.isGroundedTypeID = componentManager.getComponentTypeID(IsGrounded)
-		this.velocityTypeID = componentManager.getComponentTypeID(Velocity)
+		this.isGroundedTypeID = IsGrounded
+		this.velocityTypeID = Velocity
 		this.gravity = 800
 	}
 	init() {}

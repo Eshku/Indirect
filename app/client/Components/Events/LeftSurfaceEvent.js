@@ -1,18 +1,12 @@
 /**
- * A transient event entity created when a character leaves a surface (e.g., falls off).
- * This is a "hot" component because it is created and destroyed frequently,
- * and its data is a simple primitive that fits well in a TypedArray.
+ * A transient event component created when a character leaves a surface (e.g., falls off).
  */
-export class LeftSurfaceEvent {
-	static schema = {
-		entityId: 'u32',
-	}
-
+export const LeftSurfaceEvent = {
 	/**
-	 * @param {object} [data={}]
-	 * @param {number} data.entityId - The ID of the entity that left the surface.
+	 * The ID of the entity that left the surface.
 	 */
-	constructor({ entityId = 0 } = {}) {
-		this.entityId = entityId
-	}
+	entityId: {
+		type: 'u32',
+		default: 0,
+	},
 }

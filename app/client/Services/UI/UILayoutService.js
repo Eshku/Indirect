@@ -1,5 +1,5 @@
 /**
- * @fileoverview A reusable service for applying common layout patterns to PIXI.Containers.
+ * reusable service for applying common layout patterns to PIXI.Containers.
  */
 
 /**

@@ -1,8 +1,12 @@
-export class Rotation {
-	static schema = {
-		angle: 'f64',
-	}
-	constructor({ angle = 0 } = {}) {
-		this.angle = angle
-	}
+/**
+ * A component representing an entity's rotation.
+ */
+export const Rotation = {
+	/**
+	 * The angle of rotation in radians.
+	 */
+	angle: {
+		type: 'f64',
+		default: 0,
+	},
 }

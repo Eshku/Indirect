@@ -1,9 +1,8 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, layerManager, assetManager } = theManager.getManagers()
+const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
 
 const UNINITIALIZED_REF = 0
-
-const { SpriteDescriptor, Viewable } = componentManager.getComponents()
 
 /**
  * Creates visual PIXI.Sprite representations for entities that have a
@@ -13,15 +12,17 @@ const { SpriteDescriptor, Viewable } = componentManager.getComponents()
  */
 export class SpriteFactorySystem {
 	constructor() {
+		const { SpriteDescriptor, Viewable } = componentManager.getTypeIDs()
+
 		this.initializationQuery = queryManager.getQuery({
 			with: [SpriteDescriptor, Viewable],
 			react: [SpriteDescriptor],
 		})
 
-		this.descriptorTypeID = componentManager.getComponentTypeID(SpriteDescriptor)
-		this.viewableTypeID = componentManager.getComponentTypeID(Viewable)
+		this.descriptorTypeID = SpriteDescriptor
+		this.viewableTypeID = Viewable
 		this.gameActorsLayer = layerManager.getLayer('gameActors')
-		this.stringStorage = componentManager.stringManager.storage
+		this.stringStorage = stringInterningTable.storage
 	}
 
 	init() {}

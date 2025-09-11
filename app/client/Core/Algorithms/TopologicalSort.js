@@ -1,5 +1,5 @@
 /**
- * @fileoverview Implements Kahn's algorithm for topological sorting.
+ * Implements Kahn's algorithm for topological sorting.
  * This utility is used by the SystemManager to determine the execution order of systems
  * based on their dependencies, allowing for parallel execution where possible.
  */

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Defines high-performance accessors for component data within an archetype.
+ * Defines high-performance accessors for component data within an archetype.
  *
  * ### Architectural Note: Performance vs. Convenience ("Friendly Path" vs. "Fast Path")
  *
@@ -60,8 +60,8 @@ export class SoAArchetypeAccessor {
 		// A single, reusable view object is created here in the constructor.
 		// This is the key to the "Friendly Path's" performance. Instead of allocating
 		// a new view object for every entity in a loop, we reuse this one.
-		// ! this is still terrible for performance tho, NEVER use accessors and views it in heavy loops
-		this._view = new SoAComponentView(info, this._propArrays, componentManager.stringManager)
+		// ! this is still terrible for performance tho, NEVER use accessors and views in heavy loops
+		this._view = new SoAComponentView(info, this._propArrays)
 	}
 
 	/**

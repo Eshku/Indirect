@@ -1,8 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager } = theManager.getManagers()
 
-const { LandedEvent, LeftSurfaceEvent } = componentManager.getComponents()
-
 /**
  * This system is responsible for cleaning up transient event entities at the end of each frame.
  *
@@ -30,6 +28,7 @@ const { LandedEvent, LeftSurfaceEvent } = componentManager.getComponents()
  */
 export class EventEntityCleanupSystem {
 	constructor() {
+		const { LandedEvent, LeftSurfaceEvent } = componentManager.getTypeIDs()
 		// By querying for any of these event components, we can handle all
 		// transient event cleanup in a single pass.
 		this.transientEventQuery = queryManager.getQuery({

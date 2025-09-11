@@ -94,7 +94,7 @@ export class SystemManager {
 		this.renderer = this.app.renderer
 		this.ticker = this.app.ticker
 
-		this.commandBuffer = new CommandBuffer(this.componentManager, this.prefabManager);
+		this.commandBuffer = new CommandBuffer(this.componentManager, this.prefabManager, this.archetypeManager);
 		this.commandBufferExecutor = new CommandBufferExecutor(
 			(await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)).entityManager,
 			this.componentManager,

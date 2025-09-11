@@ -1,5 +1,5 @@
 /**
- * @fileoverview Manages all shared cooldowns for entities.
+ * Manages all shared cooldowns for entities.
  *
  * --- ARCHITECTURAL NOTES ---
  * This manager exists as a centralized, high-performance service for cooldowns,
@@ -50,48 +50,41 @@ class CooldownManager {
 	constructor() {
 		/**
 		 * Maps an owner's entityId to their personal map of cooldowns.
-		 * The inner map maps a skill's prefabId (as an interned string Ref) to its remaining time in seconds.
+		 * The inner map maps a skill's prefabId to its remaining time in seconds.
 		 * @private
 		 * @type {Map<number, Map<number, number>>}
 		 */
 		this.cooldownsByOwner = new Map()
-		this.stringManager = null
-	}
-
-	async init() {
-		const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-		const componentManager = theManager.getManager('ComponentManager')
-		this.stringManager = componentManager.stringManager
 	}
 
 	/**
 	 * Starts a cooldown for a specific entity and skill.
-	 * @param {number} ownerId - The ID of the entity that owns the cooldown. * @param {number} prefabIdRef - The interned string reference for the skill's prefab ID.
+	 * @param {number} ownerId - The ID of the entity that owns the cooldown. * @param {number} prefabId - The numeric ID for the skill's prefab.
 	 * @param {number} duration - The cooldown duration in seconds.
 	 */
-	startCooldown(ownerId, prefabIdRef, duration) {
+	startCooldown(ownerId, prefabId, duration) {
 		if (!this.cooldownsByOwner.has(ownerId)) {
 			this.cooldownsByOwner.set(ownerId, new Map())
 		}
 		const ownerCooldowns = this.cooldownsByOwner.get(ownerId)
-		ownerCooldowns.set(prefabIdRef, duration)
+		ownerCooldowns.set(prefabId, duration)
 	}
 
 	/**
 	 * Gets the remaining cooldown time for a specific entity and skill.
 	 * @param {number} ownerId - The ID of the entity.
-	 * @param {number} prefabIdRef - The interned string reference for the skill's prefab ID.
+	 * @param {number} prefabId - The numeric ID for the skill's prefab.
 	 * @returns {number} The remaining time in seconds, or 0 if not on cooldown.
 	 */
-	getRemaining(ownerId, prefabIdRef) {
+	getRemaining(ownerId, prefabId) {
 		const ownerCooldowns = this.cooldownsByOwner.get(ownerId)
 		if (!ownerCooldowns) return 0
 
-		return ownerCooldowns.get(prefabIdRef) || 0
+		return ownerCooldowns.get(prefabId) || 0
 	}
 
-	isOnCooldown(ownerId, prefabIdRef) {
-		return this.getRemaining(ownerId, prefabIdRef) > 0
+	isOnCooldown(ownerId, prefabId) {
+		return this.getRemaining(ownerId, prefabId) > 0
 	}
 
 	/**
@@ -101,12 +94,12 @@ class CooldownManager {
 	 */
 	update(deltaTime) {
 		for (const ownerCooldowns of this.cooldownsByOwner.values()) {
-			for (const [prefabIdRef, remainingTime] of ownerCooldowns.entries()) {
+			for (const [prefabId, remainingTime] of ownerCooldowns.entries()) {
 				const newTime = remainingTime - deltaTime
 				if (newTime <= 0) {
-					ownerCooldowns.delete(prefabIdRef)
+					ownerCooldowns.delete(prefabId)
 				} else {
-					ownerCooldowns.set(prefabIdRef, newTime)
+					ownerCooldowns.set(prefabId, newTime)
 				}
 			}
 		}

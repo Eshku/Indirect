@@ -1,18 +1,12 @@
 /**
- * A transient event entity created when a character lands on a surface.
- * This is a "hot" component because it is created and destroyed frequently,
- * and its data is a simple primitive that fits well in a TypedArray.
+ * A transient event component created when a character lands on a surface.
  */
-export class LandedEvent {
-	static schema = {
-		entityId: 'u32',
-	}
-
+export const LandedEvent = {
 	/**
-	 * @param {object} [data={}]
-	 * @param {number} data.entityId - The ID of the entity that landed.
+	 * The ID of the entity that landed.
 	 */
-	constructor({ entityId = 0 } = {}) {
-		this.entityId = entityId
-	}
+	entityId: {
+		type: 'u32',
+		default: 0,
+	},
 }

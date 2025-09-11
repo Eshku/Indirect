@@ -1,45 +1,40 @@
 /**
- * @fileoverview Manages component registration, schema parsing, and low-level component manipulation.
+ * Manages component registration, schema parsing, and low-level component manipulation.
  *
  * ---
  *
- * ### Architectural Philosophy: A Unified "Hot" Data Model
+ * ### Architectural Philosophy: A Unified Data Model
  *
  * This manager is central to the engine's data-oriented design. The core principle is that
- * **all** component data is stored in a "hot", cache-friendly format to maximize performance.
+ * **all** component data is stored in a cache-friendly format.
  *
- * #### Hot Components (Struct-of-Arrays, SoA)
+ * #### Component Schemas (Struct-of-Arrays, SoA)
  *
- * Hot components are for performance-critical data that is frequently accessed and modified
- * in tight loops (e.g., Position, Velocity, Health).
+ * All components are defined by a schema object that maps property names to data types
+ * (e.g., `{ x: { type: 'f64' }, y: { type: 'f64' } }`).
  *
- * - **Schema-Driven**: They are defined by a `static schema` object that maps property names
- *   to primitive types (e.g., `{ x: 'f64', y: 'f64' }`).
- * - **Storage**: The `Archetype` stores their data in `TypedArray`s, one for each property.
- *   This is the "Struct-of-Arrays" (SoA) layout, which is extremely cache-friendly for systems
- *   that iterate over specific properties.
- * - **Access**: Systems use a high-performance `SoAComponentAccessor` which provides a
- *   reusable "view" object, avoiding object allocation in loops.
- * - **All Components are Hot**: In this engine, all components are considered "hot" and must
- *   provide a `static schema`. There is no "cold" data path. This ensures predictable high
  *   performance and architectural simplicity.
- * - **Complex Data**: For complex data that doesn't fit in a `TypedArray` (like a `Map` or a
- *   `PIXI.Sprite`), components should store a numeric reference (a "handle" or "Ref") to the
- *   object, which is managed by a specialized manager (e.g., `AssetManager`).
+ *
+ * - **Storage**: The `Archetype` stores component data in `TypedArray`s, one for each property.
+ *   This is cache-friendly for systems that iterate over specific properties of many entities.
+ * - **Unified Model**: There is no distinction between "hot" and "cold" components. All data follows
+ *   this optimized path, ensuring predictable high performance and architectural simplicity.
+ * - **Complex Data via Managed References**: For data that doesn't fit in a `TypedArray` (like a `Map` or a
+ *   `PIXI.Sprite`), the component schema defines a numeric reference (a "handle" or "Ref", e.g., `u32`).
+ *   The actual complex object is stored and managed by a specialized manager (e.g., `AssetManager`),
+ *   and the component only holds the lightweight reference.
  *
  * #### Tag Components
  *
- * A tag is a special type of "hot" component that contains no data. It is defined as a
- * schemaless class with no instance properties (e.g., `class MyTag {}`). It serves only
- * as a marker for queries (e.g., `PlayerTag`, `EnemyTag`).
+ * A tag is a component with an empty schema (`{}`). It contains no data and serves only as a marker
+ * for queries (e.g., `PlayerTag`, `EnemyTag`).
  *
  * ---
  *
  * ### Choosing Schema Data Types
  *
- * The performance impact of choosing the smallest appropriate data type goes beyond just memory savings;
- * it's about how efficiently the CPU can access and process that data. This is due to two key
- * hardware principles:
+ * The performance impact of choosing the smallest appropriate data type is significant. It's not just about
+ * memory savings; it's about how efficiently the CPU can access and process data due to two key hardware principles:
  *
  * 1.  **CPU Cache Lines**: When your CPU needs to read a piece of data from memory (like a
  *     character's state), it doesn't just fetch that single byte. It fetches a whole "cache line,"
@@ -47,22 +42,22 @@
  *     - If you use **`u8`** (1 byte), that single memory fetch pulls in the state for **64 different entities**.
  *     - If you use **`u32`** (4 bytes), that same fetch only gets the state for **16 entities**.
  *     - If you use **`f64`** (8 bytes), it only gets the state for **8 entities**.
- *     By using smaller types, you maximize the amount of useful data you get with every memory
- *     read, leading to fewer "cache misses" and a massive performance gain in tight loops.
+ *     By using smaller types, you maximize the amount of useful data you get with every memory read, leading to
+ *     fewer "cache misses" and a massive performance gain in tight loops.
  *
  * 2.  **SIMD (Single Instruction, Multiple Data)**: Modern CPUs can perform the same operation
- *     on multiple pieces of data at once. JavaScript engines like V8 are extremely good at
- *     "auto-vectorizing" simple loops over `TypedArray`s, converting them into these powerful
+ *     on multiple pieces of data at once. JavaScript engines like V8 could theoretically apply
+ *     "auto-vectorizing" for simple loops over `TypedArray`s, converting them into
  *     SIMD instructions. A loop that adds gravity to a `Velocity` component, for instance, can
- *     be executed on 4, 8, or even 16 entities simultaneously with a single instruction.
+ *     be executed on 4, 8, or 16 entities simultaneously with a single instruction.
  *
- * When defining a "hot" component schema, select the most appropriate `TypedArray` type:
+ * When defining a component schema, select the most appropriate `TypedArray` type:
  *
  * - **`f64` (Float64Array)**: Use for high-precision floating-point numbers, especially for core
  *   physics and transform data (`Position`, `Velocity`). This matches JavaScript's native `Number`
  *   type, preventing precision loss and conversion overhead.
  * - **`f32` (Float32Array)**: Good for less critical floats where memory is a concern (e.g., `MovementIntent`).
- *   Also the standard for GPU-bound data like vertex attributes.
+ *   Also, the standard for GPU-bound data like vertex attributes.
  * - **`u32` (Uint32Array)**: Range `0` to `4,294,967,295`. A great general-purpose unsigned integer for
  *   values that will never be negative, like entity IDs, scores, experience points, or timestamps.
  * - **`i32` (Int32Array)**: Range `-2,147,483,648` to `2,147,483,647`. A good general-purpose signed integer
@@ -77,11 +72,10 @@
  *   vector component (-1, 0, or 1).
  *
  */
-
-const { StringManager } = await import('./StringManager.js')
 const { loadAllComponents } = await import(`${PATH_MANAGERS}/ComponentManager/componentLoader.js`)
-const { SchemaCompiler } = await import('./SchemaCompiler.js')
+const { schemaCompiler } = await import('./SchemaCompiler.js')
 const { componentInterpreter } = await import('./ComponentInterpreter.js')
+const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
 
 /**
  * The maximum number of unique component types the engine can support.
@@ -95,119 +89,99 @@ const { componentInterpreter } = await import('./ComponentInterpreter.js')
  */
 export const MAX_COMPONENTS = 256
 /**
- * @property {Map<Function, number>} componentTypes - Maps component class (constructor) to a unique ID.
- * @property {Function[]} componentClasses - Array of component classes, indexed by their ID for quick lookups.
- * @property {Map<string, Function>} componentNameToClass - Maps a component's lowercase name to its class constructor.
  * @property {number} nextComponentTypeID - The next available ID to be assigned to a new component type.
  */
 export class ComponentManager {
 	constructor() {
-		this.componentTypes = new Map()
-		this.componentClasses = [] // Indexed by typeID
+		this.componentNames = [] // Indexed by typeID
 		this.componentInfo = [] // Indexed by typeID, stores parsed schema info
-		this.componentPrograms = [] // Indexed by typeID, stores compiled instruction lists
+		this.componentConstants = [] // Indexed by typeID
+		this.compiledDefaults = [] // Indexed by typeID
 		this.componentBitFlags = [] // Indexed by typeID, stores BigInt bit flags
 		this.componentNameToTypeID = new Map() // Maps lowercase name to typeID
-		this.componentNameToClass = new Map()
-		this.stringManager = new StringManager()
-		this.defaultInstances = [] // Indexed by typeID
 		this.nextComponentTypeID = 0
 		this.sharedGroupManager = null // self-reference after init
 		this.archetypeManager = null // self-reference after init
+		this.entityManager = null // self-reference after init
 		this._cachedComponentsObject = null
 		this.EMPTY_BITMASK = 0n
 	}
 
 	async init() {
 		const componentModules = await loadAllComponents()
+		this.entityManager = (await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)).entityManager
 		await this.registerComponents(componentModules)
 		this.sharedGroupManager = (
 			await import(`${PATH_MANAGERS}/SharedGroupManager/SharedGroupManager.js`)
 		).sharedGroupManager
 		this.archetypeManager = (await import(`${PATH_MANAGERS}/ArchetypeManager/ArchetypeManager.js`)).archetypeManager
 		componentInterpreter.init({
-			stringManager: this.stringManager,
-			componentInfo: this.componentInfo,
-			archetypeManager: this.archetypeManager,
+			componentManager: this,
 		})
 	}
 
 	async registerComponents(componentModules) {
 		// Register all the loaded component classes.
 		for (const { moduleName, module, category } of componentModules) {
-			const ComponentClass = module[moduleName]
-			if (ComponentClass && typeof ComponentClass === 'function') {
-				this.registerComponent(ComponentClass)
+			const componentSchema = module.default || module[moduleName]
+			//default exports are allowed, but ew
+			if (componentSchema && typeof componentSchema === 'object') {
+				this.registerComponent(moduleName, componentSchema)
 			} else {
-				console.error(`ComponentManager: Could not find component class export "${moduleName}" in its module.`)
+				console.error(`ComponentManager: Could not find component object export in module "${moduleName}".`)
 			}
 		}
 	}
 
 	/**
-	 * Registers a component class with the manager.
+	 * Registers a component schema object with the manager.
 	 * If already registered, it does nothing.
-	 * @param {Function} ComponentClass - The component class (constructor) to register.
+	 * @param {string} componentName - The name of the component.
+	 * @param {object} schema - The component's schema object.
 	 */
-	registerComponent(ComponentClass) {
-		if (!ComponentClass) {
-			console.error('ComponentManager: Cannot register an undefined or null component class.')
+	registerComponent(componentName, schema) {
+		if (!componentName || !schema) {
+			console.error('ComponentManager: Cannot register a component without a name or schema.')
 			return
 		}
 
 		if (this.nextComponentTypeID >= MAX_COMPONENTS) {
-			const errorMsg = `ComponentManager: Cannot register component ${ComponentClass.name}. Maximum component limit of ${MAX_COMPONENTS} reached.`
+			const errorMsg = `ComponentManager: Cannot register component ${componentName}. Maximum component limit of ${MAX_COMPONENTS} reached.`
 			console.error(errorMsg)
 			// This is a critical architectural limit. Throwing an error stops execution
 			// and makes it clear that MAX_COMPONENTS needs to be increased if this is intentional.
 			throw new Error(errorMsg)
 		}
 
-		if (!this.componentTypes.has(ComponentClass)) {
+		const lowerCaseName = componentName.toLowerCase()
+		if (!this.componentNameToTypeID.has(lowerCaseName)) {
 			const typeID = this.nextComponentTypeID++
-			this.componentTypes.set(ComponentClass, typeID)
-			this.componentClasses[typeID] = ComponentClass // Store class by ID
+			this.componentNames[typeID] = componentName
 			this.componentBitFlags[typeID] = 1n << BigInt(typeID) // Assign a unique bit flag
-			this._parseAndStoreSchema(ComponentClass, typeID)
+			this._parseAndStoreSchema(componentName, schema, typeID)
 
 			// Store by canonical (lowercase) name for case-insensitive lookup
-			this.componentNameToClass.set(ComponentClass.name.toLowerCase(), ComponentClass)
-			this.componentNameToTypeID.set(ComponentClass.name.toLowerCase(), typeID)
+			this.componentNameToTypeID.set(lowerCaseName, typeID)
 
 			// Invalidate the cache whenever a new component is registered.
 			this._cachedComponentsObject = null
-			//console.log(`Component registered: ${ComponentClass.name} with ID ${typeID}`)
 		}
 	}
 
 	/**
 	 * Parses a component's schema and stores the structured information for the ArchetypeManager.
-	 * @param {Function} ComponentClass - The component class.
+	 * @param {string} componentName - The name of the component.
+	 * @param {object} schema - The component's schema object.
 	 * @param {number} typeID - The component's type ID.
 	 * @private
 	 */
-	async _parseAndStoreSchema(ComponentClass, typeID) {
+	_parseAndStoreSchema(componentName, schema, typeID) {
 		// Instantiate the unified compiler. It handles both parsing and program generation.
-		const schemaCompiler = new SchemaCompiler()
 
-		// The compile method now returns both the memory blueprint and the interpreter program.
-		const { componentInfo, program } = schemaCompiler.compile(ComponentClass, typeID, this.stringManager)
+		const { componentInfo, constants, compiledDefaults } = schemaCompiler.compile(componentName, schema, typeID)
 		this.componentInfo[typeID] = componentInfo
-		this.componentPrograms[typeID] = program
-	}
-
-	/**
-	 * Processes a "designer-friendly" component data object into its "engine-friendly" raw format, in-place.
-	 * This is the primary entry point for the "write" path of the interpreter pattern.
-	 * @param {number} typeID - The component's type ID.
-	 * @param {object} data - The data object to process.
-	 */
-	processComponentData(typeID, data) {
-		const program = this.componentPrograms[typeID]
-		if (program) {
-			const componentName = this.getComponentNameByTypeID(typeID)
-			componentInterpreter.execute(program, data, componentName)
-		}
+		this.componentConstants[typeID] = constants
+		this.compiledDefaults[typeID] = Object.freeze(compiledDefaults)
 	}
 
 	/**
@@ -230,14 +204,13 @@ export class ComponentManager {
 		for (const componentName in componentsInput) {
 			if (!Object.prototype.hasOwnProperty.call(componentsInput, componentName)) continue
 
-			const ComponentClass = this.getComponentClassByName(componentName)
-			if (!ComponentClass) continue
-
-			const typeID = this.getComponentTypeID(ComponentClass)
+			const typeID = this.getComponentTypeIDByName(componentName)
+			if (typeID === undefined) continue
 			const info = this.componentInfo[typeID]
+			if (!info) continue
 
 			let rawData = { ...componentsInput[componentName] } // Work on a copy
-			this.processComponentData(typeID, rawData)
+			componentInterpreter.process(typeID, rawData)
 
 			const perEntityPart = { ...rawData }
 			const sharedPart = {}
@@ -269,29 +242,118 @@ export class ComponentManager {
 	}
 
 	/**
-	 * Gets the unique ID for a registered component class.
-	 * @param {Function} ComponentClass - The component class.
-	 * @returns {number | undefined} The ID, or undefined if not registered.
+	 * Reconstructs a "designer-friendly" component data object from the raw,
+	 * engine-friendly data stored in a chunk. This is the "read" path replacement
+	 * for the old ComponentInterpreter.
+	 * @param {number} entityId The ID of the entity to read from.
+	 * @param {number} typeID The component's type ID.
+	 * @returns {object | undefined} The reconstructed component data, or undefined if not found.
 	 */
-	getComponentTypeID(ComponentClass) {
-		const typeID = this.componentTypes.get(ComponentClass)
-		if (typeID === undefined) {
-			const componentName = ComponentClass ? ComponentClass.name : 'undefined'
-			console.warn(
-				`ComponentManager: Could not get type ID for component "${componentName}". It might not be registered.`
-			)
+	reconstructComponentData(entityId, typeID) {
+		const archetypeId = this.entityManager.getArchetypeForEntity(entityId)
+		if (archetypeId === undefined || !this.hasComponent(archetypeId, typeID)) {
+			return undefined
 		}
-		return typeID
+
+		const location = this.archetypeManager.archetypeEntityMaps[archetypeId]?.get(entityId)
+		if (!location) return undefined
+
+		const { chunk, indexInChunk } = location
+		const componentData = {}
+		const info = this.componentInfo[typeID]
+		const componentArrays = chunk.componentArrays[typeID]
+
+		// Loop over all representations, not just original keys, to handle composite types like 'rpn'.
+		for (const propName in info.representations) {
+			const rep = info.representations[propName]
+			if (!rep || rep.shared) continue
+
+			switch (rep.type) {
+				case 'rpn':
+					// This is a composite type. Its underlying flat_arrays will be handled
+					// individually by this loop. Do nothing for the parent property itself.
+					break
+				case 'flat_array': {
+					const sourceArray = []
+					const len = componentArrays[rep.lengthProperty][indexInChunk]
+					const itemRep = rep.itemRepresentation
+					for (let i = 0; i < len; i++) {
+						const rawValue = componentArrays[`${propName}${i}`][indexInChunk]
+						if (itemRep.type === 'string') {
+							sourceArray.push(stringInterningTable.get(rawValue))
+						} else if (itemRep.type === 'enum') {
+							sourceArray.push(itemRep.valueMap[rawValue])
+						} else {
+							sourceArray.push(rawValue)
+						}
+					}
+					componentData[propName] = sourceArray
+					break
+				}
+				case 'enum':
+					componentData[propName] = rep.valueMap[componentArrays[propName][indexInChunk]]
+					break
+				case 'bitmask':
+					const rawValue = componentArrays[propName][indexInChunk]
+					const flags = []
+					for (const flagName in rep.flagMap) {
+						if ((rawValue & rep.flagMap[flagName]) !== 0) flags.push(flagName)
+					}
+					componentData[propName] = flags
+					break
+				case 'string':
+					componentData[propName] = stringInterningTable.get(componentArrays[propName][indexInChunk])
+					break
+				default: // Primitives
+					if (componentArrays && componentArrays[propName]) {
+						componentData[propName] = componentArrays[propName][indexInChunk]
+					}
+					break
+			}
+		}
+
+		// Add the groupId if the component has shared properties
+		if (info.sharedProperties.length > 0 && componentArrays?.groupId) {
+			componentData.groupId = componentArrays.groupId[indexInChunk]
+		}
+
+		return componentData
 	}
 
 	/**
-	 * Gets the unique BigInt bit flag for a registered component class.
-	 * @param {Function} ComponentClass - The component class.
-	 * @returns {bigint | undefined} The bit flag, or undefined if not registered.
+	 * Reconstructs a "designer-friendly" shared data object from its raw,
+	 * engine-friendly format. This is used when retrieving component data that
+	 * includes shared properties.
+	 * @param {number} typeID The component's type ID.
+	 * @param {object} rawSharedData The raw shared data object (e.g., `{ value: 13 }`).
+	 * @returns {object} The reconstructed shared data (e.g., `{ value: 'common' }`).
 	 */
-	getComponentBitFlag(ComponentClass) {
-		const typeID = this.componentTypes.get(ComponentClass)
-		return typeID !== undefined ? this.componentBitFlags[typeID] : undefined
+	reconstructSharedData(typeID, rawSharedData) {
+		const reconstructedData = {}
+		const info = this.componentInfo[typeID]
+
+		for (const propName in rawSharedData) {
+			const rep = info.representations[propName]
+			const rawValue = rawSharedData[propName]
+
+			if (!rep) {
+				reconstructedData[propName] = rawValue
+				continue
+			}
+
+			switch (rep.type) {
+				case 'enum':
+					reconstructedData[propName] = rep.valueMap[rawValue]
+					break
+				case 'string':
+					reconstructedData[propName] = stringInterningTable.get(rawValue)
+					break
+				default: // Primitives
+					reconstructedData[propName] = rawValue
+					break
+			}
+		}
+		return reconstructedData
 	}
 
 	/**
@@ -301,17 +363,7 @@ export class ComponentManager {
 	 * @returns {string | undefined} The component's name, or undefined if ID is invalid.
 	 */
 	getComponentNameByTypeID(typeID) {
-		const ComponentClass = this.componentClasses[typeID]
-		return ComponentClass ? ComponentClass.name : undefined
-	}
-
-	/**
-	 * Gets the component class for a given ID.
-	 * @param {number} typeID - The component type ID.
-	 * @returns {Function | undefined} The component class, or undefined if ID is invalid.
-	 */
-	getComponentClassByTypeID(typeID) {
-		return this.componentClasses[typeID]
+		return this.componentNames[typeID]
 	}
 
 	/**
@@ -325,80 +377,87 @@ export class ComponentManager {
 	}
 
 	/**
-	 * Gets the component class for a given name.
-	 * Do not use it for performance - critical parts of a game.
-	 * @param {string} name - The name of the component class.
-	 * @returns {Function | undefined} The component class constructor, or undefined if not found.
-	 */
-	getComponentClassByName(name) {
-		return this.componentNameToClass.get(name.toLowerCase())
-	}
-
-	/**
-	 * Retrieves an object containing all registered component classes,
-	 * keyed by their class names.
-	 * @returns {Object.<string, Function>} An object mapping class names to ComponentClasses.
+	 * Retrieves an object containing all registered component constants,
+	 * keyed by their names. This is for easy access in systems, e.g., `const { Position, Velocity } = componentManager.getComponents()`
+	 * @returns {Object.<string, object>} An object mapping component names to their constants object.
 	 */
 	getComponents() {
 		if (this._cachedComponentsObject) {
 			return this._cachedComponentsObject
 		}
 
-		const components = {}
-		for (const [ComponentClass] of this.componentTypes.entries()) {
-			if (!ComponentClass || !ComponentClass.name) {
-				console.warn(
-					`ComponentManager: An invalid component class was found during getComponents(). It has been skipped.`
-				)
-				continue
-			}
-			components[ComponentClass.name] = ComponentClass
+		this._cachedComponentsObject = {}
+		for (let i = 0; i < this.nextComponentTypeID; i++) {
+			const name = this.componentNames[i]
+			this._cachedComponentsObject[name] = this.componentConstants[i]
 		}
-		this._cachedComponentsObject = components
+
 		return this._cachedComponentsObject
 	}
 
 	/**
-	 * Retrieves the static constant map (for enums or bitmasks) for a specific component property.
-	 * This is a developer-friendly helper for system initialization, providing a clean way to
-	 * cache constants without exposing the internal structure of `componentInfo`.
-	 * @param {Function} ComponentClass - The component class to get constants from.
-	 * @param {string} propertyName - The name of the property in the component's schema (e.g., 'collisionFlags').
-	 * @returns {object | undefined} The read-only constant map (e.g., `{ LEFT: 1, RIGHT: 2, ... }`), or undefined if not found.
+	 * Retrieves an object mapping all registered component names to their numeric type IDs.
+	 * This is ideal for destructuring in a system's constructor for clean, cached access.
+	 * e.g., `const { Position, Velocity } = this.componentManager.getTypeIDs();`
+	 * @returns {Object.<string, number>} An object mapping component names to their type IDs.
 	 */
-	getConstantsFor(ComponentClass, propertyName) {
-		const typeID = this.getComponentTypeID(ComponentClass)
-		if (typeID === undefined) return undefined
-
-		const info = this.componentInfo[typeID]
-		const rep = info?.representations?.[propertyName]
-
-		if (rep?.type === 'enum') {
-			return rep.enumMap
-		} else if (rep?.type === 'bitmask') {
-			return rep.flagMap
+	getTypeIDs() {
+		const idMap = {}
+		for (let i = 0; i < this.nextComponentTypeID; i++) {
+			const name = this.componentNames[i]
+			if (name) {
+				idMap[name] = i
+			}
 		}
-
-		console.warn(`ComponentManager: Could not find constants for "${ComponentClass.name}.${propertyName}".`)
-		return undefined
+		return idMap
 	}
 
 	/**
-	 * Gets a cached, default instance of a component class.
+	 * Retrieves the static constant map (for enums or bitmasks) for a specific component.
+	 * @param {string|number} componentIdentifier - The component name or typeID.
+	 * @returns {object | undefined} The read-only constant map (e.g., `{ STATE: { IDLE: 0, ... } }`), or undefined if not found.
+	 */
+	getConstantsFor(componentIdentifier) {
+		const typeID =
+			typeof componentIdentifier === 'string' ? this.getComponentTypeIDByName(componentIdentifier) : componentIdentifier
+		if (typeID === undefined) return undefined
+		return this.componentConstants[typeID]
+	}
+
+	/**
+	 * Retrieves the static constant map (for enums or bitmasks) for a specific property of a component.
+	 * This is a developer-friendly helper for system initialization.
+	 * @param {string|number} componentIdentifier - The name or typeID of the component.
+	 * @param {string} propertyName - The name of the property in the component's schema (e.g., 'collisionFlags').
+	 * @returns {object | undefined} The read-only constant map (e.g., `{ LEFT: 1, RIGHT: 2, ... }`), or undefined if not found.
+	 */
+	getConstantsForProperty(componentIdentifier, propertyName) {
+		const componentConstants = this.getConstantsFor(componentIdentifier)
+		if (!componentConstants) {
+			console.warn(`ComponentManager: Could not find constants for component "${componentIdentifier}".`)
+			return undefined
+		}
+
+		const propertyConstants = componentConstants[propertyName.toUpperCase()]
+		if (!propertyConstants) {
+			console.warn(
+				`ComponentManager: Could not find constants for property "${propertyName}" on component "${componentIdentifier}".`
+			)
+			return undefined
+		}
+
+		return propertyConstants
+	}
+
+	/**
+	 * Gets a cached, pre-compiled object of a component's default values.
 	 * This is used to get default values for "Hot" components without creating a new object every time.
 	 * The instance is created once per component type and cached globally.
 	 * @param {number} typeID - The component type ID.
-	 * @returns {object|undefined} The cached default instance.
+	 * @returns {object|undefined} The cached object of compiled default values.
 	 */
-	getDefaultInstance(typeID) {
-		if (this.defaultInstances[typeID]) {
-			return this.defaultInstances[typeID]
-		}
-
-		const ComponentClass = this.getComponentClassByTypeID(typeID)
-		const instance = new ComponentClass()
-		this.defaultInstances[typeID] = instance
-		return instance
+	getCompiledDefaults(typeID) {
+		return this.compiledDefaults[typeID]
 	}
 
 	/**
@@ -410,7 +469,7 @@ export class ComponentManager {
 		const names = []
 		for (let i = 0; i < this.nextComponentTypeID; i++) {
 			if ((mask & this.componentBitFlags[i]) !== 0n) {
-				names.push(this.componentClasses[i].name)
+				names.push(this.componentNames[i])
 			}
 		}
 		return names

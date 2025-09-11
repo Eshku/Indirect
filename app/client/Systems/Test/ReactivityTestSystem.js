@@ -1,8 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager } = theManager.getManagers()
 
-const { ReactivityTarget, ReactivityComponent, ComponentA, ComponentB } = componentManager.getComponents()
-
 /**
  * A system to test the engine's reactivity pipeline, including direct component
  * modifications and structural changes (adding/removing components).
@@ -14,6 +12,8 @@ export class ReactivityTestSystem {
 			runDirectModificationTest: true,
 			runStructuralChangeTest: false,
 		}
+
+		const { ReactivityTarget, ReactivityComponent, ComponentA, ComponentB } = componentManager.getTypeIDs()
 
 		// --- Queries ---
 		// Query for entities to modify. We need ReactivityComponent to modify its value.
@@ -28,10 +28,10 @@ export class ReactivityTestSystem {
 		})
 
 		// --- Component Type IDs ---
-		this.reactivityComponentTypeID = componentManager.getComponentTypeID(ReactivityComponent)
-		this.reactivityTargetTypeID = componentManager.getComponentTypeID(ReactivityTarget)
-		this.componentATypeID = componentManager.getComponentTypeID(ComponentA)
-		this.componentBTypeID = componentManager.getComponentTypeID(ComponentB)
+		this.reactivityComponentTypeID = ReactivityComponent
+		this.reactivityTargetTypeID = ReactivityTarget
+		this.componentATypeID = ComponentA
+		this.componentBTypeID = ComponentB
 
 		// --- Test State ---
 		this.totalEntities = 10
@@ -41,13 +41,9 @@ export class ReactivityTestSystem {
 	}
 
 	init() {
-		const creationMap = new Map([
-			[this.reactivityTargetTypeID, {}],
-			[this.reactivityComponentTypeID, { value: 0 }],
-		])
-
 		for (let i = 0; i < this.totalEntities; i++) {
-			this.commands.createEntity(creationMap)
+			// Use the new, direct SoA-based creation method.
+			this.commands.createEntity({ ReactivityTarget: {}, ReactivityComponent: { value: 0 } })
 		}
 		//console.log(`ReactivityTestSystem: Spawned ${this.totalEntities} test entities.`)
 	}
@@ -127,7 +123,7 @@ export class ReactivityTestSystem {
 				`%cReactivityTestSystem (Structural): Adding ComponentA to entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
 				'color: cyan'
 			)
-			this.commands.addComponent(this.structuralChangeEntityId, this.componentATypeID)
+			this.commands.addComponent(this.structuralChangeEntityId, this.componentATypeID, {})
 		} else if (currentTick === 240) {
 			console.log(
 				`%cReactivityTestSystem (Structural): Removing ComponentA from entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,

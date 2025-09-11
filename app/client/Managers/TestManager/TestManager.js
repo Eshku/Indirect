@@ -2,7 +2,7 @@
 import { AssertionError } from './TestErrors.js'
 
 /**
- * @fileoverview Manages the registration, execution, and reporting of test suites.
+ * Manages the registration, execution, and reporting of test suites.
  * This manager works in conjunction with `TestAPI.js` to provide a BDD-style testing framework.
  * It collects test functions defined via `describe` and `it`, executes them, and logs the results
  * to the console, including detailed failure information.

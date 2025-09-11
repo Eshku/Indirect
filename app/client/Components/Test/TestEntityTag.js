@@ -1,3 +1,4 @@
-export class TestEntityTag {
-    static schema = {}; // A tag component
-}
+/**
+ * A tag component used for testing purposes.
+ */
+export const TestEntityTag = {}

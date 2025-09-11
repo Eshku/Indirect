@@ -1,5 +1,5 @@
 /**
- * @fileoverview A central registry for all game systems.
+ * central registry for all game systems.
  * It handles registration of system classes, and the instantiation, storage, and retrieval of their instances.
  */
 

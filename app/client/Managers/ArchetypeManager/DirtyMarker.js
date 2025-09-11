@@ -1,5 +1,5 @@
 /**
- * @fileoverview A high-performance, reusable object for marking components dirty.
+ * Reusable object for marking components dirty.
  * This is designed to be used within a system's tight loop to reduce function call
  * overhead and redundant checks associated with dirtying components.
  */

@@ -1,5 +1,5 @@
 /**
- * A "hot" component that stores an entity's desired movement direction.
+ * A component that stores an entity's desired movement direction as a normalized vector.
  *
  * @note **Design Choice: Normalized Vector**
  * The `desiredX` and `desiredY` properties are intended to store a **normalized 2D vector**.
@@ -16,13 +16,19 @@
  * this normalized vector by a `Speed` component without needing to perform costly
  * normalization calculations for every moving entity, every frame.
  */
-export class MovementIntent {
-	static schema = {
-		desiredX: 'f32',
-		desiredY: 'f32',
-	}
-	constructor({ desiredX = 0, desiredY = 0 } = {}) {
-		this.desiredX = desiredX
-		this.desiredY = desiredY
-	}
+export const MovementIntent = {
+	/**
+	 * The desired x-component of the movement vector (normalized).
+	 */
+	desiredX: {
+		type: 'f32',
+		default: 0,
+	},
+	/**
+	 * The desired y-component of the movement vector (normalized).
+	 */
+	desiredY: {
+		type: 'f32',
+		default: 0,
+	},
 }

@@ -1,12 +1,14 @@
 /**
- * @fileoverview Tests the 'rpn' (Reverse Polish Notation) schema type for formulas.
+ * component for testing the 'rpn' (Reverse Polish Notation) schema type.
  */
-export class RpnComponent {
-	static schema = {
-		formulas: { type: 'rpn', streamCapacity: 50, instanceCapacity: 5 },
-	}
-
-	constructor({ formulas = [] } = {}) {
-		this.formulas = formulas
-	}
+export const RpnComponent = {
+	/**
+	 * A property that stores RPN formulas.
+	 */
+	formulas: {
+		type: 'rpn',
+		streamCapacity: 50,
+		instanceCapacity: 5,
+		default: [], // Default to no formulas
+	},
 }

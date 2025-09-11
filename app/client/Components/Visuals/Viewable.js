@@ -7,22 +7,13 @@
 //! for serialization \ desir would need
 //! store asset name too or map refs to names
 //! idk, gonna figure it out at some point.
-export class Viewable {
+export const Viewable = {
 	/**
-	 * The schema defines the data stored in the archetype's TypedArrays.
-	 * `spriteRef` is a `u32` integer that acts as a handle to the actual
-	 * PIXI.Sprite object in the AssetManager.
+	 * The reference (handle) to the actual PIXI.DisplayObject in the AssetManager's pool.
+	 * A value of 0 is considered a null reference.
 	 */
-	static schema = {
-		spriteRef: 'u32',
-	}
-
-	/**
-	 * The constructor defines default values. It is NOT what is stored per-entity.
-	 * @param {object} [data={}]
-	 * @param {number} [data.spriteRef=0] - The reference to the sprite. 0 is a null reference.
-	 */
-	constructor({ spriteRef = 0 } = {}) {
-		this.spriteRef = spriteRef
-	}
+	spriteRef: {
+		type: 'u32',
+		default: 0,
+	},
 }

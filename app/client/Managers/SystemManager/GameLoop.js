@@ -1,5 +1,5 @@
 /**
- * @fileoverview Manages the core game loop, including fixed and variable timesteps.
+ * Manages the core game loop, including fixed and variable timesteps.
  */
 
 /**

@@ -1,17 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, archetypeManager } = theManager.getManagers()
 
-const {
-	Position,
-	Velocity,
-	IsGrounded,
-	CollisionFlags,
-	PlatformTag,
-	Collider,
-	LandedEvent,
-	LeftSurfaceEvent,
-} = componentManager.getComponents()
-
 /**
  * A custom, AABB-based collision system that handles interactions between characters and platforms.
  */
@@ -19,17 +8,27 @@ export class CollisionSystem {
 	constructor() {
 		this.allowInternalConflicts = true
 		this.commands = null // Injected by SystemManager
+		
+		const {
+			Position,
+			Velocity,
+			IsGrounded,
+			CollisionFlags,
+			Collider,
+			PlatformTag,
+			LandedEvent,
+			LeftSurfaceEvent,
+		} = componentManager.getTypeIDs()
 
-		this.positionTypeID = componentManager.getComponentTypeID(Position)
-		this.velocityTypeID = componentManager.getComponentTypeID(Velocity)
-		this.isGroundedTypeID = componentManager.getComponentTypeID(IsGrounded)
-		this.collisionFlagsTypeID = componentManager.getComponentTypeID(CollisionFlags)
-		this.colliderTypeID = componentManager.getComponentTypeID(Collider)
-		this.landedEventTypeID = componentManager.getComponentTypeID(LandedEvent)
-		this.leftSurfaceEventTypeID = componentManager.getComponentTypeID(LeftSurfaceEvent)
+		this.positionTypeID = Position
+		this.velocityTypeID = Velocity
+		this.isGroundedTypeID = IsGrounded
+		this.collisionFlagsTypeID = CollisionFlags
+		this.colliderTypeID = Collider
+		this.landedEventTypeID = LandedEvent
+		this.leftSurfaceEventTypeID = LeftSurfaceEvent
 
-		this.landedEventArchetypeID = archetypeManager.getArchetype([this.landedEventTypeID])
-		this.leftSurfaceEventArchetypeID = archetypeManager.getArchetype([this.leftSurfaceEventTypeID])
+		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(CollisionFlags, 'collisionFlags')
 
 		this.characterQuery = queryManager.getQuery({
 			with: [Position, Velocity, IsGrounded, CollisionFlags, Collider],
@@ -79,6 +78,10 @@ export class CollisionSystem {
 				let bestVerticalPlatform = null
 				let isOverlapping = false
 
+				// --- Grounded Check Probe ---
+				const groundProbeDistance = 1; // Small distance to check for ground below the character.
+				let isSupportedByPlatform = false;
+
 				for (const platformChunk of this.allPlatformsQuery.iter()) {
 					const platformPosArrays = platformChunk.componentArrays[this.positionTypeID]
 					const platformColliderArrays = platformChunk.componentArrays[this.colliderTypeID]
@@ -124,13 +127,24 @@ export class CollisionSystem {
 								}
 							}
 						}
+
+						// Perform the ground probe check regardless of overlap
+						const probeTop = originalCharY - charHalfH;
+						const probeBottom = probeTop - groundProbeDistance;
+						const platformTop = platCenterY + platHalfH;
+						const platformBottom = platCenterY - platHalfH;
+
+						if (probeBottom <= platformTop && probeTop >= platformBottom && Math.abs(dx) < combinedHalfWidths) {
+							// The character's feet are within a small distance of a platform surface.
+							isSupportedByPlatform = true;
+						}
 					}
 				}
 
 				charPosX[charIndexInChunk] = finalTargetX
 				charPosY[charIndexInChunk] = finalTargetY
 
-				let collisionDirectionFlagsThisFrame = CollisionFlags.COLLISIONFLAGS.NONE
+				let collisionDirectionFlagsThisFrame = this.COLLISION_FLAGS.NONE
 				let isGroundedThisFrame = false
 
 				if (charPosX[charIndexInChunk] !== originalCharX || charPosY[charIndexInChunk] !== originalCharY) {
@@ -140,22 +154,27 @@ export class CollisionSystem {
 				if (bestHorizontalPlatform) {
 					charVelX[charIndexInChunk] = 0
 					const dx = originalCharX - bestHorizontalPlatform.centerX
-					collisionDirectionFlagsThisFrame |= dx > 0 ? CollisionFlags.COLLISIONFLAGS.LEFT : CollisionFlags.COLLISIONFLAGS.RIGHT
+					collisionDirectionFlagsThisFrame |= dx > 0 ? this.COLLISION_FLAGS.RIGHT : this.COLLISION_FLAGS.LEFT
 				}
 				if (bestVerticalPlatform) {
+
 					charVelY[charIndexInChunk] = 0
 					const dy = originalCharY - bestVerticalPlatform.centerY
+
 					// If dy > 0, character is above the platform, so collision is on the character's bottom.
 					// This is also our condition for being "grounded".
 					if (dy > 0) {
+
 						isGroundedThisFrame = true
-						collisionDirectionFlagsThisFrame |= CollisionFlags.COLLISIONFLAGS.BOTTOM
+
+						collisionDirectionFlagsThisFrame |= this.COLLISION_FLAGS.BOTTOM
 					} else {
-						collisionDirectionFlagsThisFrame |= CollisionFlags.COLLISIONFLAGS.TOP
+						collisionDirectionFlagsThisFrame |= this.COLLISION_FLAGS.TOP
 					}
 				}
 
 				if (bestHorizontalPlatform || bestVerticalPlatform) {
+
 					velocityMarker.mark(charIndexInChunk)
 				}
 
@@ -165,14 +184,14 @@ export class CollisionSystem {
 				// A jump was initiated in the same frame.
 				const justJumped = wasGrounded && charCurrentVelY > 0;
 
-				if (isGroundedThisFrame && !justJumped) {
+				if ((isGroundedThisFrame || isSupportedByPlatform) && !justJumped && charCurrentVelY <= 0) {
 					// Character is on the ground and didn't just jump.
 					isGroundedNow = true
+
 					if (!wasGrounded) {
 						// This is a landing event.
-						const entityId = charChunk.entities[charIndexInChunk];
-						const componentMap = new Map([[this.landedEventTypeID, { entityId }]]);
-						this.commands.createEntityInArchetype(this.landedEventArchetypeID, componentMap);
+						//console.log(`Landing event for entity ${charChunk.entities[charIndexInChunk]} frame ${currentTick}`)
+						this.commands.createEntity({ [this.landedEventTypeID]: { entityId: charChunk.entities[charIndexInChunk] } })
 					}
 				} else {
 					// Character is airborne for one of three reasons:
@@ -180,11 +199,11 @@ export class CollisionSystem {
 					// 2. They were in the air and are still in the air (!wasGrounded && !isGroundedThisFrame).
 					// 3. They were on the ground and now they are not (e.g., walked off a ledge).
 					isGroundedNow = false
-					if (wasGrounded && !justJumped && !isOverlapping) {
+					if (wasGrounded && !justJumped) {
+
 						// This is the "walked off a ledge" case.
-						const entityId = charChunk.entities[charIndexInChunk];
-						const componentMap = new Map([[this.leftSurfaceEventTypeID, { entityId }]]);
-						this.commands.createEntityInArchetype(this.leftSurfaceEventArchetypeID, componentMap);
+						//console.log(`Left surface event for entity ${charChunk.entities[charIndexInChunk]} frame ${currentTick}`)
+						this.commands.createEntity({ [this.leftSurfaceEventTypeID]: { entityId: charChunk.entities[charIndexInChunk] } })
 					}
 				}
 

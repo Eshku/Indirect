@@ -1,5 +1,5 @@
 /**
- * @fileoverview Reads and deserializes commands from a RawCommandBuffer.
+ * Reads and deserializes commands from a RawCommandBuffer.
  */
 
 export class CommandBufferReader {
@@ -62,7 +62,7 @@ export class CommandBufferReader {
 	}
 
 	readF32() {
-		const value = this.view.getFloat32(this.offset, true);
+		const value = this.view.getFloat32(this.offset, true)
 		//console.log(`Reader: readF32 at ${this.offset} value ${value}`)
 		this.offset += 4
 		return value
@@ -76,46 +76,15 @@ export class CommandBufferReader {
 	}
 
 	/**
-	 * Reads and fully deserializes a component's data from the current offset.
-	 * @param {number} typeID The component's type ID.
-	 * @returns {object} The deserialized component data.
+	 * Reads a block of bytes from the buffer into a new ArrayBuffer.
+	 * @param {number} size - The number of bytes to read.
+	 * @returns {ArrayBuffer} A new ArrayBuffer containing the data.
 	 */
-	readComponentData(typeID) {
-		const info = this.componentManager.componentInfo[typeID];
-		if (!info) throw new Error(`Component info not found for typeID: ${typeID}`);
-
-		const data = {};
-		for (const propKey of info.propertyKeys) {
-			const propType = info.properties[propKey].type;
-			switch (propType) {
-				case 'f64': data[propKey] = this.readF64(); break;
-				case 'f32': data[propKey] = this.readF32(); break;
-				case 'i32': data[propKey] = this.readI32(); break;
-				case 'u32': data[propKey] = this.readU32(); break;
-				case 'i16': data[propKey] = this.readI16(); break;
-				case 'u16': data[propKey] = this.readU16(); break;
-				case 'i8': data[propKey] = this.readI8(); break;
-				case 'u8': data[propKey] = this.readU8(); break;
-				default:
-					throw new Error(`Unknown property type for deserialization: ${propType}`);
-			}
-		}
-		return data;
-	}
-
-	readComponentIdMap() {
-		const map = new Map()
-		const size = this.readU16()
-		//console.log(`Reader: Map size: ${size}`);
-		for (let i = 0; i < size; i++) {
-			const typeID = this.readU16();
-			this.readU16(); // Read and discard the byteSize of the data block.
-
-			// Directly deserialize the component data into a plain object.
-			const data = this.readComponentData(typeID);
-			map.set(typeID, data);
-		}
-
-		return map
+	readBuffer(size) {
+		// Create a slice (a view) of the underlying buffer without copying.
+		const slice = this.buffer.slice(this.offset, this.offset + size)
+		this.offset += size
+		// Return a copy so the original buffer can be reused without affecting the payload.
+		return slice
 	}
 }

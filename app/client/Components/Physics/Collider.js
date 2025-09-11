@@ -1,20 +1,20 @@
 /**
- * Defines a simple Axis-Aligned Bounding Box (AABB) for an entity.
- * Used for custom, geometry-based collision checks (e.g., with platforms),
- * separate from the main physics engine.
+ * Defines a simple Axis-Aligned Bounding Box (AABB) for an entity,
+ * used for custom, geometry-based collision checks.
  */
-export class Collider {
-	static schema = {
-		width: 'f32',
-		height: 'f32',
-	}
+export const Collider = {
 	/**
-	 * @param {object} data
-	 * @param {number} [data.width=32] - The width of the collider.
-	 * @param {number} [data.height=64] - The height of the collider. Used to determine the feet position for vertical collisions.
+	 * The width of the collider.
 	 */
-	constructor({ width = 32, height = 64 } = {}) {
-		this.width = width
-		this.height = height
-	}
+	width: {
+		type: 'f32',
+		default: 32,
+	},
+	/**
+	 * The height of the collider.
+	 */
+	height: {
+		type: 'f32',
+		default: 64,
+	},
 }

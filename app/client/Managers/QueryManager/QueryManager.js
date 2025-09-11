@@ -2,7 +2,7 @@ const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`)
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 
 /**
- * @fileoverview Manages the creation and lifecycle of queries for the ECS.
+ * Manages the creation and lifecycle of queries for the ECS.
  * This manager implements a robust caching and reference-counting system for queries.
  * When a query is requested, a canonical key is generated from its configuration.
  * If a query with the same key already exists, the cached instance is returned and its
@@ -57,18 +57,16 @@ class QueryManager {
 			react: reactComponents = [],
 			constants: constantsDef = {},
 		} = options
-
-		const getComponentId = componentClass => this.componentManager.getComponentTypeID(componentClass)
-
+		
 		// Sort component IDs to ensure the key is canonical.
-		const withIdsString = withComponents.map(getComponentId).sort().join(',')
-		const withoutIdsString = withoutComponents.map(getComponentId).sort().join(',')
-		const anyIdsString = anyComponents.map(getComponentId).sort().join(',')
-		const reactIdsString = reactComponents.map(getComponentId).sort().join(',')
+		const withIdsString = [...withComponents].sort((a, b) => a - b).join(',')
+		const withoutIdsString = [...withoutComponents].sort((a, b) => a - b).join(',')
+		const anyIdsString = [...anyComponents].sort((a, b) => a - b).join(',')
+		const reactIdsString = [...reactComponents].sort((a, b) => a - b).join(',')
 
 		// Sort constant keys for canonical key generation.
 		const constantKeys = Object.keys(constantsDef).sort()
-		const constantsString = constantKeys.map(propName => `${propName}:${getComponentId(constantsDef[propName])}`).join(',')
+		const constantsString = constantKeys.map(propName => `${propName}:${constantsDef[propName]}`).join(',')
 
 		return `w:${withIdsString}|wo:${withoutIdsString}|a:${anyIdsString}|r:${reactIdsString}|c:${constantsString}`
 	}
@@ -76,13 +74,13 @@ class QueryManager {
 	/**
 	 * Retrieves a new or cached query based on the provided configuration.
 	 * @param {object} options - The query configuration object.
-	 * @param {Function[]} [options.with=[]] - Components that must be present.
-	 * @param {Function[]} [options.without=[]] - Components that must NOT be present.
-	 * @param {Function[]} [options.any=[]] - Components where at least one must be present.
-	 * @param {Function[]} [options.react=[]] - Components that, if changed, will make the entity match the query.
-	 * @param {Object.<string, Function>} [options.constants={}] - A map to declaratively request
+	 * @param {number[]} [options.with=[]] - Component type IDs that must be present.
+	 * @param {number[]} [options.without=[]] - Component type IDs that must NOT be present.
+	 * @param {number[]} [options.any=[]] - Component type IDs where at least one must be present.
+	 * @param {number[]} [options.react=[]] - Component type IDs that, if changed, will make the entity match the query.
+	 * @param {Object.<string, number>} [options.constants={}] - A map to declaratively request
 	 *   enum/bitmask constants for optimal cache-locality. The key is the property name from the
-	 *   component's schema, and the value is the component class itself. The resolved constant
+	 *   component's schema, and the value is the component's type ID. The resolved constant
 	 *   maps will be available on `chunk.constants` in the system loop.
 	 *
 	 * @example
@@ -90,9 +88,9 @@ class QueryManager {
 	 *
 	 * // In MovementSystem, declare the constant:
 	 * this.query = queryManager.getQuery({
-	 *     with: [CollisionFlags],
+	 *     with: [collisionFlagsTypeId],
 	 *     constants: {
-	 *         collisionFlags: CollisionFlags
+	 *         collisionFlags: collisionFlagsTypeId
 	 *     }
 	 * });
 	 *
@@ -101,11 +99,6 @@ class QueryManager {
 	 *     const { collisionFlags } = chunk.constants; // { LEFT: 1, RIGHT: 2, ... }
 	 *     // ... use collisionFlags for checks
 	 * }
-	 *
-	 * // --- FUTURE NOTE on Low-Level Systems ---
-	 * // For maximum performance and to eliminate class imports, a future version of this API
-	 * // may support using componentTypeIDs directly, e.g., `{ collisionFlags: 12 }`.
-	 * // This is not yet implemented.
 	 * @param {boolean} [options.mutable=false] - If true, guarantees a unique, non-cached query instance.
 	 * @returns {Query} A new or cached Query instance.
 	 */
@@ -166,8 +159,7 @@ class QueryManager {
 		const parsedRequest = []
 		if (constantsDef) {
 			for (const propertyName in constantsDef) {
-				const ComponentClass = constantsDef[propertyName]
-				const componentTypeID = this.componentManager.getComponentTypeID(ComponentClass)
+				const componentTypeID = constantsDef[propertyName]
 				if (componentTypeID !== undefined) {
 					parsedRequest.push({ localName: propertyName, componentTypeID, propertyName })
 				}

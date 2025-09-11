@@ -4,23 +4,18 @@ const { ECS } = await import(`${PATH_CORE}/ECS/ECS.js`)
 const { testManager } = await import(`${PATH_CLIENT}/Managers/TestManager/TestManager.js`) // Import testManager
 const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManager/TestAPI.js`)
 
-const { Position, Rarity, Stack } = componentManager.getComponents()
-
-const { componentInterpreter } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
-
 /**
  * A system to test the "Shared Components as Indirect References" architecture.
  * It verifies that we can query for components with shared data and correctly
  * access both their per-entity and shared properties.
  */
 export class SharedComponentTestSystem {
-	constructor() {
-		// --- Component Type IDs ---
-		this.rarityTypeID = componentManager.getComponentTypeID(Rarity)
-		this.stackTypeID = componentManager.getComponentTypeID(Stack)
+		constructor() {
+		const { Rarity, Stack } = componentManager.getTypeIDs()
 
-		// --- Manager References ---
-		this.componentManager = componentManager // Ensure componentManager is accessible for stringManager
+		// --- Component Type IDs ---
+		this.rarityTypeID = Rarity
+		this.stackTypeID = Stack
 
 		// --- Test State ---
 		this.testEntityIds = [] // To store IDs of all created test entities for comprehensive verification
@@ -117,10 +112,10 @@ export class SharedComponentTestSystem {
 	_runVerificationTests() {
 		describe('Shared Component System', () => {
 			// Helper to get the groupId for an entity.
-			const getGroupId = entityId => {
-				const rarity = ECS.getComponent(entityId, Rarity)
-				if (rarity && rarity.hasOwnProperty('groupId')) return rarity.groupId
-				const stack = ECS.getComponent(entityId, Stack)
+			const getGroupId = (entityId) => {
+				const rarity = ECS.getComponent(entityId, 'Rarity')
+				if (rarity && rarity.hasOwnProperty('groupId')) return rarity.groupId;
+				const stack = ECS.getComponent(entityId, 'Stack')
 				if (stack && stack.hasOwnProperty('groupId')) return stack.groupId
 				return 0 // Default group for entities with no shared components.
 			}
@@ -155,28 +150,25 @@ export class SharedComponentTestSystem {
 
 			it('should correctly merge shared and per-entity data', () => {
 				const entityId = this.testEntityIds[0] // Entity 1: { Rarity: 'common', Stack.size: 64, amount: 10 }
-				const rarity = ECS.getComponent(entityId, Rarity)
-				const stack = ECS.getComponent(entityId, Stack)
-				const rarityValue = this.componentManager.stringManager.get(rarity.value)
+				const rarity = ECS.getComponent(entityId, 'Rarity')
+				const stack = ECS.getComponent(entityId, 'Stack')
 
-				const mergedData = { rarity: rarityValue, stackSize: stack.size, stackAmount: stack.amount }
+				const mergedData = { rarity: rarity.value, stackSize: stack.size, stackAmount: stack.amount }
 
 				expect(mergedData).toEqual({ rarity: 'common', stackSize: 64, stackAmount: 10 })
 			})
 
 			it('should return undefined for components that are not on an entity', () => {
 				const entityId = this.testEntityIds[4] // Entity 5: { Rarity: 'common' }
-				const stack = ECS.getComponent(entityId, Stack) // Should be undefined
+				const stack = ECS.getComponent(entityId, 'Stack') // Should be undefined
 
 				expect(stack).toBe(undefined)
 			})
 
 			it('should ensure all shared components on an entity have the same raw groupId', () => {
 				const entityId = this.testEntityIds[0] // Has both Rarity and Stack
-				const archetype = entityManager.getArchetypeForEntity(entityId)
-
-				const rarityComp = componentInterpreter.read(entityId, this.rarityTypeID, archetype)
-				const stackComp = componentInterpreter.read(entityId, this.stackTypeID, archetype)
+				const rarityComp = componentManager.reconstructComponentData(entityId, this.rarityTypeID)
+				const stackComp = componentManager.reconstructComponentData(entityId, this.stackTypeID)
 
 				expect(rarityComp.groupId).toBe(stackComp.groupId)
 			})

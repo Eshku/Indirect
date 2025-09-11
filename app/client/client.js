@@ -38,6 +38,7 @@ const preload = async () => {
 
 	await prefabManager.preload([
 		'player_character',
+		'test_prefab',
 		'platform',
 		'fireball',
 		'searing_boulder',

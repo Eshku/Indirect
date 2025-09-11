@@ -1,7 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { uiManager, entityManager, componentManager, archetypeManager } = theManager.getManagers()
-
-const { Tooltip, Parent, DisplayName, Strength, Dexterity, Intelligence } = componentManager.getComponents()
+const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
 
 const { Easing } = await import(`${PATH_CORE}/utils/easing.js`)
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
@@ -27,7 +26,7 @@ const RPN_OP = {
 const STAT_INDEX_TO_NAME = ['Strength', 'Dexterity', 'Intelligence', 'Vitality']
 
 /**
- * @fileoverview Manages the entire lifecycle and rendering of tooltips.
+ * Manages the entire lifecycle and rendering of tooltips.
  */
 export class TooltipSystem {
 	constructor() {
@@ -41,19 +40,33 @@ export class TooltipSystem {
 		this.targetPosition = { x: 0, y: 0 }
 		this.hotbar = null
 
-		this.tooltipTypeId = componentManager.getComponentTypeID(Tooltip)
-		this.parentTypeId = componentManager.getComponentTypeID(Parent)
-		this.displayNameTypeId = componentManager.getComponentTypeID(DisplayName)
-		this.damageTypeId = componentManager.getComponentTypeIDByName('Damage')
-		this.cooldownTypeId = componentManager.getComponentTypeIDByName('Cooldown')
-		this.rangeTypeId = componentManager.getComponentTypeIDByName('Range')
+		const {
+			Tooltip,
+			Parent,
+			DisplayName,
+			Damage,
+			Cooldown,
+			Range,
+			Strength,
+			Dexterity,
+			Intelligence,
+		} = componentManager.getTypeIDs()
+
+		this.tooltipTypeId = Tooltip
+		this.parentTypeId = Parent
+		this.displayNameTypeId = DisplayName
+		this.damageTypeId = Damage
+		this.cooldownTypeId = Cooldown
+		this.rangeTypeId = Range
+
 		this.statComponentTypeIds = new Map()
-		for (const StatClass of [Strength, Dexterity, Intelligence]) {
-			this.statComponentTypeIds.set(StatClass, componentManager.getComponentTypeID(StatClass))
-		}
-		this.stringStorage = componentManager.stringManager.storage
+		this.statComponentTypeIds.set('Strength', Strength)
+		this.statComponentTypeIds.set('Dexterity', Dexterity)
+		this.statComponentTypeIds.set('Intelligence', Intelligence)
+
+		this.stringStorage = stringInterningTable.storage
 		this.viewModelCache = new LRUCache(50)
-		this.statComponentClasses = [Strength, Dexterity, Intelligence]
+		this.statComponentNames = ['Strength', 'Dexterity', 'Intelligence']
 	}
 
 	async init() {
@@ -316,13 +329,12 @@ export class TooltipSystem {
 
 		const { chunk, indexInChunk } = location
 
-		for (const StatClass of this.statComponentClasses) {
-			const statTypeId = this.statComponentTypeIds.get(StatClass)
+		for (const statName of this.statComponentNames) {
+			const statTypeId = this.statComponentTypeIds.get(statName)
 			const statArrays = statTypeId !== undefined ? chunk.componentArrays[statTypeId] : undefined
 
 			if (statArrays) {
-				const pascalCaseStatName = StatClass.name
-				stats[pascalCaseStatName] = statArrays.value[indexInChunk]
+				stats[statName] = statArrays.value[indexInChunk]
 			}
 		}
 		return stats

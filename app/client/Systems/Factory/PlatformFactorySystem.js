@@ -1,7 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, layerManager, assetManager } = theManager.getManagers()
-
-const { ShapeDescriptor, PlatformTag, Position, Viewable, Collider } = componentManager.getComponents()
+const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
 
 /**
  * Creates visual PIXI.Graphics representations for entities that have a
@@ -9,16 +8,18 @@ const { ShapeDescriptor, PlatformTag, Position, Viewable, Collider } = component
  */
 export class PlatformFactorySystem {
 	constructor() {
+		const { ShapeDescriptor, PlatformTag, Position, Viewable, Collider } = componentManager.getTypeIDs()
+
 		this.initializationQuery = queryManager.getQuery({
 			with: [ShapeDescriptor, PlatformTag, Position, Viewable, Collider],
 			react: [ShapeDescriptor],
 		})
 
-		this.descriptorTypeID = componentManager.getComponentTypeID(ShapeDescriptor)
-		this.viewableTypeID = componentManager.getComponentTypeID(Viewable)
-		this.colliderTypeID = componentManager.getComponentTypeID(Collider)
+		this.descriptorTypeID = ShapeDescriptor
+		this.viewableTypeID = Viewable
+		this.colliderTypeID = Collider
 		this.gameWorldLayer = layerManager.getLayer('gameWorld')
-		this.stringStorage = componentManager.stringManager.storage
+		this.stringStorage = stringInterningTable.storage
 	}
 
 	update(deltaTime, currentTick) {

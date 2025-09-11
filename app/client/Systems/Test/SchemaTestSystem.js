@@ -4,9 +4,6 @@ const { ECS } = await import(`${PATH_CORE}/ECS/ECS.js`)
 const { testManager } = await import(`${PATH_CLIENT}/Managers/TestManager/TestManager.js`)
 const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManager/TestAPI.js`)
 
-const { PrimitiveComponent, StringComponent, EnumComponent, BitmaskComponent, FlatArrayComponent, RpnComponent } =
-	componentManager.getComponents()
-
 /**
  * A system dedicated to testing the functionality of the SchemaParser and data layer.
  * It runs a suite of self-contained tests for each schema type during its `init` phase.
@@ -14,10 +11,10 @@ const { PrimitiveComponent, StringComponent, EnumComponent, BitmaskComponent, Fl
 export class SchemaTestSystem {
 	constructor() {
 		this.testConfig = {
-			primitiveTypes: false,
-			internedStrings: false,
-			enums: false,
-			bitmasks: false,
+			primitiveTypes: true,
+			internedStrings: true,
+			enums: true,
+			bitmasks: true,
 			flatArrayPrimitives: true,
 			flatArrayEnums: true,
 			flatArrayStrings: true,
@@ -42,7 +39,7 @@ export class SchemaTestSystem {
 						boolean: true,
 					}
 					const entityId = ECS.createEntity({ PrimitiveComponent: initialData })
-					const retrievedData = ECS.getComponent(entityId, PrimitiveComponent)
+					const retrievedData = ECS.getComponent(entityId, 'PrimitiveComponent')
 
 					// f32 has precision limitations, so we check it with a tolerance.
 					expect(retrievedData.f32).not.toBe(initialData.f32) // It won't be exact
@@ -66,7 +63,7 @@ export class SchemaTestSystem {
 				it('should correctly store and retrieve interned strings', () => {
 					const initialData = { value: 'hello_world' }
 					const entityId = ECS.createEntity({ StringComponent: initialData })
-					const retrievedData = ECS.getComponent(entityId, StringComponent)
+					const retrievedData = ECS.getComponent(entityId, 'StringComponent')
 
 					expect(retrievedData.value).toBe('hello_world')
 
@@ -78,7 +75,7 @@ export class SchemaTestSystem {
 				it('should correctly store and retrieve enum values', () => {
 					const initialData = { state: 'JUMPING' }
 					const entityId = ECS.createEntity({ EnumComponent: initialData })
-					const retrievedData = ECS.getComponent(entityId, EnumComponent)
+					const retrievedData = ECS.getComponent(entityId, 'EnumComponent')
 
 					expect(retrievedData.state).toBe('JUMPING')
 
@@ -90,7 +87,7 @@ export class SchemaTestSystem {
 				it('should correctly store and retrieve bitmask values', () => {
 					const initialData = { flags: ['FLAG_A', 'FLAG_C'] }
 					const entityId = ECS.createEntity({ BitmaskComponent: initialData })
-					const retrievedData = ECS.getComponent(entityId, BitmaskComponent)
+					const retrievedData = ECS.getComponent(entityId, 'BitmaskComponent')
 
 					// The order of flags is not guaranteed, so sort both arrays to ensure
 					// the content is identical before comparing.
@@ -109,7 +106,7 @@ export class SchemaTestSystem {
 						primitiveArray: [10, -20, 30],
 					}
 					const entityId = ECS.createEntity({ FlatArrayComponent: initialData })
-					const retrievedData = ECS.getComponent(entityId, FlatArrayComponent)
+					const retrievedData = ECS.getComponent(entityId, 'FlatArrayComponent')
 
 					expect(retrievedData.primitiveArray).toEqual([10, -20, 30])
 					// Ensure other arrays in the component are empty
@@ -126,7 +123,7 @@ export class SchemaTestSystem {
 						enumArray: ['VAL2', 'VAL1'],
 					}
 					const entityId = ECS.createEntity({ FlatArrayComponent: initialData })
-					const retrievedData = ECS.getComponent(entityId, FlatArrayComponent)
+					const retrievedData = ECS.getComponent(entityId, 'FlatArrayComponent')
 
 					expect(retrievedData.enumArray).toEqual(['VAL2', 'VAL1'])
 					expect(retrievedData.primitiveArray).toEqual([])
@@ -142,7 +139,7 @@ export class SchemaTestSystem {
 						stringArray: ['first', 'second', 'third'],
 					}
 					const entityId = ECS.createEntity({ FlatArrayComponent: initialData })
-					const retrievedData = ECS.getComponent(entityId, FlatArrayComponent)
+					const retrievedData = ECS.getComponent(entityId, 'FlatArrayComponent')
 
 					expect(retrievedData.stringArray).toEqual(['first', 'second', 'third'])
 					expect(retrievedData.primitiveArray).toEqual([])
@@ -160,7 +157,7 @@ export class SchemaTestSystem {
 						stringArray: ['one', 'two'],
 					}
 					const entityId = ECS.createEntity({ FlatArrayComponent: initialData })
-					const retrievedData = ECS.getComponent(entityId, FlatArrayComponent)
+					const retrievedData = ECS.getComponent(entityId, 'FlatArrayComponent')
 
 					expect(retrievedData.primitiveArray).toEqual([5])
 					expect(retrievedData.enumArray).toEqual([])
@@ -177,23 +174,24 @@ export class SchemaTestSystem {
 					}
 					const entityId = ECS.createEntity({ RpnComponent: initialData })
 
-					const retrievedData = ECS.getComponent(entityId, RpnComponent)
+					const retrievedData = ECS.getComponent(entityId, 'RpnComponent')
 
-					// The 'read' path for RPN is not fully implemented to reconstruct the original formula.
-					// Instead, we verify that the underlying flattened properties are present,
-					// which confirms that the 'write' path processing was successful.
+					// The 'read' path for RPN reconstructs the underlying flat arrays.
+					// We verify their existence and content.
 					expect(retrievedData).toBeDefined()
 					expect(retrievedData.formulas).toBe(undefined) // Original property is gone.
-					expect(retrievedData).toHaveProperty('formulas_rpnStream_count')
-					expect(retrievedData).toHaveProperty('formulas_formulaStarts_count')
-					expect(retrievedData).toHaveProperty('formulas_formulaLengths_count')
+
+					// Check for the reconstructed arrays
+					expect(retrievedData).toHaveProperty('formulas_rpnStream')
+					expect(retrievedData).toHaveProperty('formulas_formulaStarts')
+					expect(retrievedData).toHaveProperty('formulas_formulaLengths')
 
 					// '10 * BASE + 5' -> PUSH_LITERAL, 10, PUSH_BASE, MULTIPLY, PUSH_LITERAL, 5, ADD
 					// RPN stream length is 7.
-					expect(retrievedData.formulas_rpnStream_count).toBe(7)
+					expect(retrievedData.formulas_rpnStream.length).toBe(7)
 					// One formula was provided, so the starts/lengths arrays should have a count of 1.
-					expect(retrievedData.formulas_formulaStarts_count).toBe(1)
-					expect(retrievedData.formulas_formulaLengths_count).toBe(1)
+					expect(retrievedData.formulas_formulaStarts.length).toBe(1)
+					expect(retrievedData.formulas_formulaLengths.length).toBe(1)
 
 					ECS.destroyEntity(entityId)
 				})

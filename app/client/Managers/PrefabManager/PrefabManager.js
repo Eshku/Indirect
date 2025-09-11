@@ -13,25 +13,26 @@ const { PrefabLoader } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabLoad
  * Instead of referencing prefabs by their file paths, the engine uses a **manifest-driven** approach.
  * A central `prefabs.manifest.json` file acts as a "phone book" for all spawnable entities in the game.
  *
- * #### The `prefabId`
+ * #### The `prefabName`
  *
- * The `prefabId` is a simple, human-readable, unique string (e.g., `"obsidian_sword"`, `"goblin_shaman"`)
- * that serves as the universal key for any prefab. This ID is what you use in game logic, such as in console
+ * The `prefabName` is a simple, human-readable, unique string (e.g., `"obsidian_sword"`, `"goblin_shaman"`)
+ * that serves as the universal key for any prefab. This name is what you use in game logic, such as in console
  * commands (`spawn obsidian_sword`) or in other prefabs (`"projectilePrefab": "fireball_projectile"`).
  *
  * #### How it Works
  *
- * 1.  **Manifest:** The manifest maps each `prefabId` to its source data file (`.json`).
+ * 1.  **Manifest:** The manifest maps each `prefabName` to its source data file (`.json`).
  * 2.  **Decoupling:** This completely decouples the game logic from the file system structure. You can reorganize your asset folders, and you only need to update the manifest, not your game code.
  * 3.  **Flexibility & Modding:** This design is incredibly powerful for modding. A mod can introduce new items, characters, or effects simply by providing its own manifest file that the engine loads and merges. It also makes creating developer tools (like a level editor with a dropdown of spawnable objects) trivial.
 
 
  */
 export class PrefabManager {
-	constructor({ cacheSize = 100 } = {}) {
+	constructor() {
 		// --- Permanent Caches for Prefab Templates ---
 		// These store the canonical, processed data for prefabs defined in files.
 		// They are now stored in arrays, indexed by a numeric prefab ID for O(1) access.
+		this.preprocessedIdMaps = []
 		this.processedPrefabCache = []
 		this.processedChildrenCache = []
 		// Cache for raw data from files to avoid repeated file system access.
@@ -42,7 +43,14 @@ export class PrefabManager {
 		 * This is for entities that are based on a prefab but have been modified at runtime (e.g., a sword with unique stats).
 		 * Using an LRU cache here prevents memory leaks from accumulating countless unique entity variations.
 		 */
-		this.variantCache = new LRUCache(cacheSize)
+
+		//! kay, I'm gonna forget idea behind this shit, soooo
+		//! Idea is to be able to create new "prefab" at runtime
+		//! Which would be temporary (?) cached
+		//! This would allow to take any prefab, declare overrides and create variant based on that
+		//! That skips re-override step each time we need to create variant.
+		//! AoS Payloads if we need low-level batch creations from there.
+		this.variantCache = new LRUCache(100)
 
 		/**
 		 * @property {PrefabLoader} loader - Handles the I/O and loading logic.
@@ -50,17 +58,21 @@ export class PrefabManager {
 		this.loader = new PrefabLoader(this)
 
 		/**
-		 * @property {Map<string, object>} manifest - Stores the entire prefab manifest. Maps prefabId -> manifest entry.
+		 * @property {Map<string, object>} manifest - Stores the entire prefab manifest. Maps prefabName -> manifest entry.
 		 */
 		this.manifest = new Map()
 		/**
-		 * @property {Map<string, number>} prefabIdToNumericId - Maps string prefabId to a numeric ID for fast lookups.
+		 * @property {Map<string, number>} prefabNameToId - Maps string prefabName to a numeric ID for fast lookups.
 		 */
-		this.prefabIdToNumericId = new Map()
+		this.prefabNameToId = new Map()
 		/**
-		 * @property {object[]} numericIdToManifestEntry - Maps a numeric ID back to its manifest entry.
+		 * @property {object[]} prefabIdToManifestEntry - Maps a numeric ID back to its manifest entry.
 		 */
-		this.numericIdToManifestEntry = []
+		this.prefabIdToManifestEntry = []
+		/**
+		 * @property {string[]} idToPrefabName - Maps a numeric ID back to its string name.
+		 */
+		this.idToPrefabName = []
 
 		/**
 		 * @property {ComponentManager} componentManager - A reference to the component manager for schema lookups.
@@ -71,13 +83,16 @@ export class PrefabManager {
 
 	async init() {
 		this.componentManager = (await import(`${PATH_MANAGERS}/ComponentManager/ComponentManager.js`)).componentManager
+
 		await this.loader.loadManifest()
+
 		let currentId = 0
-		for (const [prefabId, manifestEntry] of this.manifest.entries()) {
-			this.prefabIdToNumericId.set(prefabId, currentId)
-			this.numericIdToManifestEntry[currentId] = manifestEntry
+		for (const [prefabName, manifestEntry] of this.manifest.entries()) {
+			this.prefabNameToId.set(prefabName, currentId)
+			this.prefabIdToManifestEntry[currentId] = manifestEntry
+			this.idToPrefabName[currentId] = prefabName
 			// Attach the numeric ID to the manifest entry for convenience
-			manifestEntry.numericId = currentId
+			manifestEntry.id = currentId
 			currentId++
 		}
 	}
@@ -85,11 +100,11 @@ export class PrefabManager {
 	 * Pre-loads a list of prefabs into the cache. This is intended to be called
 	 * during a loading screen or setup phase to ensure critical assets are
 	 * available for synchronous creation later.
-	 * @param {string[]} [prefabIds=[]] - An array of prefab IDs from the manifest to load.
+	 * @param {string[]} [prefabNames=[]] - An array of prefab names from the manifest to load.
 	 * @returns {Promise<void>}
 	 */
-	async preload(prefabIds = []) {
-		const loadPromises = prefabIds.map(prefabId => this._processPrefabData(prefabId))
+	async preload(prefabNames = []) {
+		const loadPromises = prefabNames.map(prefabName => this._processPrefabData(prefabName))
 		await Promise.allSettled(loadPromises)
 	}
 
@@ -97,79 +112,100 @@ export class PrefabManager {
 	 * Synchronously retrieves fully resolved prefab data from the cache.
 	 * This method does NOT perform file I/O and will only return data that
 	 * has been pre-loaded. It is used for the high-performance creation path.
-	 * @param {string} prefabId - The ID of the prefab from the manifest.
+	 * @param {string} prefabName - The name of the prefab from the manifest.
 	 * @returns {{components: object, children: object[]} | null} The cached data or null if not found.
 	 */
-	getPrefabData(prefabId) {
-		const numericId = this.getPrefabNumericId(prefabId)
-		if (numericId === undefined) {
+	getPrefabData(prefabName) {
+		const id = this.getPrefabId(prefabName)
+		if (id === undefined) {
 			// This can be a valid case for external callers, so we don't error, just return null.
 			return null
 		}
-		return this.getPrefabDataByNumericId(numericId)
+		return this.getPrefabDataById(id)
 	}
 
 	/**
-	 * Gets the numeric ID for a given string-based prefab ID.
-	 * @param {string} prefabId
+	 * Synchronously retrieves a pre-processed Map of componentTypeID -> data for a prefab.
+	 * This is a significant optimization for `instantiate` as it avoids re-processing the
+	 * high-level component object on every call.
+	 * @param {string} prefabName - The name of the prefab from the manifest.
+	 * @returns {Map<number, object> | null} The cached ID map or null if not found/preloaded.
+	 */
+	getPreprocessedIdMap(prefabName) {
+		const id = this.getPrefabId(prefabName)
+		return this.preprocessedIdMaps[id] // Returns the map or undefined if id is not found.
+	}
+
+	/**
+	 * Gets the numeric ID for a given prefab name.
+	 * @param {string} prefabName
 	 * @returns {number | undefined}
 	 */
-	getPrefabNumericId(prefabId) {
-		return this.prefabIdToNumericId.get(prefabId)
+	getPrefabId(prefabName) {
+		return this.prefabNameToId.get(prefabName)
+	}
+
+	/**
+	 * Gets the string name for a given numeric prefab ID.
+	 * @param {number} id
+	 * @returns {string | undefined}
+	 */
+	getPrefabNameById(id) {
+		return this.idToPrefabName[id]
 	}
 
 	/**
 	 * The new internal, high-performance way to get prefab data, used by the CommandBufferExecutor.
-	 * @param {number} numericId The numeric ID of the prefab.
+	 * @param {number} id The numeric ID of the prefab.
 	 * @returns {{components: object, children: object[]} | null}
 	 */
-	getPrefabDataByNumericId(numericId) {
-		const components = this.processedPrefabCache[numericId]
+	getPrefabDataById(id) {
+		const components = this.processedPrefabCache[id]
 		if (components === undefined) {
 			console.error(
-				`PrefabManager: Prefab with numericId '${numericId}' was not preloaded. Use preload() during setup.`
+				`PrefabManager: Prefab with id '${id}' was not preloaded. Use preload() during setup.`
 			)
 			return null
 		}
-		return { components, children: this.processedChildrenCache[numericId] || [] }
+		return { components, children: this.processedChildrenCache[id] || [] }
 	}
 
 	/**
 	 * Asynchronously loads and processes prefab data from the file system, handling inheritance and caching the final result.
 	 * This is intended to be used during a loading phase.
-	 * @param {string} prefabId - The name of the prefab (e.g., 'Items/Skills/Fireball').
+	 * @param {string} prefabName - The name of the prefab (e.g., 'Items/Skills/Fireball').
 	 * @param {Set<string>} [visited=new Set()] - Used internally to detect circular dependencies.
 	 * @returns {Promise<{components: object, children: object[]}|null>} The resolved prefab data or null if not found.
 	 * @private
 	 */
-	async _processPrefabData(prefabId, visited = new Set()) {
-		if (!prefabId) {
-			console.error(`PrefabManager: getPrefabData called with invalid prefabId: ${prefabId}`)
+	async _processPrefabData(prefabName, visited = new Set()) {
+		if (!prefabName) {
+			console.error(`PrefabManager: getPrefabData called with invalid prefabName: ${prefabName}`)
 			return null
 		}
 
-		const numericId = this.prefabIdToNumericId.get(prefabId)
-		if (numericId === undefined) {
-			console.error(`PrefabManager: Could not find prefab with ID '${prefabId}' in manifest.`)
+		const id = this.prefabNameToId.get(prefabName)
+		if (id === undefined) {
+			console.error(`PrefabManager: Could not find prefab with ID '${prefabName}' in manifest.`)
 			return null
 		}
 
 		// Check cache for final, merged data first.
-		const cachedComponents = this.processedPrefabCache[numericId]
+		const cachedComponents = this.processedPrefabCache[id]
 		if (cachedComponents) {
 			return {
 				components: cachedComponents,
-				children: this.processedChildrenCache[numericId] || [],
+				children: this.processedChildrenCache[id] || [],
 			}
 		}
 
-		if (visited.has(prefabId)) {
-			console.error(`Circular prefab dependency detected: ${[...visited, prefabId].join(' -> ')}`)
+		if (visited.has(prefabName)) {
+			console.error(`Circular prefab dependency detected: ${[...visited, prefabName].join(' -> ')}`)
 			return null // Abort to prevent infinite recursion
 		}
-		visited.add(prefabId)
+		visited.add(prefabName)
 
-		const manifestEntry = this.numericIdToManifestEntry[numericId]
+		const manifestEntry = this.prefabIdToManifestEntry[id]
 		const prefabPath = manifestEntry.path
 		const canonicalPath = prefabPath.toLowerCase()
 		// Check cache for raw data. If not present, load it via IPC.
@@ -203,36 +239,45 @@ export class PrefabManager {
 						baseChildren = [...baseChildren, ...basePrefabData.children]
 					}
 				} else {
-					console.warn(`PrefabManager: Could not resolve extended prefab '${extendName}' for prefab '${prefabId}'.`)
+					console.warn(`PrefabManager: Could not resolve extended prefab '${extendName}' for prefab '${prefabName}'.`)
 				}
 			}
 		}
 
 		// Process shorthand notations (e.g., "range": 500) into their full object form.
-		const processedOwnComponents = this._processShorthands(rawData.components || {}, prefabId)
+		const processedOwnComponents = this._processShorthands(rawData.components || {}, prefabName)
 
 		const mergedComponents = this._deepMerge(baseComponents, processedOwnComponents)
 
-		const resolvedOwnChildren = await this._resolveChildren(rawData.children || [], new Set(visited))
+		const resolvedOwnChildren = await this._resolveChildren(rawData.children || [], new Set(visited), prefabName)
 		const finalChildren = [...baseChildren, ...resolvedOwnChildren]
 
-		const processedComponents = mergedComponents
+		// --- Pre-processing Optimization ---
+		// Pre-process the final components into a typeID-keyed map and cache it.
+		// This avoids this expensive conversion on every `instantiate` call.
 
-		this.processedPrefabCache[numericId] = processedComponents
-		this.processedChildrenCache[numericId] = finalChildren
+		// Automatically add the Prefab component to the root entity's data.
+		// This ensures every instantiated entity knows its numeric prefab ID.
+		mergedComponents.Prefab = { id: id }
 
-		return { components: processedComponents, children: finalChildren }
+		const finalIdMap = this.componentManager.createIdMapFromData(mergedComponents)
+		this.preprocessedIdMaps[id] = finalIdMap
+
+		this.processedPrefabCache[id] = mergedComponents
+		this.processedChildrenCache[id] = finalChildren
+
+		return { components: mergedComponents, children: finalChildren }
 	}
 
 	/**
 	 * Processes a component data object, expanding any shorthand notations into their full object form.
 	 * For example, it converts `"range": 500` into `"range": { "value": 500 }`.
 	 * @param {object} components - The components object from a raw prefab file.
-	 * @param {string} prefabId - The ID of the prefab being processed, for error logging.
+	 * @param {string} prefabName - The name of the prefab being processed, for error logging.
 	 * @returns {object} A new components object with all shorthands expanded.
 	 * @private
 	 */
-	_processShorthands(components, prefabId) {
+	_processShorthands(components, prefabName) {
 		if (!this.componentManager) {
 			console.error('PrefabManager: componentManager reference is missing. Cannot process shorthands.')
 			return components // Return original data if manager is not set
@@ -270,7 +315,7 @@ export class PrefabManager {
 				// This is a critical data error. We will log a detailed error and skip this component entirely,
 				// rather than assigning a default or empty value, to ensure the error is noticed and fixed at the source.
 				console.error(
-					`PrefabManager: Invalid shorthand for component "${componentName}" in prefab "${prefabId}". Components with no schema are treated as "Tag Components" and cannot have data.`
+					`PrefabManager: Invalid shorthand for component "${componentName}" in prefab "${prefabName}". Components with no schema are treated as "Tag Components" and cannot have data.`
 				)
 			} else {
 				// The component data is already in its full object form, so we keep it as is.
@@ -285,10 +330,11 @@ export class PrefabManager {
 	 * This allows for prefab inheritance at any level of the entity hierarchy.
 	 * @param {object[]} children - The array of child entity definitions.
 	 * @param {Set<string>} visited - Used to detect circular dependencies in prefab inheritance.
+	 * @param {string} rootPrefabName - The name of the top-level prefab being processed, for logging.
 	 * @returns {Promise<object[]>} The resolved array of child definitions.
 	 * @private
 	 */
-	async _resolveChildren(children, visited) {
+	async _resolveChildren(children, visited, rootPrefabName) {
 		if (!children || !Array.isArray(children)) {
 			return []
 		}
@@ -310,7 +356,9 @@ export class PrefabManager {
 					delete mergedChild.extends // Clean up the extends property after merging
 					currentChild = mergedChild
 				} else {
-					console.warn(`PrefabManager: Could not resolve extended child prefab '${childDef.extends}'.`)
+					console.warn(
+						`PrefabManager: In prefab '${rootPrefabName}', could not resolve extended child prefab '${childDef.extends}'.`
+					)
 					delete currentChild.extends
 				}
 			}
@@ -320,8 +368,9 @@ export class PrefabManager {
 			// that need to identify the type of a child entity (e.g., for cooldowns).
 			if (prefabIdForChild) {
 				currentChild.components = currentChild.components || {}
-				if (!currentChild.components.PrefabId) {
-					currentChild.components.PrefabId = { id: prefabIdForChild }
+				const childId = this.getPrefabId(prefabIdForChild)
+				if (!currentChild.components.Prefab && childId !== undefined) {
+					currentChild.components.Prefab = { id: childId }
 				}
 			}
 
@@ -336,7 +385,7 @@ export class PrefabManager {
 
 			// Now, recursively resolve the children of this newly merged child definition.
 			if (currentChild.children) {
-				currentChild.children = await this._resolveChildren(currentChild.children, new Set(visited))
+				currentChild.children = await this._resolveChildren(currentChild.children, new Set(visited), rootPrefabName)
 			}
 
 			resolvedChildren.push(currentChild)

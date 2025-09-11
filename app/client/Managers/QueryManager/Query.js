@@ -19,24 +19,28 @@
 
 
 export class Query {
-	static _createSimpleMask(componentManager, componentClasses, categoryName) {
+	static _createSimpleMask(componentManager, componentTypeIDs, categoryName) {
 		let mask = 0n
-		for (const CompClass of componentClasses) {
-			const bitFlag = componentManager.getComponentBitFlag(CompClass)
+		for (const typeID of componentTypeIDs) {
+			if (typeof typeID !== 'number') {
+				throw new Error(`Query: ${categoryName} component identifier must be a numeric typeID. Received: ${typeID}`)
+			}
+			const bitFlag = componentManager.componentBitFlags[typeID]
 			if (bitFlag === undefined) {
-				throw new Error(`Query: ${categoryName} component class ${CompClass.name} is not registered.`)
+				// This case should theoretically not be hit if typeID is valid.
+				throw new Error(`Query: ${categoryName} component with typeID "${typeID}" does not have a valid bitflag.`)
 			}
 			mask |= bitFlag
 		}
 		return mask
 	}
 
-	static _createComponentTypeIDSet(componentManager, componentClasses, categoryName) {
+	static _createComponentTypeIDSet(componentManager, componentTypeIDs, categoryName) {
 		const typeIDs = new Set()
-		for (const CompClass of componentClasses) {
-			const typeID = componentManager.getComponentTypeID(CompClass)
-			if (typeID === undefined) {
-				throw new Error(`Query: ${categoryName} component class ${CompClass.name} is not registered.`)
+		for (const typeID of componentTypeIDs) {
+			if (typeof typeID !== 'number') {
+				// This case should theoretically not be hit if typeID is valid.
+				throw new Error(`Query: ${categoryName} component identifier must be a numeric typeID. Received: ${typeID}`)
 			}
 			typeIDs.add(typeID)
 		}

@@ -1,5 +1,5 @@
 /**
- * @fileoverview A simple free-list memory allocator for managing ArrayBuffers.
+ * simple free-list memory allocator for managing ArrayBuffers.
  */
 
 /**

@@ -2,7 +2,7 @@
 //! forgor it even exist tbh, been a while
 
 /**
- * @fileoverview A table for managing the lifecycle of complex JavaScript objects.
+ * table for managing the lifecycle of complex JavaScript objects.
  *
  * ### Architectural Note: The "Handle" Pattern
  *
@@ -122,3 +122,5 @@ export class ManagedObjectTable {
 		}
 	}
 }
+
+export const managedObjectTable = new ManagedObjectTable()

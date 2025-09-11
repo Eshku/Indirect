@@ -3,15 +3,15 @@ const { queryManager, componentManager, layerManager, gameManager, entityManager
 	theManager.getManagers()
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
 
-const { PlayerTag, Position } = componentManager.getComponents()
-
 export class CameraSystem {
 	constructor() {
+		const { PlayerTag, Position } = componentManager.getTypeIDs()
+
 		this.playerQuery = queryManager.getQuery({
 			with: [PlayerTag, Position],
 		})
 
-		this.positionTypeID = componentManager.getComponentTypeID(Position)
+		this.positionTypeID = Position
 		this.playerId = null
 
 		this.camera = { x: 0, y: 0 }

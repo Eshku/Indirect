@@ -1,8 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager } = theManager.getManagers()
 
-const { Velocity, Speed, MovementIntent, CollisionFlags } = componentManager.getComponents()
-
 /**
  * This system is responsible for horizontal character movement based on their `MovementIntent`.
  * It translates the desired direction into velocity, which is then used to update the entity's position.
@@ -10,22 +8,25 @@ const { Velocity, Speed, MovementIntent, CollisionFlags } = componentManager.get
  */
 export class MovementSystem {
 	constructor() {
+		// Get all numeric IDs at once for efficient use in the update loop.
+		const { Velocity, Speed, MovementIntent, CollisionFlags } = componentManager.getTypeIDs()
+
+		// Use numeric type IDs to define the query's structure for efficiency.
 		this.query = queryManager.getQuery({
 			with: [Velocity, Speed, MovementIntent, CollisionFlags],
 		})
 
-		this.velocityTypeID = componentManager.getComponentTypeID(Velocity)
-		this.speedTypeID = componentManager.getComponentTypeID(Speed)
-		this.intentTypeID = componentManager.getComponentTypeID(MovementIntent)
-		this.collisionFlagsTypeID = componentManager.getComponentTypeID(CollisionFlags)
+		// Cache the numeric IDs on the system instance.
+		this.velocityTypeID = Velocity
+		this.speedTypeID = Speed
+		this.intentTypeID = MovementIntent
+		this.collisionFlagsTypeID = CollisionFlags
 
-		// --- System-level Constant Caching (Clean API) ---
-		// Use the new helper to get constants without exposing internal structures.
-		this.COLLISION_FLAGS = componentManager.getConstantsFor(CollisionFlags, 'collisionFlags')
+		// Use the numeric type ID to get constants.
+		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(CollisionFlags, 'collisionFlags')
 	}
 
 	update(deltaTime, currentTick) {
-		// The `constants` object is no longer populated or needed from the chunk.
 		for (const chunk of this.query.iter()) {
 			const velocityMarker = chunk.getDirtyMarker(this.velocityTypeID, currentTick)
 
@@ -50,7 +51,8 @@ export class MovementSystem {
 				const collidesLeft = (currentCollisionFlags & COLLISION_FLAGS.LEFT) !== 0
 
 				// Apply collision logic
-				if ((desiredMoveX > 0 && collidesRight) || (desiredMoveX < 0 && collidesLeft)) { // Moving right and hit right, or moving left and hit left
+				if ((desiredMoveX > 0 && collidesRight) || (desiredMoveX < 0 && collidesLeft)) {
+					// Moving right and hit right, or moving left and hit left
 					finalVelX = 0
 				}
 				velX[i] = finalVelX

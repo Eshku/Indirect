@@ -1,12 +1,12 @@
 /**
- * A "hot" component that defines the travel speed of an entity, typically a projectile.
- * This is used by systems to calculate the entity's Velocity vector.
+ * A component that defines the travel speed of an entity.
  */
-export class Speed {
-	static schema = {
-		value: 'f32',
-	}
-	constructor({ value = 500 } = {}) {
-		this.value = value
-	}
+export const Speed = {
+	/**
+	 * The travel speed, typically in units per second.
+	 */
+	value: {
+		type: 'f32',
+		default: 500,
+	},
 }

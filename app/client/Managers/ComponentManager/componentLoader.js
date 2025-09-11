@@ -1,5 +1,5 @@
 /**
- * @fileoverview Provides a utility for dynamically loading component modules.
+ * Provides a utility for dynamically loading component modules.
  */
 
 /**
@@ -18,6 +18,10 @@ export async function loadAllComponents() {
 			try {
 				const modulePath = `${PATH_COMPONENTS}/${category}/${moduleName}.js`
 				const module = await import(modulePath)
+				// The component definition is now expected to be the main export,
+				// or an export with the same name as the module.
+				const componentSchema = module.default || module[moduleName]
+				if (!componentSchema) continue
 				loadedModules.push({ moduleName, module, category })
 			} catch (error) {
 				console.error(`ComponentLoader: Failed to load component '${moduleName}':`, error)

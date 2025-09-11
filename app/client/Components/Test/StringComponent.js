@@ -1,12 +1,12 @@
 /**
- * @fileoverview Tests the 'string' schema type for interned strings.
+ * component for testing the 'string' schema type.
  */
-export class StringComponent {
-	static schema = {
-		value: 'string',
-	}
-
-	constructor({ value = '' } = {}) {
-		this.value = value
-	}
+export const StringComponent = {
+	/**
+	 * An interned string value.
+	 */
+	value: {
+		type: 'string',
+		default: '',
+	},
 }

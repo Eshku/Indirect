@@ -1,8 +1,7 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { uiManager, queryManager, componentManager, cooldownManager } =
-	theManager.getManagers()
+const { uiManager, queryManager, componentManager, cooldownManager, prefabManager } = theManager.getManagers()
+const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
 
-const { PlayerTag, PrefabId, Owner, InActiveSet, Icon, Cooldown, ActiveSet } = await componentManager.getComponents()
 const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
 
 /**
@@ -10,8 +9,10 @@ const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
  */
 export class HotbarSyncSystem {
 	constructor() {
+		const { Owner, InActiveSet, Prefab, Icon, Cooldown, PlayerTag, ActiveSet } = componentManager.getTypeIDs()
+
 		this.hotbarItemsQuery = queryManager.getQuery({
-			with: [Owner, InActiveSet, PrefabId, Icon, Cooldown],
+			with: [Owner, InActiveSet, Prefab, Icon, Cooldown],
 		})
 		// This query is for reacting to active slot changes in the update loop.
 		this.playerUpdateQuery = queryManager.getQuery({
@@ -22,14 +23,15 @@ export class HotbarSyncSystem {
 		// This query is for finding the player entity at startup.
 		this.playerInitQuery = queryManager.getQuery({ with: [PlayerTag] })
 
-		this.ownerTypeID = componentManager.getComponentTypeID(Owner)
-		this.inActiveSetTypeID = componentManager.getComponentTypeID(InActiveSet)
-		this.prefabIdTypeID = componentManager.getComponentTypeID(PrefabId)
-		this.iconTypeID = componentManager.getComponentTypeID(Icon)
-		this.cooldownTypeID = componentManager.getComponentTypeID(Cooldown)
-		this.activeSetTypeID = componentManager.getComponentTypeID(ActiveSet)
-		this.stringStorage = componentManager.stringManager.storage
+		this.ownerTypeID = Owner
+		this.inActiveSetTypeID = InActiveSet
+		this.prefabIdTypeID = Prefab
+		this.iconTypeID = Icon
+		this.cooldownTypeID = Cooldown
+		this.activeSetTypeID = ActiveSet
+		this.stringStorage = stringInterningTable.storage
 		this.cooldownManager = cooldownManager
+		this.prefabManager = prefabManager
 
 		this.playerId = null
 		this.cachedSlotEntityIds = Array(HOTBAR_SLOT_COUNT).fill(0)
@@ -75,13 +77,11 @@ export class HotbarSyncSystem {
 				const slot = slots[indexInChunk]
 
 				if (slot < HOTBAR_SLOT_COUNT) {
-					const prefabIdRef = prefabIdArrays.id[indexInChunk]
-					const prefabIdStr = stringStorage[prefabIdRef]
+					const prefabId = prefabIdArrays.id[indexInChunk]
 					const iconAssetStr = stringStorage[iconArrays.assetName[indexInChunk]]
 					desiredState[slot] = {
 						itemId: entityId,
-						prefabIdRef: prefabIdRef,
-						prefabId: prefabIdStr,
+						prefabId: prefabId,
 						iconAsset: iconAssetStr,
 						totalDuration: durations[indexInChunk],
 					}
@@ -144,7 +144,7 @@ export class HotbarSyncSystem {
 		for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
 			const itemInfo = desiredState[i]
 			if (itemInfo) {
-				const remainingTime = this.cooldownManager.getRemaining(this.playerId, itemInfo.prefabIdRef)
+				const remainingTime = this.cooldownManager.getRemaining(this.playerId, itemInfo.prefabId)
 				if (remainingTime > 0) {
 					this.hotbar.updateCooldown(i, { remainingTime, totalDuration: itemInfo.totalDuration })
 				} else {

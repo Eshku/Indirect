@@ -1,8 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager } = theManager.getManagers()
 
-const { Position, Velocity } = componentManager.getComponents()
-
 /**
  * A final-pass physics system that integrates velocity into position.
  * This system should run after all other systems that can modify an entity's velocity
@@ -11,13 +9,15 @@ const { Position, Velocity } = componentManager.getComponents()
  */
 export class ApplyVelocity {
 	constructor() {
+		const { Position, Velocity } = componentManager.getTypeIDs()
+
 		this.query = queryManager.getQuery({
 			with: [Position, Velocity],
 			react: [Velocity],
 		})
 
-		this.positionTypeID = componentManager.getComponentTypeID(Position)
-		this.velocityTypeID = componentManager.getComponentTypeID(Velocity)
+		this.positionTypeID = Position
+		this.velocityTypeID = Velocity
 	}
 
 	update(deltaTime, currentTick) {

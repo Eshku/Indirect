@@ -1,5 +1,5 @@
 /**
- * @fileoverview Handles the I/O and loading logic for the PrefabManager.
+ * Handles the I/O and loading logic for the PrefabManager.
  * This class is responsible for loading the prefab manifest and for pre-loading data-driven
  * prefabs from the filesystem.
  */

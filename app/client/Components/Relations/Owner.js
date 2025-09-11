@@ -1,13 +1,13 @@
 /**
- * A "hot" component that links an entity (e.g., an effect or projectile)
- * to its original owner/caster. This is an optimization to avoid traversing
- * a long chain of `Parent` components.
+ * A component that links an entity (e.g., an effect or projectile)
+ * to its original owner/caster.
  */
-export class Owner {
-	static schema = {
-		entityId: 'u32',
-	}
-	constructor({ entityId = 0 } = {}) {
-		this.entityId = entityId
-	}
+export const Owner = {
+	/**
+	 * The entity ID of the owner.
+	 */
+	entityId: {
+		type: 'u32',
+		default: 0,
+	},
 }

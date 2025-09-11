@@ -1,5 +1,5 @@
 /**
- * @fileoverview Provides a utility for dynamically loading system modules.
+ * Provides a utility for dynamically loading system modules.
  */
 
 /**

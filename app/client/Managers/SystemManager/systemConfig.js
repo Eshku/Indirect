@@ -1,5 +1,5 @@
 /**
- * @fileoverview Centralized configuration for game systems.
+ * Centralized configuration for game systems.
  * This module defines the execution order and update frequencies for all systems in a unified structure.
  */
 
@@ -78,14 +78,14 @@ export const systemSchedule = {
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
-	], 
+	],  
 
 	// Development and stress-testing.
 
 	Benchmark: [
-		/* { name: 'RWMBenchmark', frequency: 'logic' }, */
-		/* { name: 'StructuralChangeBenchmarkSystem', frequency: 'logic' }, */
-		/* { name: 'CreationDestructionBenchmarkSystem', frequency: 'logic' }, */
+		/* { name: 'RWMBenchmark', frequency: 'visuals' }, */
+		/* { name: 'StructuralChangeBenchmarkSystem', frequency: 'visuals' }, */
+		/* { name: 'CreationDestructionBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
 	Test: [

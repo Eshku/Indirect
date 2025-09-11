@@ -14,12 +14,6 @@
  * @property {number[]} _freeDisplayObjectRefs - A stack of available indices (Refs) in the `_managedDisplayObjects` pool.
  */
 
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-
-/**
- * @property {import('../ComponentManager/StringManager.js').StringManager} stringManager - The string manager.
- */
-
 export class AssetManager {
 	constructor() {
 		this.assets = new Map() // Stores PIXI.Texture objects by assetName
@@ -40,8 +34,7 @@ export class AssetManager {
 		this.displayObjectStorage = this._managedDisplayObjects
 	}
 
-	async init() {
-	}
+	async init() {}
 
 	/**
 	 * Registers the path for an asset name. This allows the AssetManager
@@ -72,21 +65,20 @@ export class AssetManager {
 			// Attempt to get it from the PIXI cache, in case it was loaded outside this manager.
 			// This is a fallback and the primary path should be preloading via `loadAssetAsync`.
 			try {
-				const texture = PIXI.Assets.get(assetName);
+				const texture = PIXI.Assets.get(assetName)
 				if (texture) {
-					this.assets.set(assetName, texture);
-					return texture;
+					this.assets.set(assetName, texture)
+					return texture
 				}
-			}
-			catch (e) {
+			} catch (e) {
 				// PIXI.Assets.get throws if not found
 				// This is expected if the asset is not in the cache, so we can ignore the error.
 			}
 
 			// Don't warn here, as it's a common case for the caller (like acquireSpriteRefSync) to handle the undefined case.
-			return undefined;
+			return undefined
 		}
-		return this.assets.get(assetName);
+		return this.assets.get(assetName)
 	}
 
 	/**
@@ -138,7 +130,7 @@ export class AssetManager {
 	 * @returns {PIXI.Texture | undefined} The texture if found, otherwise undefined.
 	 */
 	getAsset(assetName) {
-		return this.assets.get(assetName);
+		return this.assets.get(assetName)
 	}
 
 	// --- Managed Reference Pattern Methods ---
@@ -154,7 +146,9 @@ export class AssetManager {
 	acquireSpriteRefSync(assetName, options = {}) {
 		const texture = this.loadAsset(assetName)
 		if (!texture) {
-			console.warn(`AssetManager.acquireSpriteRefSync: Asset "${assetName}" not preloaded. Use async acquireSpriteRef instead.`)
+			console.warn(
+				`AssetManager.acquireSpriteRefSync: Asset "${assetName}" not preloaded. Use async acquireSpriteRef instead.`
+			)
 			return null
 		}
 

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Implements a highly optimized Radix Sort for 64-bit integer keys.
+ * Implements a highly optimized Radix Sort for 64-bit integer keys.
  * This version uses a "ping-pong" buffering strategy to avoid memory allocations during passes.
  */
 

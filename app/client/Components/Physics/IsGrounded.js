@@ -1,13 +1,12 @@
 /**
- * A "hot" component that tracks whether an entity is currently on the ground.
- * This is frequently checked by systems like Gravity and Jump.
+ * A component that tracks whether an entity is currently on the ground.
  */
-export class IsGrounded {
-	static schema = {
-		isGrounded: 'boolean',
-	}
-
-	constructor({ isGrounded = false } = {}) {
-		this.isGrounded = isGrounded
-	}
+export const IsGrounded = {
+	/**
+	 * True if the entity is on the ground, false otherwise.
+	 */
+	isGrounded: {
+		type: 'boolean',
+		default: false,
+	},
 }

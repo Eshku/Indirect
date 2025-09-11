@@ -1,10 +1,19 @@
-export class Scale {
-	static schema = {
-		x: 'f64',
-		y: 'f64',
-	}
-	constructor({ x = 1, y = 1 } = {}) {
-		this.x = x
-		this.y = y
-	}
+/**
+ * A component representing an entity's scale.
+ */
+export const Scale = {
+	/**
+	 * The scale factor on the x-axis.
+	 */
+	x: {
+		type: 'f64',
+		default: 1,
+	},
+	/**
+	 * The scale factor on the y-axis.
+	 */
+	y: {
+		type: 'f64',
+		default: 1,
+	},
 }

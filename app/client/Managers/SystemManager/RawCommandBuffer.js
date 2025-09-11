@@ -1,5 +1,5 @@
 /**
- * @fileoverview Manages a raw SharedArrayBuffer for serializing commands.
+ * Manages a raw SharedArrayBuffer for serializing commands.
  * This is the low-level implementation detail of the command buffer system.
  * Systems should not interact with this directly, but through the high-level CommandBuffer API.
  */
@@ -47,6 +47,16 @@ export class RawCommandBuffer {
 		this.view.setUint8(this.offset, value)
 		this.offset += 1
 	}
+
+	writeU8At(offset, value) {
+		this.view.setUint8(offset, value)
+	}
+
+	writeU16At(offset, value) {
+		this.view.setUint16(offset, value, true)
+	}
+
+
 
 	writeU16(value) {
 		//console.log(`RawBuffer: writeU16 at ${this.offset} value ${value}`);
@@ -98,72 +108,13 @@ export class RawCommandBuffer {
 	}
 
 	/**
-	 * Serializes a component's data into the buffer based on its schema.
-	 * @param {number} typeID The component's type ID.
-	 * @param {object} data The component data object.
+	 * Writes a raw ArrayBuffer's contents into this command buffer.
+	 * @param {ArrayBuffer} buffer - The buffer to write.
 	 */
-	writeComponentData(typeID, data) {
-		//console.log(`RawBuffer: writeComponentData for typeID ${typeID} at ${this.offset}. Expected size: ${this.componentManager.componentInfo[typeID].byteSize}`);
-		const info = this.componentManager.componentInfo[typeID]
-		if (!info) throw new Error(`Component info not found for typeID: ${typeID}`)
-
-		this.ensureCapacity(info.byteSize)
-
-		for (const propKey of info.propertyKeys) {
-			const propType = info.properties[propKey].type
-			const value = data[propKey] ?? 0 // Default to 0 if undefined
-			//console.log(`RawBuffer:   prop ${propKey} (${propType}) value ${value}`);
-			switch (propType) {
-				case 'f64':
-					this.writeF64(value)
-					break
-				case 'f32':
-					this.writeF32(value)
-					break
-				case 'i32':
-					this.writeI32(value)
-					break
-				case 'u32':
-					this.writeU32(value)
-					break
-				case 'i16':
-					this.writeI16(value)
-					break
-				case 'u16':
-					this.writeU16(value)
-					break
-				case 'i8':
-					this.writeI8(value)
-					break
-				case 'u8':
-					this.writeU8(value)
-					break
-				default:
-					throw new Error(`Unknown property type for serialization: ${propType}`)
-			}
-		}
-	}
-
-	/**
-	 * Serializes a map of component data in a canonical, sorted order.
-	 * @param {Map<number, object>} map
-	 */
-	writeComponentIdMap(map) {
-		//console.log('RawBuffer: --- Starting writeComponentIdMap ---');
-		//console.log('RawBuffer: Map to write:', map);
-		this.writeU16(map.size)
-		const sortedEntries = [...map.entries()].sort((a, b) => a[0] - b[0])
-		//console.log('RawBuffer: Sorted entries:', sortedEntries);
-
-		for (const [typeID, data] of sortedEntries) {
-			this.writeU16(typeID)
-
-			// Write the byteSize of the component data so the reader knows how much to skip.
-			const info = this.componentManager.componentInfo[typeID];
-			if (!info) throw new Error(`Component info not found for typeID: ${typeID}`);
-			this.writeU16(info.byteSize);
-
-			this.writeComponentData(typeID, data)
-		}
+	writeBuffer(buffer) {
+		this.ensureCapacity(buffer.byteLength)
+		// Use a Uint8Array view for an efficient block copy.
+		new Uint8Array(this.buffer).set(new Uint8Array(buffer), this.offset)
+		this.offset += buffer.byteLength
 	}
 }

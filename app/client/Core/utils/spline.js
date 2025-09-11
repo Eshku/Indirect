@@ -1,5 +1,5 @@
 /**
- * @fileoverview A collection of spline utility functions.
+ * collection of spline utility functions.
  */
 
 /**

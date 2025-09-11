@@ -1,3 +1,4 @@
-export class QueryTestToggle {
-    static schema = {}; // A tag component
-}
+/**
+ * A tag component used for testing queries.
+ */
+export const QueryTestToggle = {}

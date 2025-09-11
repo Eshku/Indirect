@@ -1,5 +1,5 @@
 /**
- * @fileoverview Manages unique groups of shared component data.
+ * Manages unique groups of shared component data.
  * This is the storage backend for the "Shared Components as Indirect References" pattern.
  */
 

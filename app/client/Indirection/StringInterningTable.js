@@ -1,18 +1,18 @@
 /**
- * @fileoverview Manages the interning of strings to save memory and enable fast comparisons.
+ * Manages the interning of strings to save memory and enable fast comparisons.
  *
- * This manager stores each unique string only once and provides a lightweight
+ * This table stores each unique string only once and provides a lightweight
  * numeric reference (a "Ref" or ID) to it. Components store this Ref instead of
  * the full string. This is highly effective for strings that are frequently
  * repeated, such as asset names, prefab IDs, or UI labels.
  *
  * ---
- * # Developer Note: Working with StringManager
+ * # Developer Note: Working with StringInterningTable
  * ---
  *
  * ## 1. Overview
  *
- * The `StringManager` is a critical engine utility designed for memory optimization
+ * The `StringInterningTable` is a critical engine utility designed for memory optimization
  * and performance. It achieves this through **string interning**: storing each
  * unique string value only once and providing a lightweight numeric reference (`ref`) to it.
  *
@@ -25,16 +25,16 @@
  * - **Performance:** Comparing two `ref`s (an integer comparison) is significantly
  *   faster than comparing two strings.
  *
- * ## 2. How to Use `StringManager`
+ * ## 2. How to Use `StringInterningTable`
  *
- * There are two primary ways to interact with the `StringManager`, each with its
+ * There are two primary ways to interact with the `StringInterningTable`, each with its
  * own trade-offs.
  *
  * ### Method 1: Safe API (`.get()`)
  * This is the simplest and safest method for retrieving a string.
  * ```javascript
  * const nameRef = someComponent.nameRef; // e.g., 123
- * const characterName = stringManager.get(nameRef); // Returns 'Gandalf'
+ * const characterName = stringInterningTable.get(nameRef); // Returns 'Gandalf'
  * ```
  * - **Pros:** Simple, clear, and safe.
  * - **Cons:** Incurs function call overhead.
@@ -47,7 +47,7 @@
  * per-entity method call overhead.
  * ```javascript
  * // Inside a high-frequency system update
- * const storage = stringManager.storage; // Cache the array reference once per update
+ * const storage = stringInterningTable.storage; // Cache the array reference once per update
  *
  * for (const entity of entities) {
  *     const nameRef = entity.nameComponent.ref;
@@ -61,11 +61,11 @@
  *
  * ## 3. The Golden Rule of Direct Access
  *
- * When using `stringManager.storage`, you must adhere to one critical rule:
+ * When using `stringInterningTable.storage`, you must adhere to one critical rule:
  *
- * > **Treat `stringManager.storage` as a READ-ONLY array.**
+ * > **Treat `stringInterningTable.storage` as a READ-ONLY array.**
  *
- * Only the `stringManager.intern()` method should ever write to this array.
+ * Only the `stringInterningTable.intern()` method should ever write to this array.
  * Writing to it from any other system will corrupt the manager's internal state
  * and lead to unpredictable, hard-to-debug issues.
  *
@@ -92,7 +92,7 @@
  * it responsibly.
  *
  */
-export class StringManager {
+export class StringInterningTable {
 	constructor() {
 		/**
 		 * @private
@@ -120,6 +120,9 @@ export class StringManager {
 	}
 
 	intern(str) {
+		if (str === null || str === undefined) {
+			str = ''
+		}
 		if (this.stringToRef.has(str)) {
 			return this.stringToRef.get(str)
 		}
@@ -133,3 +136,5 @@ export class StringManager {
 		return this.refToString[ref]
 	}
 }
+
+export const stringInterningTable = new StringInterningTable()

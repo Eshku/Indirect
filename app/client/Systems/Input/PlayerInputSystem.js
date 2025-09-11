@@ -6,8 +6,6 @@ const { queryManager, componentManager, uiManager } = theManager.getManagers()
 
 const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
 
-const { PlayerTag, MovementIntent, Jump, ActionIntent, ActiveSet } = componentManager.getComponents()
-
 /**
  * Handles all player inputs, both continuous (e.g., movement) and instant (e.g., hotbar selection).
  * This system acts as a bridge between the low-level `eventEmitter` and the ECS world.
@@ -15,14 +13,16 @@ const { PlayerTag, MovementIntent, Jump, ActionIntent, ActiveSet } = componentMa
  */
 export class PlayerInputSystem {
 	constructor() {
+		const { PlayerTag, MovementIntent, Jump, ActionIntent, ActiveSet } = componentManager.getTypeIDs()
+
 		this.playerQuery = queryManager.getQuery({
 			with: [PlayerTag, MovementIntent, Jump, ActionIntent, ActiveSet],
 		})
 
-		this.movementIntentTypeID = componentManager.getComponentTypeID(MovementIntent)
-		this.jumpTypeID = componentManager.getComponentTypeID(Jump)
-		this.actionIntentTypeID = componentManager.getComponentTypeID(ActionIntent)
-		this.activeSetTypeID = componentManager.getComponentTypeID(ActiveSet)
+		this.movementIntentTypeID = MovementIntent
+		this.jumpTypeID = Jump
+		this.actionIntentTypeID = ActionIntent
+		this.activeSetTypeID = ActiveSet
 
 		this.inputState = {
 			moveLeft: false,

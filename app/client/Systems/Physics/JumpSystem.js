@@ -1,19 +1,19 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager } = theManager.getManagers()
 
-const { Position, Velocity, PlayerTag, Jump, IsGrounded } = componentManager.getComponents()
-
 
 export class JumpSystem {
 	constructor() {
+		const { PlayerTag, Position, Velocity, Jump, IsGrounded } = componentManager.getTypeIDs()
+
 		this.query = queryManager.getQuery({
 			with: [PlayerTag, Position, Velocity, Jump, IsGrounded],
 		})
 
-		this.positionTypeID = componentManager.getComponentTypeID(Position)
-		this.velocityTypeID = componentManager.getComponentTypeID(Velocity)
-		this.jumpTypeID = componentManager.getComponentTypeID(Jump)
-		this.isGroundedTypeID = componentManager.getComponentTypeID(IsGrounded)
+		this.positionTypeID = Position
+		this.velocityTypeID = Velocity
+		this.jumpTypeID = Jump
+		this.isGroundedTypeID = IsGrounded
 	}
 
 	init() {}

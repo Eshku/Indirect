@@ -1,5 +1,5 @@
 /**
- * @fileoverview Manages the lifecycle and location of all entities in the game world.
+ * Manages the lifecycle and location of all entities in the game world.
  *
  * ---
  *
@@ -61,33 +61,7 @@ export class EntityManager {
 		return entityID
 	}
 
-    createEntityInArchetype(archetypeId, componentIdMap) {
-        const entityID = this._createEntityID();
-        this.entityArchetype[entityID] = archetypeId;
-        this.archetypeManager._addEntity(archetypeId, entityID, componentIdMap, this.systemManager.currentTick);
-        return entityID;
-    }
-
-	createEntitiesInArchetype(archetype, componentsDataMaps) {
-		if (archetype === undefined || !Array.isArray(componentsDataMaps) || componentsDataMaps.length === 0) {
-			return []
-		}
-
-		const entityIDs = []
-		for (let i = 0; i < componentsDataMaps.length; i++) {
-			entityIDs.push(this._createEntityID())
-		}
-
-		this.archetypeManager._addEntitiesBatch(archetype, entityIDs, componentsDataMaps, this.systemManager.currentTick)
-
-		for (const entityID of entityIDs) {
-			this.entityArchetype[entityID] = archetype
-		}
-
-		return entityIDs
-	}
-
-	createIdenticalEntitiesInArchetype(archetypeId, componentIdMap, count) {
+	createIdenticalEntitiesInArchetype(archetypeId, payload, count) {
 		if (archetypeId === undefined || count <= 0) {
 			return []
 		}
@@ -97,7 +71,7 @@ export class EntityManager {
 			entityIDs.push(this._createEntityID())
 		}
 
-		this.archetypeManager._addIdenticalEntitiesBatch(archetypeId, entityIDs, componentIdMap, this.systemManager.currentTick)
+		this.archetypeManager._addIdenticalEntitiesBatch(archetypeId, entityIDs, payload, this.systemManager.currentTick)
 
 		for (const entityID of entityIDs) {
 			this.entityArchetype[entityID] = archetypeId
@@ -106,54 +80,19 @@ export class EntityManager {
 		return entityIDs
 	}
 
-	setComponentData(entityID, componentTypeID, componentData) {
-		if (!this.isEntityActive(entityID) || componentTypeID === undefined) return false
-
-		const archetype = this.entityArchetype[entityID]
-		if (archetype === undefined || !this.archetypeManager.hasComponentType(archetype, componentTypeID)) {
-			return false
+	/**
+	 * Creates a single entity from pre-unpacked SoA data.
+	 * This is the direct-execution path for the new SoA-based `createEntity` command.
+	 * @param {number} archetypeId The target archetype for the entity.
+	 * @param {Map<number, {soaIndex: number}>} componentsToAssign A map of componentTypeID to its SoA index.
+	 */
+	createEntityFromSoA(archetypeId, componentsToAssign) {
+		if (archetypeId === undefined) {
+			return
 		}
-
-		this.archetypeManager._setEntitiesComponents(
-			archetype,
-			[{ entityId: entityID, componentsToUpdate: new Map([[componentTypeID, componentData]]) }],
-			this.systemManager.currentTick
-		)
-		return true
-	}
-
-	addComponent(entityID, componentTypeID, componentData) {
-		if (!this.isEntityActive(entityID) || componentTypeID === undefined) return false
-
-		const currentArchetype = this.entityArchetype[entityID]
-		if (currentArchetype === undefined) {
-			const newArchetype = this.archetypeManager.getArchetype([componentTypeID])
-			this.entityArchetype[entityID] = newArchetype
-			this.archetypeManager._addEntity(newArchetype, entityID, new Map([[componentTypeID, componentData]]), this.systemManager.currentTick)
-			return true
-		}
-
-		if (this.archetypeManager.hasComponentType(currentArchetype, componentTypeID)) {
-			return false
-		}
-
-		this._moveEntityToNewArchetype(entityID, currentArchetype, componentTypeID, componentData, true)
-		return true
-	}
-
-	removeComponent(entityID, componentTypeID) {
-		if (!this.isEntityActive(entityID) || componentTypeID === undefined) return false
-
-		const currentArchetype = this.entityArchetype[entityID]
-		if (
-			currentArchetype === undefined ||
-			!this.archetypeManager.hasComponentType(currentArchetype, componentTypeID)
-		) {
-			return false
-		}
-
-		this._moveEntityToNewArchetype(entityID, currentArchetype, componentTypeID, null, false)
-		return true
+		const entityID = this._createEntityID()
+		this.entityArchetype[entityID] = archetypeId
+		this.archetypeManager._addEntityFromSoA(archetypeId, entityID, componentsToAssign, this.systemManager.currentTick)
 	}
 
 	hasComponent(entityID, componentTypeID) {
@@ -181,30 +120,59 @@ export class EntityManager {
 	}
 
 	destroyEntitiesInBatch(entityIDs) {
-		if (!entityIDs || entityIDs.size === 0) {
-			return true
-		}
+		if (!entityIDs || entityIDs.size === 0) return true
 
 		const entitiesByArchetype = new Map()
 
 		for (const entityId of entityIDs) {
+			// Use activeEntities.delete() as it returns true if the element was present
 			if (this.activeEntities.delete(entityId)) {
 				this.freeIDs.push(entityId)
 				const archetype = this.entityArchetype[entityId]
 				if (archetype !== undefined) {
-					if (!entitiesByArchetype.has(archetype)) {
-						entitiesByArchetype.set(archetype, [])
-					}
+					if (!entitiesByArchetype.has(archetype)) entitiesByArchetype.set(archetype, [])
 					entitiesByArchetype.get(archetype).push(entityId)
 				}
+				// Important: Nullify the entity's archetype link
 				this.entityArchetype[entityId] = undefined
 			}
 		}
 
+		// Now, tell the ArchetypeManager to perform the batched removals.
 		for (const [archetype, ids] of entitiesByArchetype.entries()) {
 			this.archetypeManager._removeEntitiesBatch(archetype, ids)
 		}
 		return true
+	}
+
+	/**
+	 * Destroys all entities matching a given query.
+	 * This is the direct-execution path for the CommandBufferExecutor.
+	 * @param {import('../QueryManager/Query.js').Query} query
+	 */
+	destroyEntitiesInQuery(query) {
+		const chunksToDestroy = []
+		for (const archetypeId of query.matchingArchetypeIds) {
+			const chunks = this.archetypeManager.archetypeChunks[archetypeId]
+			if (chunks) {
+				chunksToDestroy.push(...chunks)
+			}
+		}
+		this.destroyEntitiesInChunks(chunksToDestroy)
+	}
+
+	destroyEntitiesInChunks(chunks) {
+		for (const chunk of chunks) {
+			if (chunk.size === 0) continue
+
+			for (let i = 0; i < chunk.size; i++) {
+				const entityId = chunk.entities[i]
+				this.activeEntities.delete(entityId)
+				this.freeIDs.push(entityId)
+				this.entityArchetype[entityId] = undefined
+			}
+			this.archetypeManager._removeEntitiesBatch(chunk.archetype, chunk.entities.subarray(0, chunk.size))
+		}
 	}
 
 	destroyAllEntities() {
@@ -238,28 +206,6 @@ export class EntityManager {
 			this.entityArchetype.length = entityID + 1
 		}
 		return entityID
-	}
-
-	_moveEntityToNewArchetype(entityID, currentArchetype, componentTypeID, data, isAdd) {
-		const transitions = this.archetypeManager.archetypeTransitions[currentArchetype]
-		const cacheKey = isAdd ? 'add' : 'remove'
-
-		let targetArchetype = transitions[cacheKey][componentTypeID]
-
-		if (targetArchetype === undefined) {
-			const currentComponentTypeIDs = this.archetypeManager.archetypeComponentTypeIDs[currentArchetype]
-			const newTypeIDs = isAdd
-				? [...currentComponentTypeIDs, componentTypeID]
-				: [...currentComponentTypeIDs].filter(id => id !== componentTypeID)
-			targetArchetype = this.archetypeManager.getArchetype(newTypeIDs)
-			transitions[cacheKey][componentTypeID] = targetArchetype
-		}
-
-		// This is a single-entity move, so we can use the batched move logic with a batch of 1.
-		const componentsToAssign = isAdd ? new Map([[componentTypeID, data]]) : new Map()
-		const moveMap = new Map([[currentArchetype, new Map([[targetArchetype, { entityIds: [entityID], componentsToAssignArrays: [componentsToAssign] }]])]])
-		this.archetypeManager.moveEntitiesInBatch(moveMap)
-		this.entityArchetype[entityID] = targetArchetype
 	}
 }
 

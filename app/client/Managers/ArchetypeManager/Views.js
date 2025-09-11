@@ -2,7 +2,7 @@
 
 
 /**
- * @fileoverview Defines reusable "view" objects for accessing component data.
+ *  Defines reusable "view" objects for accessing component data.
  *
  * ### Architectural Note: The "Friendly Path" API & Schema Design
  *
@@ -38,9 +38,8 @@
  *
  * - **`{ type: 'string'}`**:
  *   - **Use Case**: For string data that is likely to be repeated across many entities (e.g., prefab names, character names). The engine interns these strings to save significant memory.
- *   - **API**: `entity.prefabId.id.equals('some-id')`, `entity.prefabId.id.toString()`.
  *
- *
+ *!! Examples are outdated
  * #### Performance Trade-off: Friendly vs. Fast Path
  *
  * Using views introduces overhead compared to direct memory access.
@@ -52,6 +51,8 @@
  * For performance-critical "hot loop" systems, prefer the "Fast Path" of direct `TypedArray` access
  * as documented in `Accessors.js` and `ModernECS.md`.
  */
+
+const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
 
 /**
  * A generic, reusable "smart view" for components that represent a pure flattened array.
@@ -385,8 +386,7 @@ export class FixedStringView {
  * It provides string-like comparison methods without allocating a new JS string.
  */
 export class InternedStringView {
-	constructor(stringManager, refArray) {
-		this._stringManager = stringManager
+	constructor(refArray) {
 		this._refArray = refArray
 		this._index = -1
 		this._cachedString = null
@@ -442,11 +442,11 @@ export class InternedStringView {
 	 * @returns {string}
 	 */
 	toString() {
-		// The native string is retrieved directly from the StringManager.
+		// The native string is retrieved directly from the String Interning Table.
 		// This is much faster than decoding bytes.
 		if (this._cachedString === null) {
 			const ref = this._refArray[this._index]
-			this._cachedString = this._stringManager.get(ref)
+			this._cachedString = stringInterningTable.get(ref)
 		}
 		return this._cachedString
 	}
@@ -668,10 +668,9 @@ export class ReadOnlySoAComponentView {
  * without allocating a new object for each access.
  */
 export class SoAComponentView {
-	constructor(info, propArrays = {}, stringManager) {
+	constructor(info, propArrays = {}) {
 		this._info = info
 		this._propArrays = propArrays
-		this._stringManager = stringManager
 		this._index = -1
 		this._internedStringViews = {} // Cache for interned string views
 		this._flattenedArrayViews = {} // Cache for flattened array views
@@ -686,7 +685,7 @@ export class SoAComponentView {
 
 				// Create a single, reusable InternedStringView for this property
 				if (!this._internedStringViews[propName]) {
-					this._internedStringViews[propName] = new InternedStringView(this._stringManager, this._propArrays[refKey])
+					this._internedStringViews[propName] = new InternedStringView(this._propArrays[refKey])
 				}
 
 				// Define a getter that returns the *reusable view* for the interned string property
@@ -703,7 +702,7 @@ export class SoAComponentView {
 							console.error(`Attempted to set non-string value to interned string property '${propName}'`)
 							return
 						}
-						const ref = this._stringManager.intern(value)
+						const ref = stringInterningTable.intern(value)
 						this._propArrays[refKey][this._index] = ref
 					},
 					enumerable: true,

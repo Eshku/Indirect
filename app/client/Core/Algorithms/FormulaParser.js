@@ -1,5 +1,5 @@
 /**
- * @fileoverview Implements a formula parser using the Shunting-yard algorithm.
+ * Implements a formula parser using the Shunting-yard algorithm.
  * This utility compiles human-readable mathematical formulas into an efficient
  * Reverse Polish Notation (RPN) array of opcodes and operands for fast runtime evaluation.
  */

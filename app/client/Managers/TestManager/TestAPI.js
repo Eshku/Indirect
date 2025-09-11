@@ -2,7 +2,7 @@ import { testManager } from './TestManager.js'
 import { AssertionError } from './TestErrors.js'
 
 /**
- * @fileoverview Provides a BDD-style (Behavior-Driven Development) testing API
+ * Provides a BDD-style (Behavior-Driven Development) testing API
  * for defining test suites and individual test cases. This module exports
  * `describe`, `it`, and `expect` functions, similar to popular testing frameworks.
  */

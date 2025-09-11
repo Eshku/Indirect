@@ -1,17 +1,13 @@
 /**
- * A "hot" component that manages the directional collision state of an entity.
- * This is set by the CollisionSystem and can be read by other physics systems
- * like those for wall-jumps or sliding.
+ * A component that manages the directional collision state of an entity using a bitmask.
  */
-export class CollisionFlags {
-	static schema = {
-		collisionFlags: {
-			type: 'bitmask',
-			of: ['NONE', 'TOP', 'BOTTOM', 'LEFT', 'RIGHT'],
-		},
-	}
-
-	constructor({ collisionFlags = CollisionFlags.COLLISIONFLAGS.NONE } = {}) {
-		this.collisionFlags = collisionFlags
-	}
+export const CollisionFlags = {
+	/**
+	 * A bitmask representing the collision state (e.g., TOP, BOTTOM, LEFT, RIGHT).
+	 */
+	collisionFlags: {
+		type: 'bitmask',
+		of: ['NONE', 'TOP', 'BOTTOM', 'LEFT', 'RIGHT'],
+		default: ['NONE'],
+	},
 }

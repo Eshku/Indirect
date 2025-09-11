@@ -1,11 +1,9 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { Entity } = await import(`${PATH_MANAGERS}/EntityManager/Entity.js`)
-const { componentInterpreter } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
 
 const { entityManager, componentManager, prefabManager, sharedGroupManager } = theManager.getManagers()
 
 export const ECS = {
-
 	// --- Immediate-Mode Public API ---
 	// These methods provide a clean, high-level interface for interacting with the ECS
 	// from outside of a system's update loop (e.g., for setup, one-off events, or testing).
@@ -76,7 +74,7 @@ export const ECS = {
 		if (Object.keys(componentsInput).length === 0) {
 			return entityManager.createEntity()
 		}
-		const componentIdMap = componentManager.createIdMapFromData(componentsInput);
+		const componentIdMap = componentManager.createIdMapFromData(componentsInput)
 		return entityManager.createEntityWithComponentsByIds(componentIdMap)
 	},
 
@@ -91,19 +89,19 @@ export const ECS = {
 
 	/**
 	 * Instantiates an entity from a prefab immediately.
-	 * @param {string} prefabId The ID of the prefab.
+	 * @param {string} prefabName The name of the prefab.
 	 * @param {object} [overrides={}] Component data to override prefab defaults.
 	 * @returns {number|undefined} The new root entity's ID.
 	 */
-	instantiate(prefabId, overrides = {}, { parentId = null, ownerId = null } = {}) {
-		const prefabData = prefabManager.getPrefabData(prefabId)
+	instantiate(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
+		const prefabData = prefabManager.getPrefabData(prefabName)
 		if (!prefabData) {
 			console.error(
-				`ECS: Failed to sync-instantiate entity. Prefab '${prefabId}' is not pre-loaded or registered in the manifest.`
+				`ECS: Failed to sync-instantiate entity. Prefab '${prefabName}' is not pre-loaded or registered in the manifest.`
 			)
 			return undefined
 		}
-		return this._instantiateChildRecursive(prefabData, { rootPrefabName: prefabId, overrides, parentId, ownerId });
+		return this._instantiateChildRecursive(prefabData, { rootPrefabName: prefabName, overrides, parentId, ownerId })
 	},
 
 	/**
@@ -118,14 +116,14 @@ export const ECS = {
 	/**
 	 * Adds a component to an entity immediately.
 	 * @param {number} entityId The entity ID.
-	 * @param {Function} ComponentClass The component class.
+	 * @param {string} componentName The component's string name.
 	 * @param {object} [data] The component's initial data.
 	 * @returns {boolean} True on success.
 	 */
-	addComponent(entityId, ComponentClass, data) {
-		const componentTypeId = componentManager.getComponentTypeID(ComponentClass)
+	addComponent(entityId, componentName, data) {
+		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
 		if (componentTypeId === undefined) {
-			console.warn(`ECS.addComponent: Component "${ComponentClass.name}" not registered.`)
+			console.warn(`ECS.addComponent: Component "${componentName}" not registered.`)
 			return false
 		}
 		return entityManager.addComponent(entityId, componentTypeId, data)
@@ -134,11 +132,11 @@ export const ECS = {
 	/**
 	 * Removes a component from an entity immediately.
 	 * @param {number} entityId The entity ID.
-	 * @param {Function} ComponentClass The component class.
+	 * @param {string} componentName The component's string name.
 	 * @returns {boolean} True on success.
 	 */
-	removeComponent(entityId, ComponentClass) {
-		const componentTypeId = componentManager.getComponentTypeID(ComponentClass)
+	removeComponent(entityId, componentName) {
+		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
 		if (componentTypeId === undefined) {
 			// No need to warn, the component isn't even registered in the system.
 			return false
@@ -149,11 +147,11 @@ export const ECS = {
 	/**
 	 * Gets a component's data from an entity.
 	 * @param {number} entityId The entity ID.
-	 * @param {Function} ComponentClass The component class.
+	 * @param {string} componentName The component's string name.
 	 * @returns {object|undefined} The component data instance.
 	 */
-	getComponent(entityId, ComponentClass) {
-		const componentTypeId = componentManager.getComponentTypeID(ComponentClass)
+	getComponent(entityId, componentName) {
+		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
 		if (componentTypeId === undefined) {
 			// Component isn't registered, so no entity can have it.
 			return undefined
@@ -163,14 +161,18 @@ export const ECS = {
 			return undefined
 		}
 
-		const perEntityData = componentInterpreter.read(entityId, componentTypeId, archetype)
+		const perEntityData = componentManager.reconstructComponentData(entityId, componentTypeId)
 
 		// Check for and merge shared data
 		if (perEntityData && perEntityData.hasOwnProperty('groupId')) {
 			const groupId = perEntityData.groupId
 			const sharedGroup = sharedGroupManager.groups[groupId]
-			const sharedComponentData = sharedGroup ? sharedGroup[componentTypeId] : null
-			return { ...perEntityData, ...sharedComponentData }
+			const rawSharedComponentData = sharedGroup ? sharedGroup[componentTypeId] : null
+
+			if (rawSharedComponentData) {
+				const reconstructedSharedData = componentManager.reconstructSharedData(componentTypeId, rawSharedComponentData)
+				return { ...perEntityData, ...reconstructedSharedData }
+			}
 		}
 
 		return perEntityData
@@ -179,11 +181,11 @@ export const ECS = {
 	/**
 	 * Checks if an entity has a component.
 	 * @param {number} entityId The entity ID.
-	 * @param {Function} ComponentClass The component class.
+	 * @param {string} componentName The component's string name.
 	 * @returns {boolean}
 	 */
-	hasComponent(entityId, ComponentClass) {
-		const componentTypeId = componentManager.getComponentTypeID(ComponentClass)
+	hasComponent(entityId, componentName) {
+		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
 		if (componentTypeId === undefined) {
 			return false
 		}
@@ -202,11 +204,10 @@ export const ECS = {
 			for (const compName in overrides) {
 				componentData[compName] = { ...(componentData[compName] || {}), ...overrides[compName] }
 			}
-			componentData.PrefabId = { id: rootPrefabName }
 		}
 
-		if (parentId) componentData.Parent = { entityId: parentId };
-		if (ownerId) componentData.Owner = { entityId: ownerId };
+		if (parentId) componentData.Parent = { entityId: parentId }
+		if (ownerId) componentData.Owner = { entityId: ownerId }
 
 		const entityId = this.createEntity(componentData)
 		if (entityId === undefined) return undefined

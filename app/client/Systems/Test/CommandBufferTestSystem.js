@@ -1,10 +1,10 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { componentManager, entityManager, queryManager, prefabManager, archetypeManager, systemManager } =
 	theManager.getManagers()
+const { ECS } = await import(`${PATH_CORE}/ECS/ECS.js`)
 const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManager/TestAPI.js`)
+const { payloadCompiler } = await import(`${PATH_CLIENT}/Managers/SystemManager/PayloadCompiler.js`)
 const { testManager } = await import(`${PATH_CLIENT}/Managers/TestManager/TestManager.js`)
-
-const { componentInterpreter } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
 
 /**
  * A simple configuration object to enable or disable specific command buffer tests.
@@ -17,7 +17,6 @@ const testConfig = {
 	runRemoveComponentTest: true,
 	runSetComponentDataTest: true,
 	runInstantiateTest: true,
-	runCreateInArchetypeTest: true,
 	runCreateEntitiesTest: true,
 	runQueryBasedModificationTest: true,
 }
@@ -30,24 +29,21 @@ export class CommandBufferTestSystem {
 	constructor() {
 		this.systemManager = systemManager
 
-		// Get component classes and TypeIDs for testing
-		const { Position, Velocity, TestEntityTag } = componentManager.getComponents()
-		this.Position = Position
-		this.Velocity = Velocity
-		this.TestEntityTag = TestEntityTag
-		this.PositionTypeID = componentManager.getComponentTypeID(this.Position)
-		this.VelocityTypeID = componentManager.getComponentTypeID(this.Velocity)
-		this.TestEntityTagTypeID = componentManager.getComponentTypeID(this.TestEntityTag)
+		const { Position, Velocity, TestEntityTag } = componentManager.getTypeIDs()
+
+		this.PositionTypeID = Position
+		this.VelocityTypeID = Velocity
+		this.TestEntityTagTypeID = TestEntityTag
 
 		// Create queries for verification steps.
 		// All queries now require the TestEntityTag to ensure they only match test entities.
 		this.creationQuery = queryManager.getQuery({
-			with: [this.Position, this.TestEntityTag],
-			without: [this.Velocity],
+			with: [Position, TestEntityTag],
+			without: [Velocity],
 		})
 
 		this.instantiateQuery = queryManager.getQuery({
-			with: [this.Position, this.Velocity, this.TestEntityTag],
+			with: [Position, Velocity, TestEntityTag],
 		})
 	}
 
@@ -63,26 +59,21 @@ export class CommandBufferTestSystem {
 			// --- Test 1: createEntity ---
 			if (testConfig.runCreateEntityTest) {
 				it('should create an entity with components via createEntity', () => {
-					const components = new Map()
-					components.set(this.PositionTypeID, { x: 10, y: 20 })
-					components.set(this.TestEntityTagTypeID, {}) // Add the isolation tag
-					this.commands.createEntity(components)
+					this.commands.createEntity({
+						Position: { x: 10, y: 20 },
+						TestEntityTag: {},
+					})
 					flush()
 
 					let createdEntity
-					let createdEntityArchetype
 					for (const chunk of this.creationQuery.iter()) {
-						if (chunk.size > 0) {
-							createdEntity = chunk.entities[0]
-							createdEntityArchetype = chunk.archetype
-							break
-						}
+						createdEntity = chunk.entities[0]
+						break
 					}
 
 					expect(createdEntity).not.toBe(undefined)
 
-					// Verify the component data was written correctly.
-					const pos = componentInterpreter.read(createdEntity, this.PositionTypeID, createdEntityArchetype)
+					const pos = ECS.getComponent(createdEntity, 'Position')
 					expect(pos).toEqual({ x: 10, y: 20 })
 
 					this.commands.destroyEntity(createdEntity)
@@ -103,18 +94,19 @@ export class CommandBufferTestSystem {
 			// --- Test 3: addComponent ---
 			if (testConfig.runAddComponentTest) {
 				it('should add a component to an entity via addComponent', () => {
-					const entity = entityManager.createEntityWithComponentsByIds(new Map([[this.PositionTypeID, { x: 1, y: 1 }]]))
-					this.commands.addComponent(entity, this.TestEntityTagTypeID, {}) // Add tag for safety, though not strictly needed here
+					const entity = entityManager.createEntityWithComponentsByIds(
+						new Map([
+							[this.PositionTypeID, { x: 1, y: 1 }],
+							[this.TestEntityTagTypeID, {}], // Add the tag for isolation
+						])
+					)
+
 					this.commands.addComponent(entity, this.VelocityTypeID, { x: 5, y: 5 })
 					flush()
 					expect(entityManager.hasComponent(entity, this.VelocityTypeID)).toBe(true)
 
 					// Verify the component data was written correctly.
-					const vel = componentInterpreter.read(
-						entity,
-						this.VelocityTypeID,
-						entityManager.getArchetypeForEntity(entity)
-					)
+					const vel = ECS.getComponent(entity, 'Velocity')
 					expect(vel).toEqual({ x: 5, y: 5 })
 					this.commands.destroyEntity(entity)
 					flush()
@@ -151,11 +143,7 @@ export class CommandBufferTestSystem {
 					)
 					this.commands.setComponentData(entity, this.PositionTypeID, { x: 999, y: -999 })
 					flush()
-					const pos = componentInterpreter.read(
-						entity,
-						this.PositionTypeID,
-						entityManager.getArchetypeForEntity(entity)
-					)
+					const pos = ECS.getComponent(entity, 'Position')
 					expect(pos).toEqual({ x: 999, y: -999 })
 					this.commands.destroyEntity(entity)
 					flush()
@@ -172,16 +160,14 @@ export class CommandBufferTestSystem {
 						)
 						return
 					}
-					const overrides = new Map()
-					overrides.set(this.PositionTypeID, { x: 123, y: 456 })
-					// The TestEntityTag is now in the prefab itself, so no override is needed.
+					const overrides = { Position: { x: 123, y: 456 } }
 					this.commands.instantiate('test_prefab', overrides)
 					flush()
 
 					let instantiatedEntity
 					for (const chunk of this.instantiateQuery.iter()) {
 						for (let i = 0; i < chunk.size; i++) {
-							const pos = componentInterpreter.read(chunk.entities[i], this.PositionTypeID, chunk.archetype)
+							const pos = ECS.getComponent(chunk.entities[i], 'Position')
 							if (pos.x === 123 && pos.y === 456) {
 								instantiatedEntity = chunk.entities[i]
 								break
@@ -195,55 +181,22 @@ export class CommandBufferTestSystem {
 				})
 			}
 
-			// --- Test 7: createEntityInArchetype ---
-			if (testConfig.runCreateInArchetypeTest) {
-				it('should create an entity in a known archetype', () => {
-					const targetArchetypeId = archetypeManager.getArchetype([
-						this.PositionTypeID,
-						this.VelocityTypeID,
-						this.TestEntityTagTypeID,
-					])
-					const initialData = new Map([
-						[this.PositionTypeID, { x: 111, y: 222 }],
-						[this.VelocityTypeID, { x: 333, y: 444 }],
-					])
-					this.commands.createEntityInArchetype(targetArchetypeId, initialData)
-					flush()
-
-					let foundEntity
-					let foundEntityArchetype
-					for (const chunk of this.instantiateQuery.iter()) {
-						if (chunk.archetype === targetArchetypeId) {
-							foundEntity = chunk.entities[0]
-							foundEntityArchetype = chunk.archetype
-							break
-						}
-					}
-					expect(foundEntity).not.toBe(undefined)
-
-					// Verify the component data was written correctly.
-					const pos = componentInterpreter.read(foundEntity, this.PositionTypeID, foundEntityArchetype)
-					expect(pos).toEqual({ x: 111, y: 222 })
-
-					this.commands.destroyEntity(foundEntity)
-					flush()
-				})
-			}
-
 			// --- Test 8 & 9: Batch and Query-Based Modifications (Isolated) ---
 			if (testConfig.runCreateEntitiesTest && testConfig.runQueryBasedModificationTest) {
 				it('creation and all query-based modifications (add, set, remove, destroy)', () => {
-					const { QueryTestTag, QueryTestToggle } = componentManager.getComponents()
-					if (!QueryTestTag || !QueryTestToggle) throw new Error('Test components not found')
+					const { QueryTestTag: QueryTestTagTypeID, QueryTestToggle: ComponentToToggleTypeID } =
+						componentManager.getTypeIDs()
 
-					const QueryTestTagTypeID = componentManager.getComponentTypeID(QueryTestTag)
-					const ComponentToToggleTypeID = componentManager.getComponentTypeID(QueryTestToggle)
+					// --- COMPILE PAYLOADS ONCE ---
+					const creationPayload = payloadCompiler.compileCreationPayloadFromObject({
+						QueryTestTag: { value: 1 },
+					})
 
-					const addQuery = queryManager.getQuery({ with: [QueryTestTag], without: [QueryTestToggle] })
-					const removeQuery = queryManager.getQuery({ with: [QueryTestTag, QueryTestToggle] })
+					const addQuery = queryManager.getQuery({ with: [QueryTestTagTypeID], without: [ComponentToToggleTypeID] })
+					const removeQuery = queryManager.getQuery({ with: [QueryTestTagTypeID, ComponentToToggleTypeID] })
 
 					// CREATE
-					this.commands.createEntities(new Map([[QueryTestTagTypeID, { value: 1 }]]), 10)
+					this.commands.createEntities(creationPayload, 10)
 					flush()
 					expect(addQuery.iter().next().value?.size).toBe(10)
 
@@ -255,11 +208,7 @@ export class CommandBufferTestSystem {
 					// SET
 					this.commands.setComponentDataOnQuery(removeQuery, QueryTestTagTypeID, { value: 777 })
 					flush()
-					const data = componentInterpreter.read(
-						removeQuery.iter().next().value.entities[0],
-						QueryTestTagTypeID,
-						removeQuery.iter().next().value.archetype
-					)
+					const data = ECS.getComponent(removeQuery.iter().next().value.entities[0], 'QueryTestTag')
 					expect(data.value).toBe(777)
 
 					// REMOVE
@@ -277,13 +226,5 @@ export class CommandBufferTestSystem {
 
 		// Run all the defined tests.
 		testManager.runAllTests()
-	}
-
-	/**
-	 * The main update loop is now empty, as all tests run once during initialization.
-	 */
-	update() {
-		// This system now runs entirely within its init() method.
-		// The update loop is intentionally left empty.
 	}
 }

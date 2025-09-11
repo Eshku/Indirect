@@ -1,5 +1,5 @@
 /**
- * @fileoverview Manages the sorting keys and offsets for the command buffer.
+ * Manages the sorting keys and offsets for the command buffer.
  */
 
 import { radixSort } from '../../Core/Algorithms/RadixSorter.js';
