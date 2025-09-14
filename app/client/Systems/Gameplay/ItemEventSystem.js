@@ -12,14 +12,10 @@ const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupMan
  */
 export class ItemEventSystem {
 	constructor() {
-		const { ActionIntent, ActiveSet, Prefab, Cooldown } = componentManager.getTypeIDs()
+		const { actionIntent, activeSet, prefab, cooldown } = componentManager.getTypeIDs()
+		Object.assign(this, { actionIntent, activeSet, prefab, cooldown })
 
-		this.actorsQuery = queryManager.getQuery({ with: [ActionIntent, ActiveSet], react: [ActionIntent] })
-
-		this.actionIntentTypeID = ActionIntent
-		this.activeSetTypeID = ActiveSet
-		this.prefabIdTypeID = Prefab
-		this.cooldownTypeID = Cooldown
+		this.actorsQuery = queryManager.getQuery({ with: [actionIntent, activeSet], react: [actionIntent] })
 
 		this.archetypeManager = archetypeManager
 		this.cooldownManager = cooldownManager
@@ -32,9 +28,9 @@ export class ItemEventSystem {
 
 	update(deltaTime, currentTick) {
 		for (const chunk of this.actorsQuery.iter()) {
-			const actionIntents = chunk.componentArrays[this.actionIntentTypeID]
-			const activeSets = chunk.componentArrays[this.activeSetTypeID]
-			const actionIntentMarker = chunk.getDirtyMarker(this.actionIntentTypeID, currentTick)
+			const actionIntents = chunk.componentArrays[this.actionIntent]
+			const activeSets = chunk.componentArrays[this.activeSet]
+			const actionIntentMarker = chunk.getDirtyMarker(this.actionIntent, currentTick)
 
 			const intents = actionIntents.actionIntent
 			const activeIndices = activeSets.activeSlotIndex
@@ -71,9 +67,9 @@ export class ItemEventSystem {
 				if (!itemLocation) continue
 
 				const { chunk: itemChunk, indexInChunk: itemIndexInChunk } = itemLocation
-
+				
 				// Get PrefabId first, as it's needed for logging and cooldowns.
-				const prefabIdArrays = itemChunk.componentArrays[this.prefabIdTypeID]
+				const prefabIdArrays = itemChunk.componentArrays[this.prefab]
 				if (!prefabIdArrays) {
 					console.warn(`ItemEventSystem: Item ${itemEntityId} is missing a Prefab component. Cannot process action.`)
 					continue
@@ -82,7 +78,7 @@ export class ItemEventSystem {
 				// The Prefab.id is now a shared property. We must look it up via the sharedGroupId.
 				const prefabSharedGroupId = prefabIdArrays.sharedGroupId[itemIndexInChunk]
 				const sharedGroup = this.propertyGroupManager.sharedGroups[prefabSharedGroupId]
-				const sharedPrefabData = sharedGroup?.[this.prefabIdTypeID]
+				const sharedPrefabData = sharedGroup?.[this.prefab]
 				const itemPrefabId = sharedPrefabData?.id
 
 				if (itemPrefabId === undefined) {
@@ -90,14 +86,14 @@ export class ItemEventSystem {
 					continue
 				}
 
-				const cooldownArrays = itemChunk.componentArrays[this.cooldownTypeID]
+				const cooldownArrays = itemChunk.componentArrays[this.cooldown]
 
 				// Cooldown duration is now a shared property.
 				if (cooldownArrays) {
 					if (this.cooldownManager.isOnCooldown(actorId, itemPrefabId)) continue
 
 					// We already have the sharedGroup from the Prefab lookup. We can reuse it.
-					const sharedCooldownData = sharedGroup?.[this.cooldownTypeID]
+					const sharedCooldownData = sharedGroup?.[this.cooldown]
 					const itemCooldownDuration = sharedCooldownData?.duration ?? 0
 					this.cooldownManager.startCooldown(actorId, itemPrefabId, itemCooldownDuration)
 				}

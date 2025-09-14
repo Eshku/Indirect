@@ -2,7 +2,7 @@ const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, archetypeManager } = theManager.getManagers()
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
-//! ssytem itself is pretty heavy
+//! system itself is pretty heavy
 const benchmarkConfig = {
 	// true / false
 	runPerEntityChurn: false, // Creates/destroys N entities per frame, one by one.
@@ -29,45 +29,41 @@ const benchmarkConfig = {
  */
 export class CreationDestructionBenchmarkSystem {
 	constructor() {
-		const { CreationDestructionTag, Position, Velocity, ComponentB, TestEntityTag } = componentManager.getTypeIDs()
+		const { creationDestructionTag, position, velocity, componentB, testEntityTag } = componentManager.getTypeIDs()
+		Object.assign(this, { position, velocity, creationDestructionTag, componentB, testEntityTag })
 
 		// --- Per-Entity Churn Test ---
 		this.churnQuery = queryManager.getQuery({
-			with: [CreationDestructionTag],
+			with: [creationDestructionTag],
 		})
 
 		// --- Prefab Churn Test ---
 		this.prefabChurnQuery = queryManager.getQuery({
-			with: [TestEntityTag],
-			without: [CreationDestructionTag, ComponentB], // Ensure queries are mutually exclusive
+			with: [testEntityTag],
+			without: [creationDestructionTag, componentB], // Ensure queries are mutually exclusive
 		})
-
-		this.positionTypeID = Position
-		this.velocityTypeID = Velocity
-		this.tagTypeID = CreationDestructionTag
-		this.componentBTypeID = ComponentB
 
 		// --- Query-Based Churn Test ---
 		this.churnQueryBased = queryManager.getQuery({
-			with: [ComponentB], // Use ComponentB as a tag for this test
+			with: [componentB], // Use componentB as a tag for this test
 		})
 
 		// Use the high-level compiler API that automatically determines the archetype.
 		// This is the correct, convenient pattern for systems.
 		this.churnBasedPayload = payloadCompiler.compileEntities({
-			Position: { x: 0, y: 0 },
-			Velocity: { x: 0, y: 0 },
-			ComponentB: {},
+			position: { x: 0, y: 0 },
+			velocity: { x: 0, y: 0 },
+			componentB: {},
 		}).payload
 
 		this.perEntityChurnPayload = payloadCompiler.compileEntity({
-			Position: { x: 0, y: 0 },
-			Velocity: { x: 0, y: 0 },
-			CreationDestructionTag: {},
+			position: { x: 0, y: 0 },
+			velocity: { x: 0, y: 0 },
+			creationDestructionTag: {},
 		}).payload
 
 		// Pre-compile the prefab payload, including overrides if configured.
-		const prefabOverrides = benchmarkConfig.prefabChurn.withOverrides ? { Position: { x: 100, y: -100 } } : {}
+		const prefabOverrides = benchmarkConfig.prefabChurn.withOverrides ? { position: { x: 100, y: -100 } } : {}
 		this.prefabChurnPayload = payloadCompiler.compileEntity('test_prefab', prefabOverrides).payload
 	}
 

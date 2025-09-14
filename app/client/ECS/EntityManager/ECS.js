@@ -73,6 +73,7 @@ export const ECS = {
 	 * Creates an entity immediately.
 	 * @param {object} [componentsInput={}] - e.g., `{ Position: { x: 10 }, Velocity: { y: 5 } }`
 	 * @returns {number|undefined} The new entity's ID.
+	 * @example ECS.createEntity({ position: { x: 10 }, velocity: { y: 5 } })
 	 */
 	createEntity(componentsInput = {}) {
 		if (Object.keys(componentsInput).length === 0) {
@@ -222,7 +223,7 @@ export const ECS = {
 		const isRoot = rootPrefabName !== null
 		const componentData = { ...prefabData.components }
 
-		if (isRoot) {
+		if (isRoot && overrides) {
 			// Deep merge overrides
 			for (const compName in overrides) {
 				componentData[compName] = { ...(componentData[compName] || {}), ...overrides[compName] }

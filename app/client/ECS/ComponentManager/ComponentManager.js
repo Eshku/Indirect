@@ -78,6 +78,38 @@ const { componentDataReconstructor } = await import('./ComponentDataReconstructo
 
 import * as Schema from './ComponentSchema.js'
 
+/**
+ * Converts a PascalCase string to a smart camelCase, correctly handling acronyms at the start of the string.
+ * - `Position` -> `position`
+ * - `PlayerTag` -> `playerTag`
+ * - `RWMTag` -> `rwmTag` (acronym at the start)
+ * - `URLShortener` -> `urlShortener` (acronym followed by another word)
+ * - `PlayerID` -> `playerID` (acronyms not at the start are treated as regular PascalCase)
+ *
+ * Note: This function is designed to only handle acronyms at the beginning of a string.
+ * Mid-string acronyms are intentionally not converted to lowercase to keep the logic simple and predictable.
+ * For example, `PlayerID` becomes `playerID`, not `playerId`.
+ *
+ * @param {string} str The PascalCase string to convert.
+ * @returns {string} The camelCased string.
+ */
+function toCamelCase(str) {
+	if (!str) return '';
+
+	// Match the initial sequence of uppercase letters.
+	const acronymRegex = /^[A-Z0-9]+(?=[A-Z0-9][a-z]|$)/;
+	const match = str.match(acronymRegex);
+
+	if (match) {
+		// This is an acronym (like RWM or URL). Lowercase the whole acronym.
+		const acronym = match[0];
+		return acronym.toLowerCase() + str.slice(acronym.length);
+	} else {
+		// This is standard PascalCase (like Position or FlatArray). Lowercase only the first letter.
+		return str.charAt(0).toLowerCase() + str.slice(1)
+	}
+}
+
 export class ComponentManager {
 	constructor() {
 		// The manager no longer holds the data itself. It orchestrates the population
@@ -156,7 +188,8 @@ export class ComponentManager {
 			const typeID = Schema.nextComponentTypeID
 			Schema.setNextComponentTypeID(typeID + 1)
 
-			Schema.componentNames[typeID] = componentName
+			// Convert to camelCase and store it as the canonical name.
+			Schema.componentNames[typeID] = toCamelCase(componentName)
 			Schema.componentBitFlags[typeID] = 1n << BigInt(typeID) // Assign a unique bit flag
 			this._parseAndStoreSchema(componentName, schema, typeID)
 
@@ -240,7 +273,7 @@ export class ComponentManager {
 
 		this._cachedComponentsObject = {}
 		for (let i = 0; i < Schema.nextComponentTypeID; i++) {
-			const name = Schema.componentNames[i]
+			const name = Schema.componentNames[i] // This is now camelCase
 			this._cachedComponentsObject[name] = this.componentConstants[i]
 		}
 
@@ -256,7 +289,7 @@ export class ComponentManager {
 	getTypeIDs() {
 		const idMap = {}
 		for (let i = 0; i < Schema.nextComponentTypeID; i++) {
-			const name = Schema.componentNames[i]
+			const name = Schema.componentNames[i] // This is now camelCase
 			if (name) {
 				idMap[name] = i
 			}
@@ -271,7 +304,9 @@ export class ComponentManager {
 	 */
 	getConstantsFor(componentIdentifier) {
 		const typeID =
-			typeof componentIdentifier === 'string' ? Schema.componentNameToTypeID.get(componentIdentifier.toLowerCase()) : componentIdentifier
+			typeof componentIdentifier === 'string'
+				? Schema.componentNameToTypeID.get(componentIdentifier.toLowerCase())
+				: componentIdentifier
 		if (typeID === undefined) return undefined
 		return this.componentConstants[typeID]
 	}

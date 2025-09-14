@@ -13,19 +13,18 @@ const UNINITIALIZED_REF = 0
  */
 export class SpriteFactorySystem {
 	constructor() {
-		const { SpriteDescriptor, Viewable } = componentManager.getTypeIDs()
+		const { spriteDescriptor, viewable } = componentManager.getTypeIDs()
+		Object.assign(this, { spriteDescriptor, viewable })
 
 		this.initializationQuery = queryManager.getQuery({
-			with: [SpriteDescriptor, Viewable],
-			react: [SpriteDescriptor],
+			with: [spriteDescriptor, viewable],
+			react: [spriteDescriptor],
 		})
 
-		this.descriptorTypeID = SpriteDescriptor
-		this.viewableTypeID = Viewable
 		this.gameActorsLayer = layerManager.getLayer('gameActors')
 
 		// Pre-compile the payload and cache the payload/mutator objects separately.
-		const { payload, mutators } = payloadCompiler.compileComponent(this.viewableTypeID, { spriteRef: 0 })
+		const { payload, mutators } = payloadCompiler.compileComponent(this.viewable, { spriteRef: 0 })
 		this.viewablePayload = payload
 		this.viewableMutators = mutators
 		this.stringStorage = stringInterningTable.storage
@@ -35,8 +34,8 @@ export class SpriteFactorySystem {
 
 	update(deltaTime, currentTick, lastTick) {
 		for (const chunk of this.initializationQuery.iter()) {
-			const descriptorArrays = chunk.componentArrays[this.descriptorTypeID]
-			const viewableArrays = chunk.componentArrays[this.viewableTypeID]
+			const descriptorArrays = chunk.componentArrays[this.spriteDescriptor]
+			const viewableArrays = chunk.componentArrays[this.viewable]
 
 			const assetNameRefs = descriptorArrays.assetName
 			const spriteRefs = viewableArrays.spriteRef
@@ -63,7 +62,7 @@ export class SpriteFactorySystem {
 						if (sprite) this.gameActorsLayer.addChild(sprite)
 
 						// Use the cached mutator and payload for efficiency and readability.
-						this.viewableMutators.Viewable.spriteRef[0] = spriteRef
+						this.viewableMutators.viewable.spriteRef[0] = spriteRef
 						this.commands.setComponentData(entityId, this.viewablePayload)
 					}
 				}

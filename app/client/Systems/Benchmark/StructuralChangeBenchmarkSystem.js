@@ -37,19 +37,17 @@ const benchmarkConfig = {
  */
 export class StructuralChangeBenchmarkSystem {
 	constructor() {
-		const { ComponentA, ComponentB } = componentManager.getTypeIDs()
+		const { componentA, componentB } = componentManager.getTypeIDs()
+		Object.assign(this, { componentA, componentB })
 
 		this.addQuery = queryManager.getQuery({
-			with: [ComponentA],
-			without: [ComponentB],
+			with: [componentA],
+			without: [componentB],
 		})
 
 		this.removeQuery = queryManager.getQuery({
-			with: [ComponentA, ComponentB],
+			with: [componentA, componentB],
 		})
-
-		this.componentATypeID = ComponentA
-		this.componentBTypeID = ComponentB
 
 		this.verificationInterval = 120 // Log every 2 seconds at 60tps.
 
@@ -59,12 +57,12 @@ export class StructuralChangeBenchmarkSystem {
 
 		// Pre-compile the creation payload once for maximum efficiency.
 		const { payload } = payloadCompiler.compileEntities({
-			ComponentA: {},
+			componentA: {},
 		})
 		this.creationPayload = payload
 
 		// Pre-compile the payload for adding ComponentB. Since it's a tag, the data is empty.
-		const { payload: addPayload } = payloadCompiler.compileComponent(this.componentBTypeID, {})
+		const { payload: addPayload } = payloadCompiler.compileComponent(this.componentB, {})
 		this.addComponentPayload = addPayload
 	}
 
@@ -133,7 +131,7 @@ export class StructuralChangeBenchmarkSystem {
 		} else {
 			for (const chunk of this.removeQuery.iter()) {
 				for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-					this.commands.removeComponent(chunk.entities[indexInChunk], this.componentBTypeID)
+					this.commands.removeComponent(chunk.entities[indexInChunk], this.componentB)
 				}
 			}
 		}
@@ -160,7 +158,7 @@ export class StructuralChangeBenchmarkSystem {
 			for (const chunk of this.removeQuery.iter()) {
 				for (let i = 0; i < chunk.size; i++) {
 					if (processedCount >= this.batchedWaveSize) break
-					this.commands.removeComponent(chunk.entities[i], this.componentBTypeID)
+					this.commands.removeComponent(chunk.entities[i], this.componentB)
 					processedCount++
 				}
 				if (processedCount >= this.batchedWaveSize) break
@@ -177,7 +175,7 @@ export class StructuralChangeBenchmarkSystem {
 		if (currentTick % 2 === 0) {
 			this.commands.addComponentToQuery(this.addQuery, this.addComponentPayload)
 		} else {
-			this.commands.removeComponentFromQuery(this.removeQuery, this.componentBTypeID)
+			this.commands.removeComponentFromQuery(this.removeQuery, this.componentB)
 		}
 	}
 

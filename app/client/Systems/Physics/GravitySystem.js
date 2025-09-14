@@ -3,23 +3,22 @@ const { queryManager, componentManager } = theManager.getManagers()
 
 export class GravitySystem {
 	constructor() {
-		const { IsGrounded, Velocity } = componentManager.getTypeIDs()
+		const { isGrounded, velocity } = componentManager.getTypeIDs()
+		Object.assign(this, { isGrounded, velocity })
 
 		this.query = queryManager.getQuery({
-			with: [IsGrounded, Velocity],
+			with: [isGrounded, velocity],
 		})
-		this.isGroundedTypeID = IsGrounded
-		this.velocityTypeID = Velocity
 		this.gravity = 800
 	}
 	init() {}
 
 	update(deltaTime, currentTick) {
 		for (const chunk of this.query.iter()) {
-			const velocityMarker = chunk.getDirtyMarker(this.velocityTypeID, currentTick)
+			const velocityMarker = chunk.getDirtyMarker(this.velocity, currentTick)
 
-			const isGroundedArrays = chunk.componentArrays[this.isGroundedTypeID]
-			const velocityArrays = chunk.componentArrays[this.velocityTypeID]
+			const isGroundedArrays = chunk.componentArrays[this.isGrounded]
+			const velocityArrays = chunk.componentArrays[this.velocity]
 
 			const isGroundedArr = isGroundedArrays.isGrounded
 			const velY = velocityArrays.y

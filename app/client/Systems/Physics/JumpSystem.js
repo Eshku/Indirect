@@ -4,28 +4,24 @@ const { queryManager, componentManager } = theManager.getManagers()
 
 export class JumpSystem {
 	constructor() {
-		const { PlayerTag, Position, Velocity, Jump, IsGrounded } = componentManager.getTypeIDs()
+		const { playerTag, position, velocity, jump, isGrounded } = componentManager.getTypeIDs()
+		Object.assign(this, { playerTag, position, velocity, jump, isGrounded })
 
 		this.query = queryManager.getQuery({
-			with: [PlayerTag, Position, Velocity, Jump, IsGrounded],
+			with: [playerTag, position, velocity, jump, isGrounded],
 		})
-
-		this.positionTypeID = Position
-		this.velocityTypeID = Velocity
-		this.jumpTypeID = Jump
-		this.isGroundedTypeID = IsGrounded
 	}
 
 	init() {}
 
 	update(deltaTime, currentTick) {
 		for (const chunk of this.query.iter()) {
-			const jumpMarker = chunk.getDirtyMarker(this.jumpTypeID, currentTick)
-			const velocityMarker = chunk.getDirtyMarker(this.velocityTypeID, currentTick)
+			const jumpMarker = chunk.getDirtyMarker(this.jump, currentTick)
+			const velocityMarker = chunk.getDirtyMarker(this.velocity, currentTick)
 
-			const velocityArrays = chunk.componentArrays[this.velocityTypeID]
-			const jumpArrays = chunk.componentArrays[this.jumpTypeID]
-			const isGroundedArrays = chunk.componentArrays[this.isGroundedTypeID]
+			const velocityArrays = chunk.componentArrays[this.velocity]
+			const jumpArrays = chunk.componentArrays[this.jump]
+			const isGroundedArrays = chunk.componentArrays[this.isGrounded]
 
 			const velY = velocityArrays.y
 			const wantsToJumpArr = jumpArrays.wantsToJump

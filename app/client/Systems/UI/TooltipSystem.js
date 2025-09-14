@@ -41,21 +41,15 @@ export class TooltipSystem {
 		this.currentPosition = { x: 0, y: 0 }
 		this.targetPosition = { x: 0, y: 0 }
 		this.hotbar = null
-
-		const { Tooltip, Parent, DisplayName, Damage, Cooldown, Range, Strength, Dexterity, Intelligence } =
+		
+		const { tooltip, parent, displayName, damage, cooldown, range, strength, dexterity, intelligence } =
 			componentManager.getTypeIDs()
-
-		this.tooltipTypeId = Tooltip
-		this.parentTypeId = Parent
-		this.displayNameTypeId = DisplayName
-		this.damageTypeId = Damage
-		this.cooldownTypeId = Cooldown
-		this.rangeTypeId = Range
+		Object.assign(this, { tooltip, parent, displayName, damage, cooldown, range })
 
 		this.statComponentTypeIds = new Map()
-		this.statComponentTypeIds.set('Strength', Strength)
-		this.statComponentTypeIds.set('Dexterity', Dexterity)
-		this.statComponentTypeIds.set('Intelligence', Intelligence)
+		this.statComponentTypeIds.set('Strength', strength)
+		this.statComponentTypeIds.set('Dexterity', dexterity)
+		this.statComponentTypeIds.set('Intelligence', intelligence)
 
 		this.stringStorage = stringInterningTable.storage
 		this.viewModelCache = new LRUCache(50)
@@ -189,21 +183,21 @@ export class TooltipSystem {
 
 		const { chunk, indexInChunk } = location
 
-		const tooltipArrays = chunk.componentArrays[this.tooltipTypeId]
+		const tooltipArrays = chunk.componentArrays[this.tooltip]
 		if (!tooltipArrays) return null
 
 		const type = this.stringStorage[tooltipArrays.type[indexInChunk]]
 		const description = this.stringStorage[tooltipArrays.description[indexInChunk]]
 
 		let ownerId = null
-		const parentArrays = chunk.componentArrays[this.parentTypeId]
+		const parentArrays = chunk.componentArrays[this.parent]
 		if (parentArrays) {
 			ownerId = parentArrays.entityId[indexInChunk]
 		}
 
 		const ownerStats = this.getOwnerStats(ownerId)
 
-		const displayNameArrays = chunk.componentArrays[this.displayNameTypeId]
+		const displayNameArrays = chunk.componentArrays[this.displayName]
 		const titleRef = displayNameArrays?.value[indexInChunk]
 		const title = titleRef ? this.stringStorage[titleRef] : 'Unknown Item'
 
@@ -341,24 +335,24 @@ export class TooltipSystem {
 
 		switch (statName) {
 			case 'Damage': {
-				const damageArrays = chunk.componentArrays[this.damageTypeId]
+				const damageArrays = chunk.componentArrays[this.damage]
 				if (!damageArrays) return null
 				const totalDamage = this.calculateDamage(damageArrays, indexInChunk, context.ownerStats)
 				return { label: 'Damage', value: `${Math.round(totalDamage)}` }
 			}
 			case 'Cooldown': {
-				const cooldownArrays = chunk.componentArrays[this.cooldownTypeId]
+				const cooldownArrays = chunk.componentArrays[this.cooldown]
 				if (!cooldownArrays) return null
 
 				const sharedGroupId = cooldownArrays.sharedGroupId?.[indexInChunk]
 				if (sharedGroupId === undefined) return null
 
 				const sharedGroup = this.propertyGroupManager.sharedGroups[sharedGroupId]
-				const duration = sharedGroup?.[this.cooldownTypeId]?.duration ?? 0
+				const duration = sharedGroup?.[this.cooldown]?.duration ?? 0
 				return { label: 'Cooldown', value: `${duration.toFixed(2)}s` }
 			}
 			case 'Range': {
-				const rangeArrays = chunk.componentArrays[this.rangeTypeId]
+				const rangeArrays = chunk.componentArrays[this.range]
 				if (!rangeArrays) return null
 
 				const value = rangeArrays.value[indexInChunk]

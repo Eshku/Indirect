@@ -13,16 +13,12 @@ const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
  */
 export class PlayerInputSystem {
 	constructor() {
-		const { PlayerTag, MovementIntent, Jump, ActionIntent, ActiveSet } = componentManager.getTypeIDs()
+		const { playerTag, movementIntent, jump, actionIntent, activeSet } = componentManager.getTypeIDs()
+		Object.assign(this, { playerTag, movementIntent, jump, actionIntent, activeSet })
 
 		this.playerQuery = queryManager.getQuery({
-			with: [PlayerTag, MovementIntent, Jump, ActionIntent, ActiveSet],
+			with: [playerTag, movementIntent, jump, actionIntent, activeSet],
 		})
-
-		this.movementIntentTypeID = MovementIntent
-		this.jumpTypeID = Jump
-		this.actionIntentTypeID = ActionIntent
-		this.activeSetTypeID = ActiveSet
 
 		this.inputState = {
 			moveLeft: false,
@@ -41,7 +37,6 @@ export class PlayerInputSystem {
 		this.hotbar = uiManager.getElement('Hotbar')
 
 		findPlayer: for (const chunk of this.playerQuery.iter()) {
-
 			for (let i = 0; i < chunk.size; i++) {
 				this.playerId = chunk.entities[i]
 				break findPlayer
@@ -117,18 +112,18 @@ export class PlayerInputSystem {
 		const mainAttackIntent = mainAttack ? 1 : 0
 
 		for (const chunk of this.playerQuery.iter()) {
-			const movementIntents = chunk.componentArrays[this.movementIntentTypeID]
-			const jumps = chunk.componentArrays[this.jumpTypeID]
-			const actionIntents = chunk.componentArrays[this.actionIntentTypeID]
+			const movementIntents = chunk.componentArrays[this.movementIntent]
+			const jumps = chunk.componentArrays[this.jump]
+			const actionIntents = chunk.componentArrays[this.actionIntent]
 
 			const intentsX = movementIntents.desiredX
 			const intentsY = movementIntents.desiredY
 			const jumpsWants = jumps.wantsToJump
 			const actionsIntent = actionIntents.actionIntent
 
-			const movementMarker = chunk.getDirtyMarker(this.movementIntentTypeID, currentTick)
-			const jumpMarker = chunk.getDirtyMarker(this.jumpTypeID, currentTick)
-			const actionMarker = chunk.getDirtyMarker(this.actionIntentTypeID, currentTick)
+			const movementMarker = chunk.getDirtyMarker(this.movementIntent, currentTick)
+			const jumpMarker = chunk.getDirtyMarker(this.jump, currentTick)
+			const actionMarker = chunk.getDirtyMarker(this.actionIntent, currentTick)
 
 			for (let i = 0; i < chunk.size; i++) {
 				if (intentsX[i] !== intentX || intentsY[i] !== intentY) {
@@ -165,8 +160,8 @@ export class PlayerInputSystem {
 
 	_setActiveHotbarSlot(slotIndex, currentTick) {
 		for (const chunk of this.playerQuery.iter()) {
-			const activeSets = chunk.componentArrays[this.activeSetTypeID]
-			const activeSetMarker = chunk.getDirtyMarker(this.activeSetTypeID, currentTick)
+			const activeSets = chunk.componentArrays[this.activeSet]
+			const activeSetMarker = chunk.getDirtyMarker(this.activeSet, currentTick)
 
 			// The player query will only match one entity.
 			// We can safely operate on the first entity in the first chunk.

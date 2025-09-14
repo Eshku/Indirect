@@ -28,11 +28,11 @@ const { queryManager, componentManager } = theManager.getManagers()
  */
 export class EventEntityCleanupSystem {
 	constructor() {
-		const { LandedEvent, LeftSurfaceEvent } = componentManager.getTypeIDs()
+		const { landedEvent, leftSurfaceEvent } = componentManager.getTypeIDs()
 		// By querying for any of these event components, we can handle all
 		// transient event cleanup in a single pass.
 		this.transientEventQuery = queryManager.getQuery({
-			any: [LandedEvent, LeftSurfaceEvent],
+			any: [landedEvent, leftSurfaceEvent],
 		})
 	}
 

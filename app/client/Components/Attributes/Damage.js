@@ -1,5 +1,5 @@
 /**
- * A component that stores damage data in parallel arrays.
+ * Damage data in parallel arrays.
  * This allows a single skill to inflict multiple types of damage, each
  * with its own base value and scaling formula.
  */

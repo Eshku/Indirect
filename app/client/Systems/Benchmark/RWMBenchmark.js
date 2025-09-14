@@ -7,22 +7,20 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
  */
 export class RWMBenchmark {
 	constructor() {
-		const { Position, Velocity, RWMTag } = componentManager.getTypeIDs()
+		const { position, velocity, rwmTag } = componentManager.getTypeIDs()
+		Object.assign(this, { position, velocity, rwmTag })
 
 		this.query = queryManager.getQuery({
-			with: [Position, Velocity, RWMTag],
+			with: [position, velocity, rwmTag],
 		})
-		this.positionTypeID = Position
-		this.velocityTypeID = Velocity
-		this.benchmarkTagTypeID = RWMTag
 
 		//1.2m stable
 		this.entityCount = 1_200_000
 
 		const { payload } = payloadCompiler.compileEntities({
-			Position: { x: 0, y: 0 },
-			Velocity: { x: 10, y: 10 },
-			RWMTag: {},
+			position: { x: 0, y: 0 },
+			velocity: { x: 10, y: 10 },
+			rwmTag: {},
 		})
 		this.creationPayload = payload
 	}
@@ -33,10 +31,10 @@ export class RWMBenchmark {
 
 	update(deltaTime, currentTick) {
 		for (const chunk of this.query.iter()) {
-			const positionMarker = chunk.getDirtyMarker(this.positionTypeID, currentTick)
+			const positionMarker = chunk.getDirtyMarker(this.position, currentTick)
 
-			const positions = chunk.componentArrays[this.positionTypeID]
-			const velocities = chunk.componentArrays[this.velocityTypeID]
+			const positions = chunk.componentArrays[this.position]
+			const velocities = chunk.componentArrays[this.velocity]
 
 			const posX = positions.x
 			const posY = positions.y

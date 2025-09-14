@@ -15,37 +15,31 @@ const { cooldownManager } = await import(`${PATH_SUBSYSTEMS}/CooldownManager.js`
  */
 export class HotbarSyncSystem {
 	constructor() {
-		const { Owner, InActiveSet, Prefab, Icon, Cooldown, PlayerTag, ActiveSet } = componentManager.getTypeIDs()
+		const { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet } = componentManager.getTypeIDs()
+		Object.assign(this, { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet })
 
 		this.hotbarItemsQuery = queryManager.getQuery({
-			with: [Owner, InActiveSet, Prefab, Icon, Cooldown],
+			with: [owner, inActiveSet, prefab, icon, cooldown],
 		})
 		// This query is for reacting to active slot changes in the update loop.
 		this.playerUpdateQuery = queryManager.getQuery({
 			// This query is now reactive. It will only process when the player's ActiveSet changes.
-			with: [PlayerTag, ActiveSet],
-			react: [ActiveSet],
+			with: [playerTag, activeSet],
+			react: [activeSet],
 		})
 		// This query is for finding the player entity at startup.
-		this.playerInitQuery = queryManager.getQuery({ with: [PlayerTag] })
+		this.playerInitQuery = queryManager.getQuery({ with: [playerTag] })
 
-		this.ownerTypeID = Owner
-		this.inActiveSetTypeID = InActiveSet
-		this.prefabIdTypeID = Prefab
-		this.iconTypeID = Icon
-		this.cooldownTypeID = Cooldown
-		this.activeSetTypeID = ActiveSet
 		this.stringStorage = stringInterningTable.storage
 		this.propertyGroupManager = propertyGroupManager
 		this.cooldownManager = cooldownManager
 		this.prefabManager = prefabManager
-
 		this.playerId = null
 		this.cachedSlotEntityIds = Array(HOTBAR_SLOT_COUNT).fill(0)
 		this.cachedActiveSlot = -1
 
 		// Pre-compile the payload for ActiveSet component updates.
-		this.activeSetPayload = payloadCompiler.compileComponent(this.activeSetTypeID, { slots: [] })
+		this.activeSetPayload = payloadCompiler.compileComponent(this.activeSet, { slots: [] })
 		this.hotbar = null
 	}
 
@@ -68,11 +62,10 @@ export class HotbarSyncSystem {
 		const stringStorage = this.stringStorage
 
 		for (const chunk of this.hotbarItemsQuery.iter()) {
-			const ownerArrays = chunk.componentArrays[this.ownerTypeID]
-			const inActiveSetArrays = chunk.componentArrays[this.inActiveSetTypeID]
-			const prefabIdArrays = chunk.componentArrays[this.prefabIdTypeID]
-			const iconArrays = chunk.componentArrays[this.iconTypeID]
-			const cooldownArrays = chunk.componentArrays[this.cooldownTypeID]
+			const ownerArrays = chunk.componentArrays[this.owner]
+			const inActiveSetArrays = chunk.componentArrays[this.inActiveSet]
+			const prefabIdArrays = chunk.componentArrays[this.prefab]
+			const iconArrays = chunk.componentArrays[this.icon]
 
 			const ownerEntityIds = ownerArrays.entityId
 			const slots = inActiveSetArrays.slot
@@ -93,7 +86,7 @@ export class HotbarSyncSystem {
 					const sharedGroup = this.propertyGroupManager.sharedGroups[sharedGroupId]
 
 					// Get the prefabId from the shared group.
-					const sharedPrefabData = sharedGroup?.[this.prefabIdTypeID]
+					const sharedPrefabData = sharedGroup?.[this.prefab]
 					const prefabId = sharedPrefabData?.id
 
 					// The Icon's assetName is a per-entity property (though the string is interned).
@@ -102,7 +95,7 @@ export class HotbarSyncSystem {
 					const iconAssetStr = stringStorage[iconAssetNameRef]
 
 					// The Cooldown.duration is a shared property.
-					const sharedCooldownData = sharedGroup?.[this.cooldownTypeID]
+					const sharedCooldownData = sharedGroup[this.cooldown]
 					const totalDuration = sharedCooldownData?.duration ?? 0
 
 					desiredState[slot] = {
@@ -131,7 +124,7 @@ export class HotbarSyncSystem {
 
 		if (hasDataChanged) {
 			// If the data has changed, update both the UI and the ActiveSet component.
-			const slotsMutator = this.activeSetPayload.mutators.ActiveSet.slots
+			const slotsMutator = this.activeSetPayload.mutators.activeSet.slots
 
 			for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
 				const newState = desiredState[i]
@@ -154,7 +147,7 @@ export class HotbarSyncSystem {
 		for (const chunk of this.playerUpdateQuery.iter()) {
 			// Because the query is reactive, we only check entities that have changed.
 			if (this.playerUpdateQuery.hasChanged(chunk, 0)) {
-				const playerActiveSetArrays = chunk.componentArrays[this.activeSetTypeID]
+				const playerActiveSetArrays = chunk.componentArrays[this.activeSet]
 				newActiveSlot = playerActiveSetArrays.activeSlotIndex[0]
 
 				if (newActiveSlot !== this.cachedActiveSlot) {

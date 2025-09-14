@@ -9,23 +9,21 @@ const { queryManager, componentManager } = theManager.getManagers()
  */
 export class ApplyVelocity {
 	constructor() {
-		const { Position, Velocity } = componentManager.getTypeIDs()
+		const { position, velocity } = componentManager.getTypeIDs()
+		Object.assign(this, { position, velocity })
 
 		this.query = queryManager.getQuery({
-			with: [Position, Velocity],
-			react: [Velocity],
+			with: [position, velocity],
+			react: [velocity],
 		})
-
-		this.positionTypeID = Position
-		this.velocityTypeID = Velocity
 	}
 
 	update(deltaTime, currentTick) {
 		for (const chunk of this.query.iter()) {
-			const positionMarker = chunk.getDirtyMarker(this.positionTypeID, currentTick)
+			const positionMarker = chunk.getDirtyMarker(this.position, currentTick)
 
-			const posArrays = chunk.componentArrays[this.positionTypeID]
-			const velArrays = chunk.componentArrays[this.velocityTypeID]
+			const posArrays = chunk.componentArrays[this.position]
+			const velArrays = chunk.componentArrays[this.velocity]
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				// Only update the position if the velocity has actually changed.

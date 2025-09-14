@@ -1,5 +1,5 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, archetypeManager } = theManager.getManagers()
+const { queryManager, componentManager } = theManager.getManagers()
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
@@ -9,57 +9,56 @@ export class CollisionSystem {
 	constructor() {
 		this.allowInternalConflicts = true
 		this.commands = null // Injected by SystemManager
-		
-		const {
-			Position,
-			Velocity,
-			IsGrounded,
-			CollisionFlags,
-			Collider,
-			PlatformTag,
-			LandedEvent,
-			LeftSurfaceEvent,
-		} = componentManager.getTypeIDs()
 
-		this.positionTypeID = Position
-		this.velocityTypeID = Velocity
-		this.isGroundedTypeID = IsGrounded
-		this.collisionFlagsTypeID = CollisionFlags
-		this.colliderTypeID = Collider
-		this.landedEventTypeID = LandedEvent
-		this.leftSurfaceEventTypeID = LeftSurfaceEvent
+		const { position, velocity, isGrounded, collisionFlags, collider, platformTag, landedEvent, leftSurfaceEvent } =
+			componentManager.getTypeIDs()
+		Object.assign(this, {
+			position,
+			velocity,
+			isGrounded,
+			collisionFlags,
+			collider,
+			platformTag,
+			landedEvent,
+			leftSurfaceEvent,
+		})
 
-		// Pre-compile payloads for our event entities. This is much faster than creating
-		// new objects in the update loop.
-		this.landedEventPayload = payloadCompiler.compileEntity({
-			LandedEvent: { entityId: 0 }, // The entityId will be mutated at runtime.
+		const { payload: landedEventPayload, mutators: landedEventMutators } = payloadCompiler.compileEntity({
+			landedEvent: { entityId: 0 },
 		})
-		this.leftSurfaceEventPayload = payloadCompiler.compileEntity({
-			LeftSurfaceEvent: { entityId: 0 },
+
+		const { payload: leftSurfaceEventPayload, mutators: leftSurfaceEventMutators } = payloadCompiler.compileEntity({
+			leftSurfaceEvent: { entityId: 0 },
 		})
-		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(CollisionFlags, 'collisionFlags')
+
+		this.landedEventPayload = landedEventPayload
+		this.landedEventMutators = landedEventMutators
+		this.leftSurfaceEventPayload = leftSurfaceEventPayload
+		this.leftSurfaceEventMutators = leftSurfaceEventMutators
+
+		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(collisionFlags, 'collisionFlags')
 
 		this.characterQuery = queryManager.getQuery({
-			with: [Position, Velocity, IsGrounded, CollisionFlags, Collider],
+			with: [position, velocity, isGrounded, collisionFlags, collider],
 		})
 
 		this.allPlatformsQuery = queryManager.getQuery({
-			with: [Position, Collider, PlatformTag],
+			with: [position, collider, platformTag],
 		})
 	}
 
 	update(deltaTime, currentTick) {
 		for (const charChunk of this.characterQuery.iter()) {
-			const positionMarker = charChunk.getDirtyMarker(this.positionTypeID, currentTick)
-			const velocityMarker = charChunk.getDirtyMarker(this.velocityTypeID, currentTick)
-			const isGroundedMarker = charChunk.getDirtyMarker(this.isGroundedTypeID, currentTick)
-			const collisionFlagsMarker = charChunk.getDirtyMarker(this.collisionFlagsTypeID, currentTick)
+			const positionMarker = charChunk.getDirtyMarker(this.position, currentTick)
+			const velocityMarker = charChunk.getDirtyMarker(this.velocity, currentTick)
+			const isGroundedMarker = charChunk.getDirtyMarker(this.isGrounded, currentTick)
+			const collisionFlagsMarker = charChunk.getDirtyMarker(this.collisionFlags, currentTick)
 
-			const charPosArrays = charChunk.componentArrays[this.positionTypeID]
-			const charVelArrays = charChunk.componentArrays[this.velocityTypeID]
-			const charIsGroundedArrays = charChunk.componentArrays[this.isGroundedTypeID]
-			const charCollisionFlagsArrays = charChunk.componentArrays[this.collisionFlagsTypeID]
-			const charColliderArrays = charChunk.componentArrays[this.colliderTypeID]
+			const charPosArrays = charChunk.componentArrays[this.position]
+			const charVelArrays = charChunk.componentArrays[this.velocity]
+			const charIsGroundedArrays = charChunk.componentArrays[this.isGrounded]
+			const charCollisionFlagsArrays = charChunk.componentArrays[this.collisionFlags]
+			const charColliderArrays = charChunk.componentArrays[this.collider]
 
 			const charPosX = charPosArrays.x
 			const charPosY = charPosArrays.y
@@ -73,11 +72,11 @@ export class CollisionSystem {
 			for (let charIndexInChunk = 0; charIndexInChunk < charChunk.size; charIndexInChunk++) {
 				const charHalfW = charColliderWidth[charIndexInChunk] / 2
 				const charHalfH = charColliderHeight[charIndexInChunk] / 2
-				const wasGrounded = charIsGrounded[charIndexInChunk] === 1;
+				const wasGrounded = charIsGrounded[charIndexInChunk] === 1
 
 				const originalCharX = charPosX[charIndexInChunk]
 				const originalCharY = charPosY[charIndexInChunk]
-				const charCurrentVelY = charVelY[charIndexInChunk];
+				const charCurrentVelY = charVelY[charIndexInChunk]
 
 				let finalTargetX = originalCharX
 				let finalTargetY = originalCharY
@@ -88,12 +87,12 @@ export class CollisionSystem {
 				let isOverlapping = false
 
 				// --- Grounded Check Probe ---
-				const groundProbeDistance = 1; // Small distance to check for ground below the character.
-				let isSupportedByPlatform = false;
+				const groundProbeDistance = 1 // Small distance to check for ground below the character.
+				let isSupportedByPlatform = false
 
 				for (const platformChunk of this.allPlatformsQuery.iter()) {
-					const platformPosArrays = platformChunk.componentArrays[this.positionTypeID]
-					const platformColliderArrays = platformChunk.componentArrays[this.colliderTypeID]
+					const platformPosArrays = platformChunk.componentArrays[this.position]
+					const platformColliderArrays = platformChunk.componentArrays[this.collider]
 
 					const platX = platformPosArrays.x
 					const platY = platformPosArrays.y
@@ -118,7 +117,8 @@ export class CollisionSystem {
 
 							if (overlapX < overlapY) {
 								// Horizontal collision is dominant
-								const currentTargetX = dx > 0 ? platCenterX + platHalfW + charHalfW : platCenterX - platHalfW - charHalfW
+								const currentTargetX =
+									dx > 0 ? platCenterX + platHalfW + charHalfW : platCenterX - platHalfW - charHalfW
 								const push = Math.abs(currentTargetX - originalCharX)
 								if (push < minHorizontalPush) {
 									minHorizontalPush = push
@@ -127,7 +127,8 @@ export class CollisionSystem {
 								}
 							} else {
 								// Vertical collision is dominant
-								const currentTargetY = dy > 0 ? platCenterY + platHalfH + charHalfH : platCenterY - platHalfH - charHalfH
+								const currentTargetY =
+									dy > 0 ? platCenterY + platHalfH + charHalfH : platCenterY - platHalfH - charHalfH
 								const push = Math.abs(currentTargetY - originalCharY)
 								if (push < minVerticalPush) {
 									minVerticalPush = push
@@ -138,14 +139,14 @@ export class CollisionSystem {
 						}
 
 						// Perform the ground probe check regardless of overlap
-						const probeTop = originalCharY - charHalfH;
-						const probeBottom = probeTop - groundProbeDistance;
-						const platformTop = platCenterY + platHalfH;
-						const platformBottom = platCenterY - platHalfH;
+						const probeTop = originalCharY - charHalfH
+						const probeBottom = probeTop - groundProbeDistance
+						const platformTop = platCenterY + platHalfH
+						const platformBottom = platCenterY - platHalfH
 
 						if (probeBottom <= platformTop && probeTop >= platformBottom && Math.abs(dx) < combinedHalfWidths) {
 							// The character's feet are within a small distance of a platform surface.
-							isSupportedByPlatform = true;
+							isSupportedByPlatform = true
 						}
 					}
 				}
@@ -166,14 +167,12 @@ export class CollisionSystem {
 					collisionDirectionFlagsThisFrame |= dx > 0 ? this.COLLISION_FLAGS.RIGHT : this.COLLISION_FLAGS.LEFT
 				}
 				if (bestVerticalPlatform) {
-
 					charVelY[charIndexInChunk] = 0
 					const dy = originalCharY - bestVerticalPlatform.centerY
 
 					// If dy > 0, character is above the platform, so collision is on the character's bottom.
 					// This is also our condition for being "grounded".
 					if (dy > 0) {
-
 						isGroundedThisFrame = true
 
 						collisionDirectionFlagsThisFrame |= this.COLLISION_FLAGS.BOTTOM
@@ -183,7 +182,6 @@ export class CollisionSystem {
 				}
 
 				if (bestHorizontalPlatform || bestVerticalPlatform) {
-
 					velocityMarker.mark(charIndexInChunk)
 				}
 
@@ -191,7 +189,7 @@ export class CollisionSystem {
 				let isGroundedNow = wasGrounded
 
 				// A jump was initiated in the same frame.
-				const justJumped = wasGrounded && charCurrentVelY > 0;
+				const justJumped = wasGrounded && charCurrentVelY > 0
 
 				if ((isGroundedThisFrame || isSupportedByPlatform) && !justJumped && charCurrentVelY <= 0) {
 					// Character is on the ground and didn't just jump.
@@ -199,10 +197,9 @@ export class CollisionSystem {
 
 					if (!wasGrounded) {
 						// This is a landing event.
-						const { mutators, payload } = this.landedEventPayload
 						// Use the mutator to set the correct entityId on the pre-compiled payload.
-						mutators.LandedEvent.entityId[0] = charChunk.entities[charIndexInChunk]
-						this.commands.createEntity(payload)
+						this.landedEventMutators.landedEvent.entityId[0] = charChunk.entities[charIndexInChunk]
+						this.commands.createEntity(this.landedEventPayload)
 					}
 				} else {
 					// Character is airborne for one of three reasons:
@@ -211,11 +208,9 @@ export class CollisionSystem {
 					// 3. They were on the ground and now they are not (e.g., walked off a ledge).
 					isGroundedNow = false
 					if (wasGrounded && !justJumped) {
-
 						// This is the "walked off a ledge" case. Use the pre-compiled payload.
-						const { mutators, payload } = this.leftSurfaceEventPayload
-						mutators.LeftSurfaceEvent.entityId[0] = charChunk.entities[charIndexInChunk]
-						this.commands.createEntity(payload)
+						this.leftSurfaceEventMutators.leftSurfaceEvent.entityId[0] = charChunk.entities[charIndexInChunk]
+						this.commands.createEntity(this.leftSurfaceEventPayload)
 					}
 				}
 

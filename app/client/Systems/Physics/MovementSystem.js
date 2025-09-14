@@ -9,31 +9,26 @@ const { queryManager, componentManager } = theManager.getManagers()
 export class MovementSystem {
 	constructor() {
 		// Get all numeric IDs at once for efficient use in the update loop.
-		const { Velocity, Speed, MovementIntent, CollisionFlags } = componentManager.getTypeIDs()
+		const { velocity, speed, movementIntent, collisionFlags } = componentManager.getTypeIDs()
+		Object.assign(this, { velocity, speed, movementIntent, collisionFlags })
 
 		// Use numeric type IDs to define the query's structure for efficiency.
 		this.query = queryManager.getQuery({
-			with: [Velocity, Speed, MovementIntent, CollisionFlags],
+			with: [velocity, speed, movementIntent, collisionFlags],
 		})
 
-		// Cache the numeric IDs on the system instance.
-		this.velocityTypeID = Velocity
-		this.speedTypeID = Speed
-		this.intentTypeID = MovementIntent
-		this.collisionFlagsTypeID = CollisionFlags
-
 		// Use the numeric type ID to get constants.
-		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(CollisionFlags, 'collisionFlags')
+		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(collisionFlags, 'collisionFlags')
 	}
 
 	update(deltaTime, currentTick) {
 		for (const chunk of this.query.iter()) {
-			const velocityMarker = chunk.getDirtyMarker(this.velocityTypeID, currentTick)
+			const velocityMarker = chunk.getDirtyMarker(this.velocity, currentTick)
 
-			const velocityArrays = chunk.componentArrays[this.velocityTypeID]
-			const intentArrays = chunk.componentArrays[this.intentTypeID]
-			const speedArrays = chunk.componentArrays[this.speedTypeID]
-			const collisionFlagsArrays = chunk.componentArrays[this.collisionFlagsTypeID]
+			const velocityArrays = chunk.componentArrays[this.velocity]
+			const intentArrays = chunk.componentArrays[this.movementIntent]
+			const speedArrays = chunk.componentArrays[this.speed]
+			const collisionFlagsArrays = chunk.componentArrays[this.collisionFlags]
 
 			const velX = velocityArrays.x
 			const intentX = intentArrays.desiredX

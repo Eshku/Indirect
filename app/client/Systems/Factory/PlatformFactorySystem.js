@@ -9,24 +9,22 @@ const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningT
  */
 export class PlatformFactorySystem {
 	constructor() {
-		const { ShapeDescriptor, PlatformTag, Position, Viewable, Collider } = componentManager.getTypeIDs()
+		const { shapeDescriptor, platformTag, position, viewable, collider } = componentManager.getTypeIDs()
+		Object.assign(this, { shapeDescriptor, viewable, collider })
 
 		this.initializationQuery = queryManager.getQuery({
-			with: [ShapeDescriptor, PlatformTag, Position, Viewable, Collider],
-			react: [ShapeDescriptor],
+			with: [shapeDescriptor, platformTag, position, viewable, collider],
+			react: [shapeDescriptor],
 		})
 
-		this.descriptorTypeID = ShapeDescriptor
-		this.viewableTypeID = Viewable
-		this.colliderTypeID = Collider
 		this.gameWorldLayer = layerManager.getLayer('gameWorld')
 
 		// Pre-compile payloads and cache the payload/mutator objects separately for cleaner access.
-		const { payload: viewablePayload, mutators: viewableMutators } = payloadCompiler.compileComponent(this.viewableTypeID, { spriteRef: 0 })
+		const { payload: viewablePayload, mutators: viewableMutators } = payloadCompiler.compileComponent(this.viewable, { spriteRef: 0 })
 		this.viewablePayload = viewablePayload
 		this.viewableMutators = viewableMutators
 
-		const { payload: colliderPayload, mutators: colliderMutators } = payloadCompiler.compileComponent(this.colliderTypeID, { width: 0, height: 0 })
+		const { payload: colliderPayload, mutators: colliderMutators } = payloadCompiler.compileComponent(this.collider, { width: 0, height: 0 })
 		this.colliderPayload = colliderPayload
 		this.colliderMutators = colliderMutators
 		this.stringStorage = stringInterningTable.storage
@@ -35,8 +33,8 @@ export class PlatformFactorySystem {
 	update(deltaTime, currentTick) {
 		for (const chunk of this.initializationQuery.iter()) {
 			const stringStorage = this.stringStorage
-			const descriptorArrays = chunk.componentArrays[this.descriptorTypeID]
-			const viewableArrays = chunk.componentArrays[this.viewableTypeID]
+			const descriptorArrays = chunk.componentArrays[this.shapeDescriptor]
+			const viewableArrays = chunk.componentArrays[this.viewable]
 
 			const shapeRefs = descriptorArrays.shape
 			const widths = descriptorArrays.width
@@ -78,11 +76,11 @@ export class PlatformFactorySystem {
 					const ref = assetManager.acquireDisplayObjectRef(graphic)
 
 					// Use the cached mutators and payload for efficiency and readability.
-					this.viewableMutators.Viewable.spriteRef[0] = ref
+					this.viewableMutators.viewable.spriteRef[0] = ref
 					this.commands.setComponentData(entityId, this.viewablePayload)
 
-					this.colliderMutators.Collider.width[0] = width
-					this.colliderMutators.Collider.height[0] = height
+					this.colliderMutators.collider.width[0] = width
+					this.colliderMutators.collider.height[0] = height
 					this.commands.setComponentData(entityId, this.colliderPayload)
 				}
 			}

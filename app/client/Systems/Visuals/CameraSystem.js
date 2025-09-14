@@ -5,13 +5,13 @@ const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
 
 export class CameraSystem {
 	constructor() {
-		const { PlayerTag, Position } = componentManager.getTypeIDs()
+		const { playerTag, position } = componentManager.getTypeIDs()
+		Object.assign(this, { playerTag, position })
 
 		this.playerQuery = queryManager.getQuery({
-			with: [PlayerTag, Position],
+			with: [playerTag, position],
 		})
 
-		this.positionTypeID = Position
 		this.playerId = null
 
 		this.camera = { x: 0, y: 0 }
@@ -25,7 +25,7 @@ export class CameraSystem {
 
 	async init() {
 		findPlayer: for (const chunk of this.playerQuery.iter()) {
-			const positionArrays = chunk.componentArrays[this.positionTypeID]
+			const positionArrays = chunk.componentArrays[this.position]
 			const posX = positionArrays.x
 			const posY = positionArrays.y
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
@@ -66,7 +66,7 @@ export class CameraSystem {
 		// By iterating the query, we follow the standard, efficient system pattern.
 		// For a singleton entity like the player, this loop will only run once.
 		for (const chunk of this.playerQuery.iter()) {
-			const positionArrays = chunk.componentArrays[this.positionTypeID]
+			const positionArrays = chunk.componentArrays[this.position]
 
 			// We can assume the first entity in the first chunk is our player.
 			const indexInChunk = 0
