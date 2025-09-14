@@ -1,35 +1,56 @@
 /**
- * Dynamically loads all manager instances by fetching the manager tree from the main process.
- * It constructs the path to the main manager file (ManagerName/ManagerName.js),
- * imports it, and extracts the exported instance (e.g., componentManager).
- * This function loads managers sequentially, consistent with ModuleLoader.js.
+ * Manually loads all manager instances via direct imports.
+ * This provides an explicit and clear loading process, removing the need for dynamic discovery.
  *
  * @returns {Promise<Map<string, object>>} A promise that resolves to a map where keys
  *   are manager class names (e.g., 'ComponentManager') and values are the
  *   manager instances.
  */
 export async function loadAllManagers() {
-	const managerTree = await window.electronAPI.getManagerTree()
 	const loadedManagers = new Map()
+	//! prep for restructure, no auto-load for now
+	// --- Core Engine & ECS Foundation ---
+	const { componentManager } = await import(`${PATH_ECS}/ComponentManager/ComponentManager.js`)
+	loadedManagers.set('ComponentManager', componentManager)
 
-	for (const managerClassName in managerTree) {
-		// The main file for a manager is assumed to have the same name as its folder/class.
-		if (managerTree[managerClassName].includes(managerClassName)) {
-			const path = `${PATH_MANAGERS}/${managerClassName}/${managerClassName}.js`
-			const instanceName = managerClassName.charAt(0).toLowerCase() + managerClassName.slice(1)
-			try {
-				const module = await import(path)
-				const instance = module[instanceName]
+	const { layerManager } = await import(`${PATH_MANAGERS}/LayerManager/LayerManager.js`)
+	loadedManagers.set('LayerManager', layerManager)
 
-				if (instance) {
-					loadedManagers.set(managerClassName, instance)
-				} else {
-					console.error(`ManagerLoader: Could not find exported instance '${instanceName}' in ${path}.`)
-				}
-			} catch (error) {
-				console.error(`ManagerLoader: Failed to load manager ${managerClassName} from ${path}:`, error)
-			}
-		}
-	}
+	const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
+	loadedManagers.set('GameManager', gameManager)
+
+	const { physicsManager } = await import(`${PATH_MANAGERS}/PhysicsManager/PhysicsManager.js`)
+	loadedManagers.set('PhysicsManager', physicsManager)
+
+	const { prefabManager } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabManager.js`)
+	loadedManagers.set('PrefabManager', prefabManager)
+
+	const { assetManager } = await import(`${PATH_MANAGERS}/AssetManager/AssetManager.js`)
+	loadedManagers.set('AssetManager', assetManager)
+
+	const { entityManager } = await import(`${PATH_ECS}/EntityManager/EntityManager.js`)
+	loadedManagers.set('EntityManager', entityManager)
+
+	const { archetypeManager } = await import(`${PATH_ECS}/ArchetypeManager/ArchetypeManager.js`)
+	loadedManagers.set('ArchetypeManager', archetypeManager)
+
+	// --- Logic & System Orchestration ---
+	const { queryManager } = await import(`${PATH_MANAGERS}/QueryManager/QueryManager.js`)
+	loadedManagers.set('QueryManager', queryManager)
+
+	const { systemManager } = await import(`${PATH_ECS}/SystemManager/SystemManager.js`)
+	loadedManagers.set('SystemManager', systemManager)
+
+	// --- User-Facing systems ---
+	const { uiManager } = await import(`${PATH_MANAGERS}/UiManager/UiManager.js`)
+	loadedManagers.set('UiManager', uiManager)
+
+	const { inputManager } = await import(`${PATH_MANAGERS}/InputManager/InputManager.js`)
+	loadedManagers.set('InputManager', inputManager)
+
+	// --- Utility & Development ---
+	const { testManager } = await import(`${PATH_MANAGERS}/TestManager/TestManager.js`)
+	loadedManagers.set('TestManager', testManager)
+
 	return loadedManagers
 }

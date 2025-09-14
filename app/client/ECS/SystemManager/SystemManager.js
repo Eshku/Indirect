@@ -1,12 +1,15 @@
 const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
-const { loadAllSystems } = await import(`${PATH_MANAGERS}/SystemManager/systemLoader.js`)
-const { systemRegistry } = await import(`${PATH_MANAGERS}/SystemManager/SystemRegistry.js`)
-const { GameLoop } = await import(`${PATH_MANAGERS}/SystemManager/GameLoop.js`)
-const { systemSchedule } = await import(`${PATH_MANAGERS}/SystemManager/systemConfig.js`)
+
+import { loadAllSystems } from './systemLoader.js'
+import { systemRegistry } from './SystemRegistry.js'
+import { GameLoop } from './GameLoop.js'
+import { systemSchedule } from './systemConfig.js'
+import { CommandBuffer } from './CommandBuffer.js'
+import { CommandBufferExecutor } from './CommandBufferExecutor.js'
+import { payloadCompiler } from './PayloadCompiler.js'
+
 const { Sequence } = await import(`${PATH_CORE}/DataStructures/Sequence.js`)
 const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`)
-const { CommandBuffer } = await import(`${PATH_MANAGERS}/SystemManager/CommandBuffer.js`);
-const { CommandBufferExecutor } = await import(`${PATH_MANAGERS}/SystemManager/CommandBufferExecutor.js`);
 
 /**
  * Manages the lifecycle and execution of all game systems.
@@ -26,24 +29,18 @@ export class SystemManager {
 		this.ticker = null
 		this.renderer = null
 
-		/** @type {import('../ComponentManager/ComponentManager.js').ComponentManager | null} */
 		this.componentManager = null
 
-		/** @type {import('../PrefabManager/PrefabManager.js').PrefabManager | null} */
 		this.prefabManager = null
 
-		/** @type {CommandBuffer | null} */
 		this.commandBuffer = null
 
-		/** @type {CommandBufferExecutor | null} */
 		this.commandBufferExecutor = null
 
-		/** @type {Object.<string, number>} */
 		this.systemTimings = {}
 
-		/** @type {Sequence<string>} */
 		this._executionOrder = new Sequence()
-		/** @type {Map<string, number>} */
+
 		this._executionOrderMap = new Map() // A cache mapping system names to their index
 
 		// This will store the configuration for each system's update rate.
@@ -85,23 +82,28 @@ export class SystemManager {
 	 */
 	async init() {
 		const systemModules = await loadAllSystems()
-		this.archetypeManager = (await import(`${PATH_MANAGERS}/ArchetypeManager/ArchetypeManager.js`)).archetypeManager
-		this.componentManager = (await import(`${PATH_MANAGERS}/ComponentManager/ComponentManager.js`)).componentManager
-		this.queryManager = (await import(`${PATH_MANAGERS}/QueryManager/QueryManager.js`)).queryManager
-		this.prefabManager = (await import(`${PATH_MANAGERS}/PrefabManager/PrefabManager.js`)).prefabManager
+
+		const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+		const { entityManager, prefabManager, archetypeManager, componentManager, queryManager } = theManager.getManagers()
+
+		this.entityManager = entityManager
+		this.archetypeManager = archetypeManager
+		this.componentManager = componentManager
+		this.queryManager = queryManager
+		this.prefabManager = prefabManager
 
 		this.app = gameManager.getApp()
 		this.renderer = this.app.renderer
 		this.ticker = this.app.ticker
 
-		this.commandBuffer = new CommandBuffer(this.componentManager, this.prefabManager, this.archetypeManager);
+		this.commandBuffer = new CommandBuffer(this.prefabManager, this.archetypeManager)
 		this.commandBufferExecutor = new CommandBufferExecutor(
-			(await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)).entityManager,
-			this.componentManager,
-			this.archetypeManager,
-			this,
-			this.prefabManager
-		);
+			this.entityManager,
+			this.archetypeManager
+		)
+
+		// Initialize the payload compiler now that all managers are ready.
+		payloadCompiler.init()
 
 		systemRegistry.registerSystemClasses(systemModules)
 
@@ -237,11 +239,18 @@ export class SystemManager {
 		return true
 	}
 
+	//! todo pause and unque is different
+	/* * ### Parallel Execution Note for pause
+	 * In a future parallel architecture, this would simply signal the main-thread scheduler to stop
+	 * creating and dispatching jobs for this system. The system instances on the worker threads
+	 * would become idle but would not be destroyed, allowing for efficient re-queuing.
+	 *                               the group is inferred. */
+
 	/**
 	 * Deques a system from execution.
 	 * @param {string|object} systemToDeque - The name or instance of the system to deque.
 	 * @param {string} [groupName] - Optional. The specific update group to remove from. If not provided,
-	 *                               the group is inferred.
+	 *
 	 * @returns {boolean} True if the system was found and removed, false otherwise.
 	 */
 	dequeSystem(systemToDeque, groupName) {

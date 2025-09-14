@@ -7,6 +7,6 @@ export const Icon = {
 	 */
 	assetName: {
 		type: 'string',
-		default: '',
+		default: ''
 	},
 }

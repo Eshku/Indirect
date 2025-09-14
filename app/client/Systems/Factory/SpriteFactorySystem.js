@@ -1,6 +1,7 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, layerManager, assetManager } = theManager.getManagers()
-const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 
 const UNINITIALIZED_REF = 0
 
@@ -22,6 +23,11 @@ export class SpriteFactorySystem {
 		this.descriptorTypeID = SpriteDescriptor
 		this.viewableTypeID = Viewable
 		this.gameActorsLayer = layerManager.getLayer('gameActors')
+
+		// Pre-compile the payload and cache the payload/mutator objects separately.
+		const { payload, mutators } = payloadCompiler.compileComponent(this.viewableTypeID, { spriteRef: 0 })
+		this.viewablePayload = payload
+		this.viewableMutators = mutators
 		this.stringStorage = stringInterningTable.storage
 	}
 
@@ -38,12 +44,15 @@ export class SpriteFactorySystem {
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				if (this.initializationQuery.hasChanged(chunk, indexInChunk)) {
+
 					if (spriteRefs[indexInChunk] !== UNINITIALIZED_REF) {
-						continue 
+
+						continue
 						// Already initialized
 						// might be redundent check, as double-tap reactivity was fixed
 						// archetype change should not trigger it too.
 					}
+
 
 					const entityId = chunk.entities[indexInChunk]
 					const assetName = stringStorage[assetNameRefs[indexInChunk]]
@@ -52,7 +61,10 @@ export class SpriteFactorySystem {
 					if (spriteRef !== null) {
 						const sprite = assetManager.getDisplayObjectByRef(spriteRef)
 						if (sprite) this.gameActorsLayer.addChild(sprite)
-						this.commands.setComponentData(entityId, this.viewableTypeID, { spriteRef })
+
+						// Use the cached mutator and payload for efficiency and readability.
+						this.viewableMutators.Viewable.spriteRef[0] = spriteRef
+						this.commands.setComponentData(entityId, this.viewablePayload)
 					}
 				}
 			}

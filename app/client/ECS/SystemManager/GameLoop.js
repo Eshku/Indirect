@@ -264,7 +264,7 @@ export class GameLoop {
 
 		// --- Command Buffer Flush ---
 		const cbFlushStartTime = performance.now();
-		this.systemManager.commandBufferExecutor.execute(this.systemManager.commandBuffer);
+		this.systemManager.commandBufferExecutor.execute(this.systemManager.commandBuffer, this.currentTick);
 		const cbFlushEndTime = performance.now();
 		//this.systemManager.systemTimings['CommandBufferExecutor.execute'] = cbFlushEndTime - cbFlushStartTime;
 

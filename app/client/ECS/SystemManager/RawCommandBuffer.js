@@ -7,13 +7,11 @@
 const INITIAL_BUFFER_SIZE = 1024 * 1024 // 1 MB
 
 export class RawCommandBuffer {
-	/**
-	 * @param {import('../ComponentManager/ComponentManager.js').ComponentManager} componentManager
-	 */
-	constructor(componentManager) {
-		this.componentManager = componentManager
+
+	constructor() {
 		this.buffer = new SharedArrayBuffer(INITIAL_BUFFER_SIZE)
 		this.view = new DataView(this.buffer)
+		this.uint8View = new Uint8Array(this.buffer) // For faster string/buffer ops
 		this.offset = 0
 	}
 
@@ -35,7 +33,7 @@ export class RawCommandBuffer {
 		if (this.offset + requiredSpace > this.buffer.byteLength) {
 			const newSize = Math.max(this.buffer.byteLength * 2, this.offset + requiredSpace)
 			const newBuffer = new SharedArrayBuffer(newSize)
-			new Uint8Array(newBuffer).set(new Uint8Array(this.buffer))
+			new Uint8Array(newBuffer).set(this.uint8View)
 			this.buffer = newBuffer
 			this.view = new DataView(this.buffer)
 		}
@@ -70,6 +68,13 @@ export class RawCommandBuffer {
 		this.ensureCapacity(4)
 		this.view.setUint32(this.offset, value, true)
 		this.offset += 4
+	}
+
+	writeU64(value) {
+		//console.log(`RawBuffer: writeU64 at ${this.offset} value ${value}`);
+		this.ensureCapacity(8)
+		this.view.setBigUint64(this.offset, value, true) // true for little-endian
+		this.offset += 8
 	}
 
 	writeI8(value) {
@@ -114,7 +119,40 @@ export class RawCommandBuffer {
 	writeBuffer(buffer) {
 		this.ensureCapacity(buffer.byteLength)
 		// Use a Uint8Array view for an efficient block copy.
-		new Uint8Array(this.buffer).set(new Uint8Array(buffer), this.offset)
+		this.uint8View.set(new Uint8Array(buffer), this.offset)
 		this.offset += buffer.byteLength
+	}
+
+	/**
+	 * Writes a string to the buffer, prefixed with its length.
+	 * @param {string} str The string to write.
+	 */
+	writeString(str) {
+		// Note: This uses a simple TextEncoder. For extreme performance,
+		// a pre-computed string hash (like FNV-1a) would be faster.
+		const encoded = new TextEncoder().encode(str)
+		this.ensureCapacity(2 + encoded.length)
+		this.writeU16(encoded.length)
+		this.uint8View.set(encoded, this.offset)
+		this.offset += encoded.length
+	}
+
+	readString() {
+		const length = this.view.getUint16(this.offset, true)
+		this.offset += 2
+		const strBytes = this.uint8View.subarray(this.offset, this.offset + length)
+		this.offset += length
+		return new TextDecoder().decode(strBytes)
+	}
+
+	readBuffer(byteLength) {
+		this.ensureCapacity(byteLength) // Should not be needed if writer ensures capacity
+		const bufferSlice = this.buffer.slice(this.offset, this.offset + byteLength)
+		this.offset += byteLength
+		return bufferSlice
+	}
+
+	seek(offset) {
+		this.offset = offset
 	}
 }

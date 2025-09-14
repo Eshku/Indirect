@@ -1,6 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, archetypeManager } = theManager.getManagers()
-const { payloadCompiler } = await import(`${PATH_CLIENT}/Managers/SystemManager/PayloadCompiler.js`)
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
  * system for stress-testing the core ECS data processing logic.
@@ -19,13 +19,12 @@ export class RWMBenchmark {
 		//1.2m stable
 		this.entityCount = 1_200_000
 
-		const creationMap = new Map([
-			[this.positionTypeID, { x: 0, y: 0 }],
-			[this.velocityTypeID, { x: 10, y: 10 }],
-			[this.benchmarkTagTypeID, {}],
-		])
-		const archetypeId = archetypeManager.getArchetype(creationMap.keys())
-		this.creationPayload = payloadCompiler.compileCreationPayload(archetypeId, creationMap)
+		const { payload } = payloadCompiler.compileEntities({
+			Position: { x: 0, y: 0 },
+			Velocity: { x: 10, y: 10 },
+			RWMTag: {},
+		})
+		this.creationPayload = payload
 	}
 
 	init() {

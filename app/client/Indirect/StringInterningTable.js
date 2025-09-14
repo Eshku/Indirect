@@ -91,6 +91,11 @@
  * The `storage` property is exposed for performance, trusting the developer to use
  * it responsibly.
  *
+ * ## 6. Technical Limits
+ *
+ * The references (`ref`s) are stored in components as 32-bit unsigned integers (`u32`).
+ * This imposes a theoretical maximum of `2^32 - 1` (approximately 4.3 billion)
+ * unique strings that the engine can intern. Probably RAM gonna be exhausted before this limit is reached.
  */
 export class StringInterningTable {
 	constructor() {
@@ -98,6 +103,8 @@ export class StringInterningTable {
 		 * @private
 		 * @type {Map<string, number>}
 		 */
+
+		/* amortized average time O(1) */
 		this.stringToRef = new Map([['', 0]])
 		/**
 		 * @private

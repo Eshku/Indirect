@@ -1,6 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { componentManager } = theManager.getManagers()
-const { ECS } = await import(`${PATH_CORE}/ECS/ECS.js`)
+
 const { testManager } = await import(`${PATH_CLIENT}/Managers/TestManager/TestManager.js`)
 const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManager/TestAPI.js`)
 

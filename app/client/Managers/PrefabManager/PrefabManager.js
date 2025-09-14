@@ -1,5 +1,7 @@
 const { LRUCache } = await import(`${PATH_CORE}/DataStructures/LRUCache.js`)
 
+import * as Schema from '../../ECS/ComponentManager/ComponentSchema.js'
+const { payloadCompiler } = await import('../../ECS/SystemManager/PayloadCompiler.js')
 const { PrefabLoader } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabLoader.js`)
 
 /**
@@ -39,20 +41,6 @@ export class PrefabManager {
 		this.rawPrefabDataCache = new Map()
 
 		/**
-		 * @property {LRUCache} variantCache - An LRU cache for storing runtime-generated prefab variants.
-		 * This is for entities that are based on a prefab but have been modified at runtime (e.g., a sword with unique stats).
-		 * Using an LRU cache here prevents memory leaks from accumulating countless unique entity variations.
-		 */
-
-		//! kay, I'm gonna forget idea behind this shit, soooo
-		//! Idea is to be able to create new "prefab" at runtime
-		//! Which would be temporary (?) cached
-		//! This would allow to take any prefab, declare overrides and create variant based on that
-		//! That skips re-override step each time we need to create variant.
-		//! AoS Payloads if we need low-level batch creations from there.
-		this.variantCache = new LRUCache(100)
-
-		/**
 		 * @property {PrefabLoader} loader - Handles the I/O and loading logic.
 		 */
 		this.loader = new PrefabLoader(this)
@@ -82,7 +70,10 @@ export class PrefabManager {
 	}
 
 	async init() {
-		this.componentManager = (await import(`${PATH_MANAGERS}/ComponentManager/ComponentManager.js`)).componentManager
+		const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+
+		const { componentManager } = theManager.getManagers()
+		this.componentManager = componentManager
 
 		await this.loader.loadManifest()
 
@@ -162,9 +153,7 @@ export class PrefabManager {
 	getPrefabDataById(id) {
 		const components = this.processedPrefabCache[id]
 		if (components === undefined) {
-			console.error(
-				`PrefabManager: Prefab with id '${id}' was not preloaded. Use preload() during setup.`
-			)
+			console.error(`PrefabManager: Prefab with id '${id}' was not preloaded. Use preload() during setup.`)
 			return null
 		}
 		return { components, children: this.processedChildrenCache[id] || [] }
@@ -260,8 +249,7 @@ export class PrefabManager {
 		// This ensures every instantiated entity knows its numeric prefab ID.
 		mergedComponents.Prefab = { id: id }
 
-		const finalIdMap = this.componentManager.createIdMapFromData(mergedComponents)
-		this.preprocessedIdMaps[id] = finalIdMap
+		// The preprocessedIdMaps cache is now obsolete and can be removed.
 
 		this.processedPrefabCache[id] = mergedComponents
 		this.processedChildrenCache[id] = finalChildren
@@ -290,7 +278,7 @@ export class PrefabManager {
 
 			// If the component's data is a primitive (not an object), it's a potential shorthand.
 			if (dataType === 'number' || dataType === 'string' || dataType === 'boolean') {
-				const info = this.componentManager.componentInfo[this.componentManager.getComponentTypeIDByName(componentName)]
+				const info = Schema.componentInfo[Schema.componentNameToTypeID.get(componentName.toLowerCase())]
 
 				if (info && info.originalSchemaKeys && info.originalSchemaKeys.length > 0) {
 					// --- Universal Shorthand Rule ---

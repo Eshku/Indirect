@@ -1,5 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, archetypeManager } = theManager.getManagers()
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 /**
  * runPerEntity: Alternates adding/removing a component to every entity each frame. (JIT unfriendly)
  * runBatchedWave: Adds a component to a 'wave' of entities each frame until all have it, then removes it in waves. (JIT friendly)
@@ -55,6 +56,16 @@ export class StructuralChangeBenchmarkSystem {
 		// State for the Batched Wave benchmark
 		this.isAddingWave = true
 		this.batchedWaveSize = benchmarkConfig.batchedWave.waveSize
+
+		// Pre-compile the creation payload once for maximum efficiency.
+		const { payload } = payloadCompiler.compileEntities({
+			ComponentA: {},
+		})
+		this.creationPayload = payload
+
+		// Pre-compile the payload for adding ComponentB. Since it's a tag, the data is empty.
+		const { payload: addPayload } = payloadCompiler.compileComponent(this.componentBTypeID, {})
+		this.addComponentPayload = addPayload
 	}
 
 	init() {
@@ -72,8 +83,7 @@ export class StructuralChangeBenchmarkSystem {
 		}
 
 		for (let i = 0; i < count; i++) {
-			// Use the new, direct SoA-based creation method.
-			this.commands.createEntity({ ComponentA: {} })
+			this.commands.createEntity(this.creationPayload)
 		}
 	}
 
@@ -117,8 +127,7 @@ export class StructuralChangeBenchmarkSystem {
 		if (currentTick % 2 === 0) {
 			for (const chunk of this.addQuery.iter()) {
 				for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-					// Use the new SoA API. Since ComponentB is a tag, the data object is empty.
-					this.commands.addComponent(chunk.entities[indexInChunk], this.componentBTypeID, {})
+					this.commands.addComponent(chunk.entities[indexInChunk], this.addComponentPayload)
 				}
 			}
 		} else {
@@ -136,7 +145,7 @@ export class StructuralChangeBenchmarkSystem {
 			for (const chunk of this.addQuery.iter()) {
 				for (let i = 0; i < chunk.size; i++) {
 					if (processedCount >= this.batchedWaveSize) break
-					this.commands.addComponent(chunk.entities[i], this.componentBTypeID, {})
+					this.commands.addComponent(chunk.entities[i], this.addComponentPayload)
 					processedCount++
 				}
 				if (processedCount >= this.batchedWaveSize) break
@@ -166,7 +175,7 @@ export class StructuralChangeBenchmarkSystem {
 
 	_updateQueryBased(currentTick) {
 		if (currentTick % 2 === 0) {
-			this.commands.addComponentToQuery(this.addQuery, this.componentBTypeID, {})
+			this.commands.addComponentToQuery(this.addQuery, this.addComponentPayload)
 		} else {
 			this.commands.removeComponentFromQuery(this.removeQuery, this.componentBTypeID)
 		}

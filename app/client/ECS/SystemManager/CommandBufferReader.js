@@ -5,12 +5,10 @@
 export class CommandBufferReader {
 	/**
 	 * @param {import('./RawCommandBuffer.js').RawCommandBuffer} rawBuffer
-	 * @param {import('../ComponentManager/ComponentManager.js').ComponentManager} componentManager
 	 */
-	constructor(rawBuffer, componentManager) {
+	constructor(rawBuffer) {
 		this.buffer = rawBuffer.buffer
 		this.view = new DataView(this.buffer)
-		this.componentManager = componentManager
 		this.offset = 0
 	}
 
@@ -37,6 +35,13 @@ export class CommandBufferReader {
 		const value = this.view.getUint32(this.offset, true)
 		//console.log(`Reader: readU32 at ${this.offset} value ${value}`);
 		this.offset += 4
+		return value
+	}
+
+	readU64() {
+		const value = this.view.getBigUint64(this.offset, true)
+		//console.log(`Reader: readU64 at ${this.offset} value ${value}`);
+		this.offset += 8
 		return value
 	}
 

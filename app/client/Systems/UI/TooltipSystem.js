@@ -1,6 +1,8 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { uiManager, entityManager, componentManager, archetypeManager } = theManager.getManagers()
-const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
+
+const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
+const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
 
 const { Easing } = await import(`${PATH_CORE}/utils/easing.js`)
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
@@ -40,17 +42,8 @@ export class TooltipSystem {
 		this.targetPosition = { x: 0, y: 0 }
 		this.hotbar = null
 
-		const {
-			Tooltip,
-			Parent,
-			DisplayName,
-			Damage,
-			Cooldown,
-			Range,
-			Strength,
-			Dexterity,
-			Intelligence,
-		} = componentManager.getTypeIDs()
+		const { Tooltip, Parent, DisplayName, Damage, Cooldown, Range, Strength, Dexterity, Intelligence } =
+			componentManager.getTypeIDs()
 
 		this.tooltipTypeId = Tooltip
 		this.parentTypeId = Parent
@@ -71,6 +64,8 @@ export class TooltipSystem {
 
 	async init() {
 		this.hotbar = uiManager.getElement('Hotbar')
+		this.propertyGroupManager = propertyGroupManager
+
 		this.setupHotbarEvents()
 	}
 
@@ -228,7 +223,8 @@ export class TooltipSystem {
 		const statsLength = tooltipArrays.stats_count[indexInChunk]
 
 		for (let i = 0; i < statsLength; i++) {
-			const statRef = tooltipArrays[`stats${i}`][indexInChunk]
+			// Access the flattened array property directly.
+			const statRef = tooltipArrays[`stats${i}`]?.[indexInChunk]
 			const statName = this.stringStorage[statRef]
 			const resolvedStat = this.resolveStat(statName, resolutionContext)
 
@@ -249,11 +245,11 @@ export class TooltipSystem {
 		const streamLength = damageArrays.formulas_rpnStream_count?.[indexInChunk] ?? 0
 
 		for (let i = 0; i < streamLength; i++) {
-			rpnStreamForEntity.push(damageArrays[`formulas_rpnStream${i}`][indexInChunk])
+			rpnStreamForEntity.push(damageArrays[`formulas_rpnStream${i}`]?.[indexInChunk])
 		}
 
 		for (let i = 0; i < numDamageEntries; i++) {
-			const baseValue = damageArrays[`baseValues${i}`][indexInChunk]
+			const baseValue = damageArrays[`baseValues${i}`]?.[indexInChunk]
 
 			const formulaStartIndex = damageArrays[`formulas_formulaStarts${i}`]?.[indexInChunk] ?? -1
 			const formulaLength = damageArrays[`formulas_formulaLengths${i}`]?.[indexInChunk] ?? 0
@@ -354,8 +350,12 @@ export class TooltipSystem {
 				const cooldownArrays = chunk.componentArrays[this.cooldownTypeId]
 				if (!cooldownArrays) return null
 
-				const duration = cooldownArrays.duration[indexInChunk]
-				return { label: 'Cooldown', value: `${duration.toFixed(1)}s` }
+				const sharedGroupId = cooldownArrays.sharedGroupId?.[indexInChunk]
+				if (sharedGroupId === undefined) return null
+
+				const sharedGroup = this.propertyGroupManager.sharedGroups[sharedGroupId]
+				const duration = sharedGroup?.[this.cooldownTypeId]?.duration ?? 0
+				return { label: 'Cooldown', value: `${duration.toFixed(2)}s` }
 			}
 			case 'Range': {
 				const rangeArrays = chunk.componentArrays[this.rangeTypeId]

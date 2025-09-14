@@ -1,5 +1,4 @@
 const { loadAllManagers } = await import(`${PATH_MANAGERS}/TheManager/ManagerLoader.js`)
-
 // Define the explicit initialization order of managers.
 // This order is crucial due to dependencies between managers.
 const MANAGER_INIT_ORDER = [
@@ -8,8 +7,7 @@ const MANAGER_INIT_ORDER = [
 	// Entity-Component-System architecture. They have few dependencies on each other
 	// and must be initialized in this specific order.
 	'ComponentManager',
-	'CooldownManager', // Depends on ComponentManager
-	'SharedGroupManager',
+
 	'LayerManager',
 	'GameManager',
 	'PhysicsManager',
@@ -23,7 +21,7 @@ const MANAGER_INIT_ORDER = [
 	'QueryManager', // Depends on ComponentManager, ArchetypeManager.
 	'SystemManager',
 
-	// --- User-Facing Subsystems ---
+	// --- User-Facing systems ---
 	// Managers that handle direct interaction with the user.
 	'UiManager',
 	'InputManager',
@@ -46,19 +44,15 @@ export class TheManager {
 
 	/**
 	 * Initializes all managers in a specific order.
-	 * 1. It first imports and instantiates all managers.
-	 * 2. It then calls the `init` method on each manager, passing itself as an argument.
-	 *    This allows each manager to access any other manager it depends on without
-	 *    using global imports, which is key for testability.
 	 */
 	async init() {
-		// 1. Load all manager modules and get their instances.
+		//Load all manager modules and get their instances.
 		const loadedManagers = await loadAllManagers()
 
-		// 2. Register all the loaded managers.
+		// Register all the loaded managers.
 		this.registerManagers(loadedManagers)
 
-		// 3. Initialize the registered managers in the correct order.
+		// Initialize the registered managers in the correct order.
 		await this.initializeManagers()
 	}
 

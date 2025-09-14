@@ -1,6 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, archetypeManager } = theManager.getManagers()
-const { payloadCompiler } = await import(`${PATH_CLIENT}/Managers/SystemManager/PayloadCompiler.js`)
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 //! ssytem itself is pretty heavy
 const benchmarkConfig = {
@@ -52,16 +52,23 @@ export class CreationDestructionBenchmarkSystem {
 			with: [ComponentB], // Use ComponentB as a tag for this test
 		})
 
-		const churnBasedCreationMap = new Map([
-			[this.positionTypeID, { x: 0, y: 0 }],
-			[this.velocityTypeID, { x: 0, y: 0 }],
-			[this.componentBTypeID, {}],
-		])
+		// Use the high-level compiler API that automatically determines the archetype.
+		// This is the correct, convenient pattern for systems.
+		this.churnBasedPayload = payloadCompiler.compileEntities({
+			Position: { x: 0, y: 0 },
+			Velocity: { x: 0, y: 0 },
+			ComponentB: {},
+		}).payload
 
-		this.churnBasedPayload = payloadCompiler.compileCreationPayload(
-			archetypeManager.getArchetype(churnBasedCreationMap.keys()),
-			churnBasedCreationMap
-		)
+		this.perEntityChurnPayload = payloadCompiler.compileEntity({
+			Position: { x: 0, y: 0 },
+			Velocity: { x: 0, y: 0 },
+			CreationDestructionTag: {},
+		}).payload
+
+		// Pre-compile the prefab payload, including overrides if configured.
+		const prefabOverrides = benchmarkConfig.prefabChurn.withOverrides ? { Position: { x: 100, y: -100 } } : {}
+		this.prefabChurnPayload = payloadCompiler.compileEntity('test_prefab', prefabOverrides).payload
 	}
 
 	init() {
@@ -106,11 +113,7 @@ export class CreationDestructionBenchmarkSystem {
 
 	_spawnChurn(count) {
 		for (let i = 0; i < count; i++) {
-			this.commands.createEntity({
-				Position: { x: 0, y: 0 },
-				Velocity: { x: 0, y: 0 },
-				CreationDestructionTag: {},
-			})
+			this.commands.createEntity(this.perEntityChurnPayload)
 		}
 	}
 
@@ -131,9 +134,8 @@ export class CreationDestructionBenchmarkSystem {
 	}
 
 	_spawnPrefabChurn(count) {
-		const overrides = benchmarkConfig.prefabChurn.withOverrides ? { Position: { x: 100, y: -100 } } : {}
 		for (let i = 0; i < count; i++) {
-			this.commands.instantiate('test_prefab', overrides)
+			this.commands.instantiate(this.prefabChurnPayload, 0)
 		}
 	}
 

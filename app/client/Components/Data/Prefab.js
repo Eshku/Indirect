@@ -10,5 +10,6 @@ export const Prefab = {
 	 */
 	id: {
 		type: 'u32',
+		shared: true, // This property is now part of the shared data group.
 	},
 }

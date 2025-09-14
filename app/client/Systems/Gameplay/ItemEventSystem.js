@@ -1,6 +1,9 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, cooldownManager, archetypeManager, entityManager, prefabManager } =
-	theManager.getManagers()
+const { queryManager, componentManager, archetypeManager, entityManager, prefabManager } = theManager.getManagers()
+
+const { cooldownManager } = await import(`${PATH_SUBSYSTEMS}/CooldownManager.js`)
+
+const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
 
 /**
  * This system is the first step in the action pipeline. It finds an entity's
@@ -22,6 +25,7 @@ export class ItemEventSystem {
 		this.cooldownManager = cooldownManager
 		this.entityManager = entityManager
 		this.prefabManager = prefabManager
+		this.propertyGroupManager = propertyGroupManager
 	}
 
 	init() {}
@@ -52,6 +56,7 @@ export class ItemEventSystem {
 				actionIntentMarker.mark(indexInChunk)
 
 				const activeSlotIndex = activeIndices[indexInChunk]
+				// Access the flattened array property directly.
 				const itemEntityId = activeSets[`slots${activeSlotIndex}`][indexInChunk]
 
 				if (!itemEntityId) {
@@ -74,15 +79,26 @@ export class ItemEventSystem {
 					continue
 				}
 
-				const itemPrefabId = prefabIdArrays.id[itemIndexInChunk]
+				// The Prefab.id is now a shared property. We must look it up via the sharedGroupId.
+				const prefabSharedGroupId = prefabIdArrays.sharedGroupId[itemIndexInChunk]
+				const sharedGroup = this.propertyGroupManager.sharedGroups[prefabSharedGroupId]
+				const sharedPrefabData = sharedGroup?.[this.prefabIdTypeID]
+				const itemPrefabId = sharedPrefabData?.id
+
+				if (itemPrefabId === undefined) {
+					console.warn(`ItemEventSystem: Could not resolve prefabId for item ${itemEntityId}. Cannot process action.`)
+					continue
+				}
 
 				const cooldownArrays = itemChunk.componentArrays[this.cooldownTypeID]
 
-				// Read cooldown value directly on the item if it is present.
+				// Cooldown duration is now a shared property.
 				if (cooldownArrays) {
 					if (this.cooldownManager.isOnCooldown(actorId, itemPrefabId)) continue
 
-					const itemCooldownDuration = cooldownArrays.duration[itemIndexInChunk]
+					// We already have the sharedGroup from the Prefab lookup. We can reuse it.
+					const sharedCooldownData = sharedGroup?.[this.cooldownTypeID]
+					const itemCooldownDuration = sharedCooldownData?.duration ?? 0
 					this.cooldownManager.startCooldown(actorId, itemPrefabId, itemCooldownDuration)
 				}
 

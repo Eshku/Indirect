@@ -1,5 +1,6 @@
 /**
  * A component that defines stackable behavior for items or abilities.
+
  */
 export const Stack = {
 	/**

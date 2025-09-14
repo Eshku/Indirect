@@ -1,24 +1,8 @@
-const TYPED_ARRAY_MAP = {
-	float: Float64Array,
-	int: Int32Array,
-	integer: Int32Array,
-	unsigned: Uint32Array,
-	uint: Uint32Array,
-	f64: Float64Array,
-	f32: Float32Array,
-	i32: Int32Array,
-	u32: Uint32Array,
-	i16: Int16Array,
-	u16: Uint16Array,
-	i8: Int8Array,
-	u8: Uint8Array,
-	bool: Uint8Array,
-	boolean: Uint8Array, // Alias for u8
-}
+import { TYPED_ARRAY_MAP } from './ComponentSchema.js'
 
-const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
+const { interpret } = await import('./ComponentInterpreter.js')
 
-const getTypedArrayConstructor = type => TYPED_ARRAY_MAP[type] || null
+const getTypedArrayConstructor = (type) => TYPED_ARRAY_MAP[type] || null
 
 /**
  * A registry of processors for different schema property types.
@@ -26,45 +10,53 @@ const getTypedArrayConstructor = type => TYPED_ARRAY_MAP[type] || null
  * and compiling default values.
  */
 const TypeProcessors = {
-	// --- Primitive Types (Generated) ---
-	// A generic processor for all simple numeric types.
-	...Object.keys(TYPED_ARRAY_MAP).reduce((processors, type) => {
-		processors[type] = {
-			parse(propName, definition, componentInfo) {
-				if (definition.shared) return
+	// This will be populated below to avoid reference errors during initialization.
+}
 
-				const arrayConstructor = getTypedArrayConstructor(definition.type)
-				componentInfo.properties[propName] = { type: definition.type, arrayConstructor }
-				componentInfo.propertyKeys.push(propName)
-				componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
-			},
-			processDefault(propName, definition, compiledDefaults) {
-				compiledDefaults[propName] = definition.default ?? 0
-			},
-		}
-		return processors
-	}, {}),
-	// =================================================================
-	// Special Scalar Types
-	// =================================================================
-
-	string: {
+// First, create all the primitive type processors.
+const PrimitiveTypeProcessors = Object.keys(TYPED_ARRAY_MAP).reduce((processors, type) => {
+	processors[type] = {
 		parse(propName, definition, componentInfo) {
-			if (definition.shared) return
+			if (definition.shared) return // A shared property does not get its own storage in the chunk.
 
-			const storageType = 'u32'
-			const arrayConstructor = getTypedArrayConstructor(storageType)
-			componentInfo.properties[propName] = { type: storageType, arrayConstructor }
+			const arrayConstructor = getTypedArrayConstructor(definition.type)
+			const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
+
+			// Align the current offset to the requirement of this property.
+			const alignment = arrayConstructor.BYTES_PER_ELEMENT
+			if (alignment > 0 && componentInfo.byteSize % alignment !== 0) {
+				componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
+			}
+			const offset = componentInfo.byteSize
+
+			componentInfo.properties[propName] = {
+				type: definition.type,
+				alignment,
+				arrayConstructor,
+				readMethod,
+				offset,
+			}
 			componentInfo.propertyKeys.push(propName)
 			componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
 		},
-		processDefault(propName, definition, compiledDefaults) {
-			const defaultValue = definition.default ?? ''
-			compiledDefaults[propName] = stringInterningTable.intern(defaultValue)
-		},
-	},
+	}
+	return processors
+}, {})
 
+// Now, assign all processors to the main TypeProcessors object.
+Object.assign(TypeProcessors, {
+	...PrimitiveTypeProcessors,
+	string: {
+		parse: PrimitiveTypeProcessors.u32.parse, // A string is stored as a u32.
+	},
 	bitmask: {
+		/**
+		 * DEV-NOTE: A `bitmask` is stored as a single integer (the "bitfield").
+		 * Each string in the `of` array is assigned a unique power-of-two value (1, 2, 4, 8, ...).
+		 * When you provide an array of strings as a default or for setting data, the compiler
+		 * combines these values using a bitwise OR operation to create the final integer that
+		 * gets stored in the component's TypedArray.
+		 */
 		parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			if (definition.shared) {
 				throw new Error(
@@ -84,7 +76,22 @@ const TypeProcessors = {
 				)
 			}
 
-			componentInfo.properties[propName] = { type: storageType, arrayConstructor }
+			const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
+
+			// Align the current offset to the requirement of this property.
+			const alignment = arrayConstructor.BYTES_PER_ELEMENT
+			if (alignment > 0 && componentInfo.byteSize % alignment !== 0) {
+				componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
+			}
+			const offset = componentInfo.byteSize
+
+			componentInfo.properties[propName] = {
+				type: storageType,
+				alignment,
+				arrayConstructor,
+				readMethod,
+				offset,
+			}
 			componentInfo.propertyKeys.push(propName)
 			componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
 
@@ -96,27 +103,16 @@ const TypeProcessors = {
 			componentInfo.representations[propName].flagMap = flagMap
 			constants[propName.toUpperCase()] = Object.freeze(flagMap)
 		},
-		processDefault(propName, definition, compiledDefaults) {
-			const defaultValue = definition.default
-			if (defaultValue !== undefined) {
-				if (!Array.isArray(defaultValue)) {
-					throw new Error(`Default for bitmask ${propName} must be an array of strings.`)
-				}
-				const flagMap = definition.flagMap
-				let bitmask = 0
-				for (const flagString of defaultValue) {
-					const flagValue = flagMap[flagString]
-					if (flagValue === undefined) throw new Error(`Invalid default flag "${flagString}" for bitmask ${propName}.`)
-					bitmask |= flagValue
-				}
-				compiledDefaults[propName] = bitmask
-			} else {
-				compiledDefaults[propName] = 0
-			}
-		},
 	},
-
 	enum: {
+		/**
+		 * DEV-NOTE (Low-Level): An `enum` is stored as a single integer representing the index of the
+		 * string value in the `of` array. For a schema `{ myEnum: { type: 'enum', of: ['A', 'B', 'C'] } }`,
+		 * the compiler creates a single property `myEnum` backed by a `Uint8Array` (or `u16`/`u32` for
+		 * more options). In a chunk, this array will hold the raw integer indices (0 for 'A', 1 for 'B', etc.).
+		 * This is highly memory-efficient, and the engine automatically handles the conversion to and from
+		 * the string representation for you when using high-level APIs.
+		 */
 		parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			const { storageType, of: values } = definition
 			const arrayConstructor = getTypedArrayConstructor(storageType)
@@ -145,34 +141,30 @@ const TypeProcessors = {
 			componentInfo.representations[propName].valueMap = valueMap
 			constants[propName.toUpperCase()] = Object.freeze(enumMap)
 
-			if (definition.shared) return
+			if (definition.shared) {
+				return
+			}
 
-			componentInfo.properties[propName] = { type: storageType, arrayConstructor }
+			const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
+
+			// Align the current offset to the requirement of this property.
+			const alignment = arrayConstructor.BYTES_PER_ELEMENT
+			if (alignment > 0 && componentInfo.byteSize % alignment !== 0) {
+				componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
+			}
+			const offset = componentInfo.byteSize
+
+			componentInfo.properties[propName] = {
+				type: storageType,
+				alignment,
+				arrayConstructor,
+				readMethod,
+				offset,
+			}
 			componentInfo.propertyKeys.push(propName)
 			componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
 		},
-		processDefault(propName, definition, compiledDefaults) {
-			if (definition.default !== undefined) {
-				const index = definition.enumMap[definition.default]
-				if (index === undefined) {
-					throw new Error(`Invalid default value "${definition.default}" for enum ${propName}.`)
-				}
-				compiledDefaults[propName] = index
-			} else {
-				compiledDefaults[propName] = 0 // Default to the first enum value
-			}
-		},
 	},
-
-	// =================================================================
-	// Composite / Collection Types
-	// =================================================================
-
-	/**
-	 * A placeholder for a true variable-length array. This will be implemented
-	 * as a "packed array" where all entity data for this component is stored
-	 * in a single, contiguous buffer within each chunk.
-	 */
 	dynamic_array: {
 		parse(propName, definition, componentInfo, implicitKeys, componentName) {
 			if (definition.shared) {
@@ -224,27 +216,40 @@ const TypeProcessors = {
 
 			const startIndexProperty = `${propName}_startIndex`
 			const startIndexConstructor = getTypedArrayConstructor('u32')
-			componentInfo.properties[startIndexProperty] = { type: 'u32', arrayConstructor: startIndexConstructor }
+			componentInfo.properties[startIndexProperty] = {
+				type: 'u32',
+				arrayConstructor: startIndexConstructor,
+				readMethod: `get${startIndexConstructor.name.replace('Array', '')}`,
+				offset: componentInfo.byteSize,
+			}
 			componentInfo.propertyKeys.push(startIndexProperty)
 			implicitKeys.push(startIndexProperty)
 			componentInfo.byteSize += startIndexConstructor.BYTES_PER_ELEMENT
 
 			const lengthProperty = `${propName}_length`
 			const lengthConstructor = getTypedArrayConstructor('u16')
-			componentInfo.properties[lengthProperty] = { type: 'u16', arrayConstructor: lengthConstructor }
+			componentInfo.properties[lengthProperty] = {
+				type: 'u16',
+				arrayConstructor: lengthConstructor,
+				readMethod: `get${lengthConstructor.name.replace('Array', '')}`,
+				offset: componentInfo.byteSize,
+			}
 			componentInfo.propertyKeys.push(lengthProperty)
 			implicitKeys.push(lengthProperty)
 			componentInfo.byteSize += lengthConstructor.BYTES_PER_ELEMENT
 		},
 		// pack_array does not generate a program instruction; it's handled by ArchetypeManager.
-		processDefault(propName, definition, compiledDefaults) {
-			// Packed arrays default to empty.
-			compiledDefaults[`${propName}_startIndex`] = -1
-			compiledDefaults[`${propName}_length`] = 0
-		},
 	},
-
 	flat_array: {
+		/**
+		 * DEV-NOTE: A `flat_array` is not stored as a nested array. Instead, it is "flattened"
+		 * into the component's SoA layout. For a schema like `{ my_array: { type: 'flat_array', of: 'u32', capacity: 3 } }`,
+		 * the compiler generates individual properties `my_array0`, `my_array1`, and `my_array2`, each with its
+		 * own `Uint32Array` in the chunk.
+		 * It also creates an implicit `my_array_count` property (a `u8`) to store the *current* length of the
+		 * array for each entity, which can be less than the total capacity. This design keeps data access
+		 * extremely fast and cache-friendly for fixed-size collections.
+		 */
 		parse(propName, definition, componentInfo, implicitKeys, componentName) {
 			if (definition.shared) {
 				throw new Error(
@@ -271,7 +276,9 @@ const TypeProcessors = {
 			}
 
 			let itemStorageType
+			// Start with the original schema, but we will overwrite the 'type' property.
 			let itemRepresentation = { ...itemSchema }
+			itemRepresentation.originalType = itemSchema.type // Preserve the high-level type
 
 			switch (itemSchema.type) {
 				case 'string':
@@ -304,6 +311,9 @@ const TypeProcessors = {
 					break
 			}
 
+			// CRITICAL FIX: Ensure the itemRepresentation holds the final storage type.
+			itemRepresentation.type = itemStorageType
+
 			const arrayConstructor = getTypedArrayConstructor(itemStorageType)
 			if (!arrayConstructor) {
 				throw new Error(
@@ -319,7 +329,13 @@ const TypeProcessors = {
 			if (componentInfo.originalSchemaKeys.indexOf(lengthProperty) === -1) {
 				const lenPropType = 'u8'
 				const lenArrayConstructor = getTypedArrayConstructor(lenPropType)
-				componentInfo.properties[lengthProperty] = { type: lenPropType, arrayConstructor: lenArrayConstructor }
+				componentInfo.properties[lengthProperty] = {
+					type: lenPropType,
+					alignment: lenArrayConstructor.BYTES_PER_ELEMENT,
+					arrayConstructor: lenArrayConstructor,
+					readMethod: `get${lenArrayConstructor.name.replace('Array', '')}`,
+					offset: componentInfo.byteSize, // This will be incorrect if not last, but it is.
+				}
 				componentInfo.propertyKeys.push(lengthProperty)
 				implicitKeys.push(lengthProperty)
 				componentInfo.byteSize += lenArrayConstructor.BYTES_PER_ELEMENT
@@ -327,44 +343,20 @@ const TypeProcessors = {
 
 			for (let propIndex = 0; propIndex < len; propIndex++) {
 				const key = `${propName}${propIndex}`
-				componentInfo.properties[key] = { type: itemStorageType, arrayConstructor }
+				const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
+
+				const alignment = arrayConstructor.BYTES_PER_ELEMENT
+				if (alignment > 0 && componentInfo.byteSize % alignment !== 0) {
+					componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
+				}
+				const offset = componentInfo.byteSize
+
+				componentInfo.properties[key] = { type: itemStorageType, arrayConstructor, readMethod, offset, alignment }
 				componentInfo.propertyKeys.push(key)
 				componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
 			}
 		},
-		processDefault(propName, definition, compiledDefaults) {
-			const { capacity, lengthProperty, itemRepresentation } = definition
-			const defaultArray = definition.default || []
-
-			if (!Array.isArray(defaultArray)) {
-				throw new Error(`Default for flat_array ${propName} must be an array.`)
-			}
-
-			const liveLength = Math.min(defaultArray.length, capacity)
-
-			for (let i = 0; i < capacity; i++) {
-				const key = `${propName}${i}`
-				if (i < liveLength) {
-					const value = defaultArray[i]
-					switch (itemRepresentation.type) {
-						case 'string':
-							compiledDefaults[key] = stringInterningTable.intern(value ?? '')
-							break
-						case 'enum':
-							compiledDefaults[key] = itemRepresentation.enumMap[value] ?? 0
-							break
-						default:
-							compiledDefaults[key] = value ?? 0
-							break
-					}
-				} else {
-					compiledDefaults[key] = 0 // Fill rest with 0
-				}
-			}
-			compiledDefaults[lengthProperty] = liveLength
-		},
 	},
-
 	rpn: {
 		parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			if (definition.shared) {
@@ -436,11 +428,8 @@ const TypeProcessors = {
 				componentName
 			)
 		},
-		processDefault(propName, definition, compiledDefaults) {
-			// RPN defaults to empty. The underlying flat_arrays will be handled by their own default processors.
-		},
 	},
-}
+})
 
 /**
  * Parses and compiles a component's declarative schema object.
@@ -449,6 +438,14 @@ const TypeProcessors = {
  * It produces the low-level memory layout (`componentInfo`), a pre-compiled object
  * of default values in their final numeric form (`compiledDefaults`), and a set of
  * frozen constants for enums and bitmasks (`constants`).
+ *
+ * ---
+ * ### DEV-NOTE: The Startup Parser
+ * This service is the authority for the **one-time, startup schema parsing process**.
+ * Its sole responsibility is to read the static `schema` from each component file,
+ * calculate its memory layout (`componentInfo`), and pre-compile its constants. It acts
+ * as a client of the stateless `ComponentInterpreter` to process the `default` values
+ * into their raw, engine-friendly format.
  */
 export class SchemaCompiler {
 	/**
@@ -461,7 +458,8 @@ export class SchemaCompiler {
 	compile(componentName, schema, typeID) {
 		const constants = {}
 		const compiledDefaults = {}
-		const componentInfo = this._parse(componentName, schema, typeID, constants, compiledDefaults)
+		// Pass componentName to _parse so it can be stored in componentInfo for TypeProcessors
+		const componentInfo = this._parse(componentName, schema, typeID, constants)
 		this._compileDefaults(componentInfo, compiledDefaults)
 		return { componentInfo, constants, compiledDefaults }
 	}
@@ -474,18 +472,19 @@ export class SchemaCompiler {
 	 * @param {object} schema - The component's schema object.
 	 * @param {number} typeID - The component's type ID.
 	 * @param {object} constants - The object to populate with compiled constants (e.g., enums).
-	 * @param {object} compiledDefaults - The object to populate with compiled default values.
 	 * @returns {object} The parsed component information object.
 	 * @private
 	 */
-	_parse(componentName, schema, typeID, constants, compiledDefaults) {
+	_parse(componentName, schema, typeID, constants) {
 		const componentInfo = {
 			typeID,
+			componentName, // Store componentName here for TypeProcessors to access
 			propertyKeys: [],
 			representations: {},
 			originalSchemaKeys: [],
 			properties: {},
 			byteSize: 0,
+			alignment: 0,
 			sharedProperties: [],
 			perEntityProperties: [],
 		}
@@ -499,13 +498,24 @@ export class SchemaCompiler {
 		const implicitKeys = []
 		for (const propName of schemaKeys) {
 			const propDefinition = schema[propName]
-			this._parseProperty(propName, propDefinition, componentInfo, implicitKeys, componentName, constants, compiledDefaults)
+			this._parseProperty(propName, propDefinition, componentInfo, implicitKeys, componentName, constants)
 		}
 
 		componentInfo.originalSchemaKeys.push(...implicitKeys)
 		componentInfo.originalSchemaKeys.sort()
 
 		componentInfo.propertyKeys = [...new Set(componentInfo.propertyKeys)].sort()
+
+		// Determine the alignment for the entire component based on its largest member.
+		let maxAlignment = 0
+		for (const key of componentInfo.propertyKeys) {
+			const prop = componentInfo.properties[key]
+			if (!prop) continue
+			const propAlignment = prop.alignment || prop.arrayConstructor.BYTES_PER_ELEMENT
+			//console.log(`[SchemaCompiler] ${componentName}.${key}: offset=${prop.offset}, size=${prop.arrayConstructor.BYTES_PER_ELEMENT}, alignment=${propAlignment}`);
+			maxAlignment = Math.max(maxAlignment, propAlignment)
+		}
+		componentInfo.alignment = maxAlignment
 
 		for (const propName of componentInfo.originalSchemaKeys) {
 			if (componentInfo.representations[propName]?.shared) {
@@ -515,20 +525,34 @@ export class SchemaCompiler {
 			}
 		}
 
+		// If the component has any shared properties, add a 'sharedGroupId' to its schema.
+		// This ID will be stored on the entity's chunk and point to the actual shared data.
 		if (componentInfo.sharedProperties.length > 0) {
-			const groupIdPropName = 'groupId'
-			if (!componentInfo.properties[groupIdPropName]) {
-				const arrayConstructor = getTypedArrayConstructor('u32')
-				componentInfo.properties[groupIdPropName] = { type: 'u32', arrayConstructor }
-				componentInfo.propertyKeys.push(groupIdPropName)
-				componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
+			const sharedGroupIdPropName = 'sharedGroupId'
+			const arrayConstructor = getTypedArrayConstructor('u32')
+			const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
+
+			const alignment = arrayConstructor.BYTES_PER_ELEMENT
+			if (alignment > 0 && componentInfo.byteSize % alignment !== 0) {
+				componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
 			}
+			const offset = componentInfo.byteSize
+
+			componentInfo.properties[sharedGroupIdPropName] = {
+				type: 'u32',
+				alignment,
+				arrayConstructor,
+				readMethod,
+				offset,
+			}
+			componentInfo.propertyKeys.push(sharedGroupIdPropName)
+			componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
 		}
 
 		return componentInfo
 	}
 
-	_parseProperty(propName, definitionObject, componentInfo, implicitKeys, componentName, constants, compiledDefaults) {
+	_parseProperty(propName, definitionObject, componentInfo, implicitKeys, componentName, constants) {
 		// With the new explicit format, propDefinition is always the definition object.
 		if (typeof definitionObject !== 'object' || definitionObject === null || !definitionObject.type) {
 			throw new Error(
@@ -575,11 +599,26 @@ export class SchemaCompiler {
 	 * @private
 	 */
 	_compileDefaults(componentInfo, compiledDefaults) {
+		const highLevelDefaults = {}
 		for (const propName in componentInfo.representations) {
 			const rep = componentInfo.representations[propName]
-			const handler = TypeProcessors[rep.type]
+			if (rep.default !== undefined) {
+				highLevelDefaults[propName] = rep.default
+			}
+		}
 
-			handler.processDefault?.(propName, rep, compiledDefaults)
+		// Use the new stateless interpreter to transform the high-level defaults into raw data.
+		const rawDefaults = interpret(componentInfo.typeID, highLevelDefaults)
+
+		// Assign the processed defaults.
+		Object.assign(compiledDefaults, rawDefaults)
+
+		// Ensure all properties defined in the final schema have a default value, even if it's 0.
+		// This prevents `undefined` values in component arrays.
+		for (const propKey of componentInfo.propertyKeys) {
+			if (compiledDefaults[propKey] === undefined) {
+				compiledDefaults[propKey] = 0
+			}
 		}
 	}
 }

@@ -1,5 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { entityManager, componentManager, archetypeManager, sharedGroupManager } = theManager.getManagers()
+const { entityManager, componentManager, archetypeManager, propertyGroupManager } = theManager.getManagers()
+import * as Schema from '../ComponentManager/ComponentSchema.js'
 
 /**
  * A high-level wrapper around an entity ID, providing convenient methods for **inspecting**
@@ -42,21 +43,7 @@ export class Entity {
 			console.warn(`Entity ${this.id} is not active.`)
 			return []
 		}
-		const perEntityNames = new Set(componentManager.getComponentNamesForArchetype(this.archetypeId))
-
-		// Also inspect shared components
-		const componentData = this.data
-		if (componentData) {
-			for (const componentName in componentData) {
-				const component = componentData[componentName]
-				// A component has shared data if it has a groupId property after merging.
-				if (component && component.hasOwnProperty('groupId')) {
-					perEntityNames.add(componentName)
-				}
-			}
-		}
-
-		return [...perEntityNames].sort()
+		return [...componentManager.getComponentNamesForArchetype(this.archetypeId)].sort()
 	}
 
 	/**
@@ -85,17 +72,11 @@ export class Entity {
 		// Iterate over the component type IDs for this entity's archetype.
 		// The browser console will typically sort these keys alphabetically for display.
 		for (const typeId of componentTypeIDs) {
-			const componentName = componentManager.getComponentNameByTypeID(typeId)
-			const perEntityData = componentManager.reconstructComponentData(this.id, typeId)
-
-			if (perEntityData && perEntityData.hasOwnProperty('groupId')) {
-				const groupId = perEntityData.groupId
-				const sharedGroup = sharedGroupManager.groups[groupId]
-				const sharedComponentData = sharedGroup ? sharedGroup[typeId] : null
-				allData[componentName] = { ...perEntityData, ...sharedComponentData }
-			} else {
-				allData[componentName] = perEntityData
-			}
+			const componentName = Schema.componentNames[typeId]
+			// Use the entity's own `get` method, which handles shared data merging.
+			// This avoids duplicating the merge logic here.
+			const fullComponentData = this.get(componentName)
+			allData[componentName] = fullComponentData
 		}
 		return allData
 	}
@@ -116,7 +97,7 @@ export class Entity {
 			return undefined
 		}
 
-		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
+		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
 		if (componentTypeId === undefined) {
 			// componentManager already warns if the name is not found.
 			return undefined
@@ -128,16 +109,24 @@ export class Entity {
 			return undefined
 		}
 
+		// Reconstruct the per-entity data stored on the chunk.
 		const perEntityData = componentManager.reconstructComponentData(this.id, componentTypeId)
 
-		// Check for and merge shared data
-		if (perEntityData && perEntityData.hasOwnProperty('groupId')) {
-			const groupId = perEntityData.groupId
-			const sharedGroup = sharedGroupManager.groups[groupId]
-			const sharedComponentData = sharedGroup ? sharedGroup[componentTypeId] : null
-			return { ...perEntityData, ...sharedComponentData }
+		// Find and merge the instance-shared data if the component has any shared properties.
+		const info = Schema.componentInfo[componentTypeId]
+		if (info.sharedProperties.length === 0) {
+			return perEntityData // No shared properties, return as-is.
 		}
 
-		return perEntityData
+		// Get the sharedGroupId from the per-entity data.
+		// This property is added by the SchemaCompiler if the component has shared properties.
+		const sharedGroupId = perEntityData?.sharedGroupId
+		if (sharedGroupId === undefined) return perEntityData // No prefab, so no shared data.
+
+		const sharedGroup = propertyGroupManager.getSharedGroup(sharedGroupId)
+		const rawSharedData = sharedGroup ? sharedGroup[componentTypeId] : undefined
+		const reconstructedSharedData = componentManager.reconstructSharedData(componentTypeId, rawSharedData)
+
+		return { ...reconstructedSharedData, ...perEntityData }
 	}
 }

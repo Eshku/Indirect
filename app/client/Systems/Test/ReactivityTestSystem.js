@@ -1,5 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager } = theManager.getManagers()
+const { queryManager, componentManager, systemManager } = theManager.getManagers()
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
  * A system to test the engine's reactivity pipeline, including direct component
@@ -42,8 +43,12 @@ export class ReactivityTestSystem {
 
 	init() {
 		for (let i = 0; i < this.totalEntities; i++) {
-			// Use the new, direct SoA-based creation method.
-			this.commands.createEntity({ ReactivityTarget: {}, ReactivityComponent: { value: 0 } })
+			// Compile the payload once.
+			const { payload } = payloadCompiler.compileEntity({
+				ReactivityTarget: {},
+				ReactivityComponent: { value: 0 },
+			})
+			this.commands.createEntity(payload)
 		}
 		//console.log(`ReactivityTestSystem: Spawned ${this.totalEntities} test entities.`)
 	}

@@ -1,5 +1,6 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, archetypeManager } = theManager.getManagers()
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
  * A custom, AABB-based collision system that handles interactions between characters and platforms.
@@ -28,6 +29,14 @@ export class CollisionSystem {
 		this.landedEventTypeID = LandedEvent
 		this.leftSurfaceEventTypeID = LeftSurfaceEvent
 
+		// Pre-compile payloads for our event entities. This is much faster than creating
+		// new objects in the update loop.
+		this.landedEventPayload = payloadCompiler.compileEntity({
+			LandedEvent: { entityId: 0 }, // The entityId will be mutated at runtime.
+		})
+		this.leftSurfaceEventPayload = payloadCompiler.compileEntity({
+			LeftSurfaceEvent: { entityId: 0 },
+		})
 		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(CollisionFlags, 'collisionFlags')
 
 		this.characterQuery = queryManager.getQuery({
@@ -190,8 +199,10 @@ export class CollisionSystem {
 
 					if (!wasGrounded) {
 						// This is a landing event.
-						//console.log(`Landing event for entity ${charChunk.entities[charIndexInChunk]} frame ${currentTick}`)
-						this.commands.createEntity({ [this.landedEventTypeID]: { entityId: charChunk.entities[charIndexInChunk] } })
+						const { mutators, payload } = this.landedEventPayload
+						// Use the mutator to set the correct entityId on the pre-compiled payload.
+						mutators.LandedEvent.entityId[0] = charChunk.entities[charIndexInChunk]
+						this.commands.createEntity(payload)
 					}
 				} else {
 					// Character is airborne for one of three reasons:
@@ -201,9 +212,10 @@ export class CollisionSystem {
 					isGroundedNow = false
 					if (wasGrounded && !justJumped) {
 
-						// This is the "walked off a ledge" case.
-						//console.log(`Left surface event for entity ${charChunk.entities[charIndexInChunk]} frame ${currentTick}`)
-						this.commands.createEntity({ [this.leftSurfaceEventTypeID]: { entityId: charChunk.entities[charIndexInChunk] } })
+						// This is the "walked off a ledge" case. Use the pre-compiled payload.
+						const { mutators, payload } = this.leftSurfaceEventPayload
+						mutators.LeftSurfaceEvent.entityId[0] = charChunk.entities[charIndexInChunk]
+						this.commands.createEntity(payload)
 					}
 				}
 

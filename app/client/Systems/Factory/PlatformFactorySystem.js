@@ -1,6 +1,7 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, layerManager, assetManager } = theManager.getManagers()
-const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 
 /**
  * Creates visual PIXI.Graphics representations for entities that have a
@@ -19,6 +20,15 @@ export class PlatformFactorySystem {
 		this.viewableTypeID = Viewable
 		this.colliderTypeID = Collider
 		this.gameWorldLayer = layerManager.getLayer('gameWorld')
+
+		// Pre-compile payloads and cache the payload/mutator objects separately for cleaner access.
+		const { payload: viewablePayload, mutators: viewableMutators } = payloadCompiler.compileComponent(this.viewableTypeID, { spriteRef: 0 })
+		this.viewablePayload = viewablePayload
+		this.viewableMutators = viewableMutators
+
+		const { payload: colliderPayload, mutators: colliderMutators } = payloadCompiler.compileComponent(this.colliderTypeID, { width: 0, height: 0 })
+		this.colliderPayload = colliderPayload
+		this.colliderMutators = colliderMutators
 		this.stringStorage = stringInterningTable.storage
 	}
 
@@ -67,8 +77,13 @@ export class PlatformFactorySystem {
 
 					const ref = assetManager.acquireDisplayObjectRef(graphic)
 
-					this.commands.setComponentData(entityId, this.viewableTypeID, { spriteRef: ref })
-					this.commands.setComponentData(entityId, this.colliderTypeID, { width, height })
+					// Use the cached mutators and payload for efficiency and readability.
+					this.viewableMutators.Viewable.spriteRef[0] = ref
+					this.commands.setComponentData(entityId, this.viewablePayload)
+
+					this.colliderMutators.Collider.width[0] = width
+					this.colliderMutators.Collider.height[0] = height
+					this.commands.setComponentData(entityId, this.colliderPayload)
 				}
 			}
 		}

@@ -41,6 +41,7 @@ export class PlayerInputSystem {
 		this.hotbar = uiManager.getElement('Hotbar')
 
 		findPlayer: for (const chunk of this.playerQuery.iter()) {
+
 			for (let i = 0; i < chunk.size; i++) {
 				this.playerId = chunk.entities[i]
 				break findPlayer

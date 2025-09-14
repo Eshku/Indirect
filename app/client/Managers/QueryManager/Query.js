@@ -16,16 +16,16 @@
  *
  */
 
-
+import * as Schema from '../../ECS/ComponentManager/ComponentSchema.js'
 
 export class Query {
-	static _createSimpleMask(componentManager, componentTypeIDs, categoryName) {
+	static _createSimpleMask(componentTypeIDs, categoryName) {
 		let mask = 0n
 		for (const typeID of componentTypeIDs) {
 			if (typeof typeID !== 'number') {
 				throw new Error(`Query: ${categoryName} component identifier must be a numeric typeID. Received: ${typeID}`)
 			}
-			const bitFlag = componentManager.componentBitFlags[typeID]
+			const bitFlag = Schema.componentBitFlags[typeID]
 			if (bitFlag === undefined) {
 				// This case should theoretically not be hit if typeID is valid.
 				throw new Error(`Query: ${categoryName} component with typeID "${typeID}" does not have a valid bitflag.`)
@@ -35,7 +35,7 @@ export class Query {
 		return mask
 	}
 
-	static _createComponentTypeIDSet(componentManager, componentTypeIDs, categoryName) {
+	static _createComponentTypeIDSet(componentTypeIDs, categoryName) {
 		const typeIDs = new Set()
 		for (const typeID of componentTypeIDs) {
 			if (typeof typeID !== 'number') {
@@ -50,7 +50,6 @@ export class Query {
 	constructor(
 		id,
 		queryManager,
-		componentManager,
 		archetypeManager,
 		withComponents,
 		withoutComponents = [],
@@ -59,16 +58,15 @@ export class Query {
 	) {
 		this.id = id
 		this.queryManager = queryManager
-		this.componentManager = componentManager
 		this.archetypeManager = archetypeManager
 		this.iterationLastTick = null
 
-		const withMask = Query._createSimpleMask(this.componentManager, withComponents, 'With')
-		const reactMask = Query._createSimpleMask(this.componentManager, reactComponents, 'React')
+		const withMask = Query._createSimpleMask(withComponents, 'With')
+		const reactMask = Query._createSimpleMask(reactComponents, 'React')
 
 		this._requiredMask = withMask | reactMask
-		this._excludedMask = Query._createSimpleMask(this.componentManager, withoutComponents, 'Without')
-		this._anyOfMask = Query._createSimpleMask(this.componentManager, anyComponents, 'AnyOf')
+		this._excludedMask = Query._createSimpleMask(withoutComponents, 'Without')
+		this._anyOfMask = Query._createSimpleMask(anyComponents, 'AnyOf')
 		this._reactiveMask = reactMask
 
 		this.isReactiveQuery = this._reactiveMask > 0n
@@ -76,7 +74,7 @@ export class Query {
 
 		if (this.isReactiveQuery) {
 			this._reactiveTypeIDsByArchetype = []
-			this._reactiveComponentTypeIDs = Query._createComponentTypeIDSet(this.componentManager, reactComponents, 'React')
+			this._reactiveComponentTypeIDs = Query._createComponentTypeIDSet(reactComponents, 'React')
 		}
 
 		if (this.isReactiveQuery) {

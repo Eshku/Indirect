@@ -45,7 +45,6 @@ class QueryManager {
 	}
 
 	async init() {
-		this.componentManager = theManager.getManager('ComponentManager')
 		this.archetypeManager = theManager.getManager('ArchetypeManager')
 	}
 
@@ -120,7 +119,6 @@ class QueryManager {
 			const newQuery = new Query(
 				queryId,
 				this,
-				this.componentManager,
 				this.archetypeManager,
 				options.with,
 				options.without,

@@ -1,7 +1,11 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { Entity } = await import(`${PATH_MANAGERS}/EntityManager/Entity.js`)
+const { Entity } = await import(`${PATH_ECS}/EntityManager/Entity.js`)
+import * as Schema from '../ComponentManager/ComponentSchema.js'
 
-const { entityManager, componentManager, prefabManager, sharedGroupManager } = theManager.getManagers()
+const { entityManager, componentManager, prefabManager, propertyGroupManager, archetypeManager, systemManager } =
+	theManager.getManagers()
+
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 export const ECS = {
 	// --- Immediate-Mode Public API ---
@@ -74,8 +78,17 @@ export const ECS = {
 		if (Object.keys(componentsInput).length === 0) {
 			return entityManager.createEntity()
 		}
-		const componentIdMap = componentManager.createIdMapFromData(componentsInput)
-		return entityManager.createEntityWithComponentsByIds(componentIdMap)
+
+		// This now uses the same hyper-optimized binary path as the command buffer,
+		// but executes immediately. This ensures all entity creation is consistent.
+		// We use the SoA path for single entity creation as it's the most efficient.
+		const { payload } = payloadCompiler.compileEntity(componentsInput)
+		const entityID = entityManager.createEntityFromBinarySoAPayload(
+			payload.archetypeId,
+			payload.data,
+			systemManager.currentTick
+		)
+		return entityID
 	},
 
 	/**
@@ -95,6 +108,7 @@ export const ECS = {
 	 */
 	instantiate(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
 		const prefabData = prefabManager.getPrefabData(prefabName)
+
 		if (!prefabData) {
 			console.error(
 				`ECS: Failed to sync-instantiate entity. Prefab '${prefabName}' is not pre-loaded or registered in the manifest.`
@@ -120,13 +134,15 @@ export const ECS = {
 	 * @param {object} [data] The component's initial data.
 	 * @returns {boolean} True on success.
 	 */
-	addComponent(entityId, componentName, data) {
-		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
+	addComponent(entityId, componentName, data = {}) {
+		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
 		if (componentTypeId === undefined) {
 			console.warn(`ECS.addComponent: Component "${componentName}" not registered.`)
 			return false
 		}
-		return entityManager.addComponent(entityId, componentTypeId, data)
+		// Use the payload compiler to create the minimal binary payload for the new component.
+		const { payload } = payloadCompiler.compileComponent(componentTypeId, data)
+		return entityManager.addComponent(entityId, componentTypeId, payload)
 	},
 
 	/**
@@ -136,12 +152,12 @@ export const ECS = {
 	 * @returns {boolean} True on success.
 	 */
 	removeComponent(entityId, componentName) {
-		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
+		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
 		if (componentTypeId === undefined) {
 			// No need to warn, the component isn't even registered in the system.
 			return false
 		}
-		return entityManager.removeComponent(entityId, componentTypeId)
+		return entityManager.removeComponent(entityId, componentTypeId) // This now works via _moveEntityToNewArchetype
 	},
 
 	/**
@@ -151,31 +167,38 @@ export const ECS = {
 	 * @returns {object|undefined} The component data instance.
 	 */
 	getComponent(entityId, componentName) {
-		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
+		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
 		if (componentTypeId === undefined) {
 			// Component isn't registered, so no entity can have it.
 			return undefined
 		}
 		const archetype = entityManager.getArchetypeForEntity(entityId)
-		if (archetype === undefined || !componentManager.hasComponent(archetype, componentTypeId)) {
+		if (archetype === undefined || !archetypeManager.hasComponentType(archetype, componentTypeId)) {
 			return undefined
 		}
 
+		// Reconstruct the per-entity data stored on the chunk.
 		const perEntityData = componentManager.reconstructComponentData(entityId, componentTypeId)
 
-		// Check for and merge shared data
-		if (perEntityData && perEntityData.hasOwnProperty('groupId')) {
-			const groupId = perEntityData.groupId
-			const sharedGroup = sharedGroupManager.groups[groupId]
-			const rawSharedComponentData = sharedGroup ? sharedGroup[componentTypeId] : null
-
-			if (rawSharedComponentData) {
-				const reconstructedSharedData = componentManager.reconstructSharedData(componentTypeId, rawSharedComponentData)
-				return { ...perEntityData, ...reconstructedSharedData }
-			}
+		// Find and merge the instance-shared data if the component has any shared properties.
+		const info = Schema.componentInfo[componentTypeId]
+		if (info.sharedProperties.length === 0) {
+			return perEntityData // No shared properties, return as-is.
 		}
 
-		return perEntityData
+		// Get the sharedGroupId from the per-entity data.
+		// This property is added by the SchemaCompiler if the component has shared properties.
+		const sharedGroupId = perEntityData.sharedGroupId
+		if (sharedGroupId === undefined) {
+			return perEntityData // No prefab, so no shared data.
+		}
+
+		const sharedGroup = propertyGroupManager.getSharedGroup(sharedGroupId)
+		const rawSharedData = sharedGroup ? sharedGroup[componentTypeId] : undefined
+		const reconstructedSharedData = componentManager.reconstructSharedData(componentTypeId, rawSharedData)
+
+		// Merge per-entity data over the shared data.
+		return { ...reconstructedSharedData, ...perEntityData }
 	},
 
 	/**
@@ -185,11 +208,11 @@ export const ECS = {
 	 * @returns {boolean}
 	 */
 	hasComponent(entityId, componentName) {
-		const componentTypeId = componentManager.getComponentTypeIDByName(componentName)
-		if (componentTypeId === undefined) {
-			return false
-		}
-		return entityManager.hasComponent(entityId, componentTypeId)
+		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
+		if (componentTypeId === undefined) return false
+		if (!entityManager.isEntityActive(entityId)) return false
+		const archetype = entityManager.getArchetypeForEntity(entityId)
+		return archetype !== undefined ? archetypeManager.hasComponentType(archetype, componentTypeId) : false
 	},
 
 	_instantiateChildRecursive(

@@ -1,5 +1,4 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { cooldownManager } = theManager.getManagers()
+const { cooldownManager } = await import(`${PATH_SUBSYSTEMS}/CooldownManager.js`)
 
 /**
  * A system that updates all active cooldowns in the CooldownManager.

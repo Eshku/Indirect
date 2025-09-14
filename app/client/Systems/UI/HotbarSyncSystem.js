@@ -1,8 +1,14 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { uiManager, queryManager, componentManager, cooldownManager, prefabManager } = theManager.getManagers()
-const { stringInterningTable } = await import(`${PATH_CLIENT}/Indirection/StringInterningTable.js`)
+const { uiManager, queryManager, componentManager, prefabManager } = theManager.getManagers()
+
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
+
+const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 
 const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
+
+const { cooldownManager } = await import(`${PATH_SUBSYSTEMS}/CooldownManager.js`)
 
 /**
  * Synchronizes the state of the player's hotbar with the Hotbar UI.
@@ -30,12 +36,16 @@ export class HotbarSyncSystem {
 		this.cooldownTypeID = Cooldown
 		this.activeSetTypeID = ActiveSet
 		this.stringStorage = stringInterningTable.storage
+		this.propertyGroupManager = propertyGroupManager
 		this.cooldownManager = cooldownManager
 		this.prefabManager = prefabManager
 
 		this.playerId = null
 		this.cachedSlotEntityIds = Array(HOTBAR_SLOT_COUNT).fill(0)
 		this.cachedActiveSlot = -1
+
+		// Pre-compile the payload for ActiveSet component updates.
+		this.activeSetPayload = payloadCompiler.compileComponent(this.activeSetTypeID, { slots: [] })
 		this.hotbar = null
 	}
 
@@ -66,7 +76,6 @@ export class HotbarSyncSystem {
 
 			const ownerEntityIds = ownerArrays.entityId
 			const slots = inActiveSetArrays.slot
-			const durations = cooldownArrays.duration
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				if (ownerEntityIds[indexInChunk] !== this.playerId) {
@@ -77,13 +86,30 @@ export class HotbarSyncSystem {
 				const slot = slots[indexInChunk]
 
 				if (slot < HOTBAR_SLOT_COUNT) {
-					const prefabId = prefabIdArrays.id[indexInChunk]
-					const iconAssetStr = stringStorage[iconArrays.assetName[indexInChunk]]
+					// The Prefab component now has a sharedGroupId property on the chunk.
+					const sharedGroupId = prefabIdArrays.sharedGroupId[indexInChunk]
+
+					// Get the shared data block for this item.
+					const sharedGroup = this.propertyGroupManager.sharedGroups[sharedGroupId]
+
+					// Get the prefabId from the shared group.
+					const sharedPrefabData = sharedGroup?.[this.prefabIdTypeID]
+					const prefabId = sharedPrefabData?.id
+
+					// The Icon's assetName is a per-entity property (though the string is interned).
+					// We read its numeric reference directly from the chunk.
+					const iconAssetNameRef = iconArrays.assetName[indexInChunk]
+					const iconAssetStr = stringStorage[iconAssetNameRef]
+
+					// The Cooldown.duration is a shared property.
+					const sharedCooldownData = sharedGroup?.[this.cooldownTypeID]
+					const totalDuration = sharedCooldownData?.duration ?? 0
+
 					desiredState[slot] = {
 						itemId: entityId,
 						prefabId: prefabId,
-						iconAsset: iconAssetStr,
-						totalDuration: durations[indexInChunk],
+						iconAsset: iconAssetStr, // This is the shared icon asset name
+						totalDuration: totalDuration,
 					}
 					desiredSlotEntityIds[slot] = entityId
 				}
@@ -105,7 +131,8 @@ export class HotbarSyncSystem {
 
 		if (hasDataChanged) {
 			// If the data has changed, update both the UI and the ActiveSet component.
-			const slotUpdateData = {}
+			const slotsMutator = this.activeSetPayload.mutators.ActiveSet.slots
+
 			for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
 				const newState = desiredState[i]
 				const newItemId = newState?.itemId || null
@@ -114,11 +141,11 @@ export class HotbarSyncSystem {
 					itemId: newItemId,
 					iconAsset: newState?.iconAsset || null,
 				})
-
-				slotUpdateData[`slots${i}`] = newItemId || 0
+				// Use the fast mutator to update the payload data directly.
+				slotsMutator[i] = newItemId || 0
 			}
 
-			this.commands.setComponentData(this.playerId, this.activeSetTypeID, slotUpdateData)
+			this.commands.setComponentData(this.playerId, this.activeSetPayload.payload)
 			this.cachedSlotEntityIds = [...desiredSlotEntityIds]
 		}
 

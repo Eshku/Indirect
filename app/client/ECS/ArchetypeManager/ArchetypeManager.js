@@ -30,8 +30,9 @@
  * When an archetype becomes empty, its large data arrays can be garbage collected, but the lightweight `Archetype` metadata object itself is kept in the manager's map.
  */
 
-const { Chunk } = await import(`${PATH_MANAGERS}/ArchetypeManager/Chunk.js`)
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+const { Chunk } = await import(`${PATH_ECS}/ArchetypeManager/Chunk.js`)
+import * as Schema from '../ComponentManager/ComponentSchema.js'
+import { getComponentTypesFromMask } from '../ComponentManager/ComponentUtils.js'
 
 const DEFAULT_CHUNK_CAPACITY = 256
 export const MAX_ARCHETYPES = 4096
@@ -50,6 +51,8 @@ export class ArchetypeManager {
 	}
 
 	async init() {
+		const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+
 		this.queryManager = theManager.getManager('QueryManager')
 		this.componentManager = theManager.getManager('ComponentManager')
 		this.systemManager = theManager.getManager('SystemManager')
@@ -62,7 +65,7 @@ export class ArchetypeManager {
 			if (typeID === undefined) {
 				const definedComponentNames = componentTypeIDs
 					.filter(id => id !== undefined)
-					.map(id => this.componentManager.getComponentNameByTypeID(id))
+					.map(id => Schema.componentNames[id])
 					.join(', ')
 				throw new TypeError(
 					`ArchetypeManager.generateArchetypeMask: Received 'undefined' in componentTypeIDs array. ` +
@@ -70,7 +73,7 @@ export class ArchetypeManager {
 						`Provided components: [${definedComponentNames}, undefined]`
 				)
 			}
-			mask |= this.componentManager.componentBitFlags[typeID]
+			mask |= Schema.componentBitFlags[typeID]
 		}
 		return mask
 	}
@@ -92,7 +95,7 @@ export class ArchetypeManager {
 		}
 
 		if (!sortedTypeIDs) {
-			sortedTypeIDs = this.componentManager.getComponentTypesFromMask(archetypeMask)
+			sortedTypeIDs = getComponentTypesFromMask(archetypeMask)
 		}
 
 		this.archetypeMasks[id] = archetypeMask
@@ -111,69 +114,6 @@ export class ArchetypeManager {
 		return this.archetypeComponentTypeIDs[archetype]?.has(componentTypeID)
 	}
 
-	updateArchetypeMaxTick(archetype, tick) {
-		if (tick > this.archetypeMaxDirtyTicks[archetype]) {
-			this.archetypeMaxDirtyTicks[archetype] = tick
-		}
-	}
-
-	moveEntitiesInBatch(moves) {
-		for (const [sourceArchetypeId, targets] of moves.entries()) {
-			for (const [targetArchetypeId, moveData] of targets.entries()) {
-				const { entityIds, componentsToAssign } = moveData
-				if (entityIds.length === 0) continue
-
-				// The executor no longer provides source locations, so we fetch them here.
-				// This is more robust as the ArchetypeManager is the source of truth for locations.
-				const sourceLocations = []
-				const sourceEntityMap = this.archetypeEntityMaps[sourceArchetypeId]
-				for (const entityId of entityIds) {
-					sourceLocations.push(sourceEntityMap.get(entityId))
-				}
-
-				// Group moves by their source chunk for cache-friendly operations
-				const movesByChunk = new Map()
-				for (let i = 0; i < entityIds.length; i++) {
-					const sourceLocation = sourceLocations[i]
-					if (!sourceLocation) continue
-
-					const sourceChunk = sourceLocation.chunk
-					if (!movesByChunk.has(sourceChunk)) {
-						movesByChunk.set(sourceChunk, {
-							entityIds: [],
-							sourceLocations: [],
-							componentsToAssign, // Pass the whole map
-						})
-					}
-					const group = movesByChunk.get(sourceChunk)
-					group.entityIds.push(entityIds[i])
-					group.sourceLocations.push(sourceLocation)
-				}
-
-				// Process one source chunk at a time
-				for (const [sourceChunk, chunkMoveData] of movesByChunk.entries()) {
-					// 1. Add entities to the target archetype by copying data from the source chunk.
-					// The CommandBufferExecutor now owns the command buffer, so we get it from the SystemManager.
-					this._addEntitiesByCopyingBatch(
-						targetArchetypeId,
-						sourceArchetypeId,
-						chunkMoveData.sourceLocations,
-						chunkMoveData.entityIds,
-						chunkMoveData.componentsToAssign,
-						this.systemManager.currentTick
-					)
-					// 2. Remove the entities from the source archetype in a single batch.
-					this._removeEntitiesBatch(sourceArchetypeId, chunkMoveData.entityIds)
-
-					// 3. Update the entity manager's archetype mapping for the moved entities.
-					for (const entityId of chunkMoveData.entityIds) {
-						this.entityManager.entityArchetype[entityId] = targetArchetypeId
-					}
-				}
-			}
-		}
-	}
-
 	_groupEntitiesByArchetype(entities) {
 		const entitiesByArchetype = new Map()
 		for (const entityId of entities) {
@@ -188,24 +128,32 @@ export class ArchetypeManager {
 		return entitiesByArchetype
 	}
 
+	updateArchetypeMaxTick(archetype, tick) {
+		if (tick > this.archetypeMaxDirtyTicks[archetype]) {
+			this.archetypeMaxDirtyTicks[archetype] = tick
+		}
+	}
+
 	/**
 	 * Efficiently adds a component to all entities matching a query.
 	 * This operates by moving entire chunks of entities between archetypes.
-	 * @param {import('../QueryManager/Query.js').Query} query
+	 * @param {import('../../Managers/QueryManager/Query.js').Query} query
 	 * @param {number} typeID
-	 * @param {number} soaIndex
+	 * @param {number} dataOffset
+	 * @param {number} dataLength
+	 * @param {import('../SystemManager/CommandBufferReader.js').CommandBufferReader} reader
 	 */
-	addComponentToQuery(query, typeID, soaIndex) {
+	addComponentToQuery(query, typeID, dataOffset, dataLength, reader) {
 		for (const sourceArchetypeId of query.matchingArchetypeIds) {
 			// This archetype already has the component, so we can skip it.
 			if (this.hasComponentType(sourceArchetypeId, typeID)) continue
 
 			const sourceArchetypeMask = this.archetypeMasks[sourceArchetypeId]
-			const targetArchetypeMask = sourceArchetypeMask | this.componentManager.componentBitFlags[typeID]
+			const targetArchetypeMask = sourceArchetypeMask | Schema.componentBitFlags[typeID]
 			const targetArchetypeId = this.getArchetypeByMask(targetArchetypeMask)
 
 			// Process all chunks from the source archetype.
-			this._moveAllChunksToNewArchetype(sourceArchetypeId, targetArchetypeId, typeID, soaIndex)
+			this._moveAllChunksToNewArchetype(sourceArchetypeId, targetArchetypeId, typeID, dataOffset, dataLength, reader)
 		}
 
 		// The move is handled directly, no need for the generic moveEntitiesInBatch.
@@ -213,7 +161,7 @@ export class ArchetypeManager {
 
 	/**
 	 * Efficiently removes a component from all entities matching a query.
-	 * @param {import('../QueryManager/Query.js').Query} query
+	 * @param {import('../../Managers/QueryManager/Query.js').Query} query
 	 * @param {number} componentTypeID
 	 */
 	removeComponentFromQuery(query, componentTypeID) {
@@ -223,43 +171,19 @@ export class ArchetypeManager {
 
 			const sourceArchetypeMask = this.archetypeMasks[sourceArchetypeId]
 			// Calculate target by REMOVING the component's bit flag.
-			const targetArchetypeMask = sourceArchetypeMask & ~this.componentManager.componentBitFlags[componentTypeID]
+			const targetArchetypeMask = sourceArchetypeMask & ~Schema.componentBitFlags[componentTypeID]
 			const targetArchetypeId = this.getArchetypeByMask(targetArchetypeMask)
 
 			// Process all chunks from the source archetype.
-			this._moveAllChunksToNewArchetype(sourceArchetypeId, targetArchetypeId, -1, -1) // -1 indicates no new component
+			this._moveAllChunksToNewArchetype(sourceArchetypeId, targetArchetypeId, -1, -1, -1, null) // -1 indicates no new component
 		}
 
 		// The move is handled directly.
 	}
 
-	_addMoveToBatch(moves, sourceId, targetId, entityId, componentPayloads) {
-		if (!moves.has(sourceId)) moves.set(sourceId, new Map())
-
-		const sourceMoves = moves.get(sourceId)
-		let moveData = sourceMoves.get(targetId)
-
-		if (!moveData) {
-			moveData = {
-				entityIds: [],
-				// The new structure: Map<typeID, { soaIndices: number[] }>
-				componentsToAssign: new Map(),
-			}
-			sourceMoves.set(targetId, moveData)
-		}
-
-		moveData.entityIds.push(entityId)
-
-		// Merge the payload info for this entity into the main batch.
-		for (const [typeID, payloadInfo] of componentPayloads.entries()) {
-			if (!moveData.componentsToAssign.has(typeID)) moveData.componentsToAssign.set(typeID, { soaIndices: [] })
-			const batchPayloads = moveData.componentsToAssign.get(typeID)
-			batchPayloads.soaIndices.push(payloadInfo.soaIndex)
-		}
-	}
-
-	setComponentDataOnQuery(query, componentTypeID, soaIndex) {
+	setComponentDataOnQuery(query, componentTypeID, dataOffset, dataLength, reader) {
 		const currentTick = this.systemManager.currentTick
+		const sourceView = new DataView(reader.buffer, dataOffset, dataLength)
 
 		for (const archetypeId of query.matchingArchetypeIds) {
 			// This is an in-place update, so skip archetypes that don't have the component.
@@ -267,9 +191,7 @@ export class ArchetypeManager {
 
 			const chunks = this.archetypeChunks[archetypeId]
 			for (const chunk of chunks) {
-				if (chunk.size === 0) continue
-				// Use the new SoA-based initialization method
-				this._initializeComponentFromSoA(chunk, componentTypeID, soaIndex, 0, chunk.size)
+				this._fillComponentDataFromBuffer(chunk, componentTypeID, sourceView, currentTick)
 			}
 		}
 	}
@@ -289,8 +211,8 @@ export class ArchetypeManager {
 	}
 
 	_setComponentData(chunk, indexInChunk, typeID, componentData) {
-		const info = this.componentManager.componentInfo[typeID]
-		const compiledDefaults = this.componentManager.getCompiledDefaults(typeID)
+		const info = Schema.componentInfo[typeID]
+		const compiledDefaults = Schema.compiledDefaults[typeID]
 		const propArrays = chunk.componentArrays[typeID]
 
 		for (const propName of info.propertyKeys) {
@@ -302,80 +224,106 @@ export class ArchetypeManager {
 	}
 
 	/**
-	 * Initializes or overwrites component data for a range of entities in a chunk
-	 * using a single data entry from the SoA command buffer.
-	 * @param {Chunk} chunk The target chunk.
-	 * @param {number} typeID The component type ID.
-	 * @param {number} soaIndex The index of the data in the command buffer's SoA arrays.
-	 * @param {number} startIndex The starting index in the chunk.
-	 * @param {number} count The number of entities to affect.
-	 * @private
-	 */
-	_initializeComponentFromSoA(chunk, typeID, soaIndex, startIndex, count) {
-		const sourceSoaArrays = this.systemManager.commandBufferExecutor._currentCommandBuffer.soaData[typeID]
-		const destSoaArrays = chunk.componentArrays[typeID]
-		const info = this.componentManager.componentInfo[typeID]
-		for (const propKey of info.propertyKeys) {
-			const valueToFill = sourceSoaArrays[propKey][soaIndex]
-			destSoaArrays[propKey].fill(valueToFill, startIndex, startIndex + count)
-		}
-		chunk.dirtyTicksArrays[typeID].fill(this.systemManager.currentTick, startIndex, startIndex + count)
-	}
-
-	/**
 	 * The final, hyper-optimized "Blit" operation for `setComponentData`.
 	 * This method receives pre-gathered source and destination data and performs
 	 * the tightest possible copy loop.
 	 * @param {Chunk} chunk The destination chunk.
 	 * @param {number} typeID The component type ID being written.
-	 * @param {object} destSoaArrays The destination SoA property arrays from the chunk.
-	 * @param {object} sourceSoaArrays The source SoA property arrays from the command buffer.
 	 * @param {number[]} destIndices An array of indices to write to in the destination.
-	 * @param {number[]} sourceIndices An array of indices to read from in the source.
+	 * @param {number[]} dataOffsets An array of offsets to the binary data in the command buffer.
+	 * @param {number[]} dataLengths An array of lengths of the binary data.
+	 * @param {import('../SystemManager/CommandBufferReader.js').CommandBufferReader} reader The reader for the raw command buffer.
+	 * @param {number} currentTick The current game tick.
 	 * @private
 	 */
-	_blitComponentDataFromSoA(chunk, typeID, destSoaArrays, sourceSoaArrays, destIndices, sourceIndices) {
-		const info = this.componentManager.componentInfo[typeID]
-		const currentTick = this.systemManager.currentTick
+	_blitComponentDataFromBinary(chunk, typeID, destIndices, dataOffsets, dataLengths, reader, currentTick) {
 		const batchSize = destIndices.length
 
-		// This is now the tightest possible loop. The JIT can heavily optimize this.
-		for (const propKey of info.propertyKeys) {
-			const dest = destSoaArrays[propKey]
-			const source = sourceSoaArrays[propKey]
-			for (let i = 0; i < batchSize; i++) {
-				dest[destIndices[i]] = source[sourceIndices[i]]
-			}
+		for (let i = 0; i < batchSize; i++) {
+			const destIndex = destIndices[i]
+			const sourceOffset = dataOffsets[i]
+			const sourceLength = dataLengths[i]
+			const sourceView = new DataView(reader.buffer, sourceOffset, sourceLength)
+			this._writeComponentDataFromBuffer(chunk, destIndex, typeID, sourceView, 0)
 		}
+
 		for (let i = 0; i < batchSize; i++) {
 			chunk.dirtyTicksArrays[typeID][destIndices[i]] = currentTick
 		}
 	}
 
 	/**
-	 * Adds a single entity to an archetype and sets its component data from the SoA command buffer.
-	 * This is the execution path for the new SoA-based `createEntity` command.
-	 * @param {number} archetype The target archetype ID.
-	 * @param {number} entityID The ID of the new entity.
-	 * @param {Map<number, {soaIndex: number}>} componentsToAssign - Map of componentTypeID to its SoA index.
+	 * Fills a component's data for all entities in a chunk from a single binary source.
+	 * @param {Chunk} chunk The chunk to modify.
+	 * @param {number} typeID The component type ID.
+	 * @param {DataView} sourceView The DataView containing the source data.
 	 * @param {number} currentTick The current game tick.
 	 * @private
 	 */
-	_addEntityFromSoA(archetype, entityID, componentsToAssign, currentTick) {
+	_fillComponentDataFromBuffer(chunk, typeID, sourceView, currentTick) {
+		const info = Schema.componentInfo[typeID]
+		// This loop is intentionally simple for JIT optimization.
+		for (let i = 0; i < chunk.size; i++) {
+			this._writeComponentDataFromBuffer(chunk, i, typeID, sourceView, 0)
+		}
+		if (info.byteSize > 0) {
+			chunk.dirtyTicksArrays[typeID].fill(currentTick, 0, chunk.size)
+		}
+	}
+
+	/**
+	 * Fills a component's data for a range of entities in a chunk from a single AoS payload.
+	 * This is the hyper-optimized path for batch operations like `addComponentToQuery`.
+	 * @param {Chunk} chunk The chunk to modify.
+	 * @param {number} typeID The component type ID.
+	 * @param {ArrayBuffer} aosPayload The AoS-formatted payload buffer.
+	 * @param {number} startIndex The starting index in the chunk.
+	 * @param {number} endIndex The ending index (exclusive) in the chunk.
+	 * @param {number} currentTick The current game tick.
+	 * @private
+	 */
+	_fillComponentDataFromAoS(chunk, typeID, aosPayload, startIndex, endIndex, currentTick) {
+		const info = Schema.componentInfo[typeID]
+		if (info.byteSize === 0) return // Nothing to fill for tag components.
+
+		const valuesToFill = this._unpackPayloadOnce(typeID, aosPayload)
+		const propArrays = chunk.componentArrays[typeID]
+
+		for (const propKey in valuesToFill) {
+			propArrays[propKey]?.fill(valuesToFill[propKey], startIndex, endIndex)
+		}
+		chunk.dirtyTicksArrays[typeID].fill(currentTick, startIndex, endIndex)
+	}
+
+	/**
+	 * Adds a single entity to an archetype and sets its component data from a pre-compiled binary SoA payload.
+	 * This is the new, "zero-overhead" creation path that reads from the binary blob and writes to the chunk.
+	 * @param {number} archetype The target archetype ID.
+	 * @param {number} entityId The ID of the new entity.
+	 * @param {ArrayBuffer} binarySoAPayload The binary SoA-structured payload data.
+	 * @param {number} currentTick The current game tick.
+	 * @private
+	 */
+	addEntityFromBinarySoAPayload(archetype, entityId, binarySoAPayload, currentTick) {
 		const chunk = this._findOrCreateChunk(archetype)
-		const indexInChunk = chunk.addEntity(entityID)
-		this.archetypeEntityMaps[archetype].set(entityID, { chunk, indexInChunk })
+		const indexInChunk = chunk.addEntity(entityId)
+		this.archetypeEntityMaps[archetype].set(entityId, { chunk, indexInChunk })
 		this.updateArchetypeMaxTick(archetype, currentTick)
 
-		const sourceSoaBuffers = this.systemManager.commandBufferExecutor._currentCommandBuffer.soaData
+		const sourceView = new DataView(binarySoAPayload)
+		let componentBaseOffset = 0
 
-		for (const [typeID, { soaIndex }] of componentsToAssign.entries()) {
-			const sourceSoaArrays = sourceSoaBuffers[typeID]
-			const destSoaArrays = chunk.componentArrays[typeID]
-			if (sourceSoaArrays && destSoaArrays) {
-				// This is a "Blit" operation for a single entity.
-				this._blitComponentDataFromSoA(chunk, typeID, destSoaArrays, sourceSoaArrays, [indexInChunk], [soaIndex])
+		for (const typeID of this.archetypeComponentTypeIDs[archetype]) {
+			const info = Schema.componentInfo[typeID]
+			const alignment = info.alignment
+			if (alignment > 0 && componentBaseOffset % alignment !== 0) {
+				componentBaseOffset += alignment - (componentBaseOffset % alignment)
 			}
+
+			this._writeComponentDataFromBuffer(chunk, indexInChunk, typeID, sourceView, componentBaseOffset)
+			componentBaseOffset += info.byteSize
+
+			chunk.dirtyTicksArrays[typeID][indexInChunk] = currentTick
 		}
 	}
 
@@ -395,32 +343,16 @@ export class ArchetypeManager {
 		}
 
 		// If no non-full chunk is found, create a new one
-		const newChunk = new Chunk(archetypeId, this, DEFAULT_CHUNK_CAPACITY)
+		const componentTypeIDs = this.archetypeComponentTypeIDs[archetypeId]
+		const relevantInfos = {}
+		for (const typeID of componentTypeIDs) {
+			relevantInfos[typeID] = Schema.componentInfo[typeID]
+		}
+
+		const newChunk = new Chunk(archetypeId, componentTypeIDs, relevantInfos, this, DEFAULT_CHUNK_CAPACITY)
 		chunks.push(newChunk)
 		this.archetypeLastNonFullChunk[archetypeId] = chunks.length - 1
 		return newChunk
-	}
-	/**
-	 * Adds a single entity to an archetype and sets its component data.
-	 * This method is exclusively for the immediate-mode API path (e.g., ECS.createEntity).
-	 * @param {number} archetype The target archetype ID.
-	 * @param {number} entityID The ID of the new entity.
-	 * @param {Map<number, object>} componentIdMap - The component data.
-	 * @param {number} currentTick The current game tick.
-	 * @private
-	 */
-	_addEntity(archetype, entityID, componentIdMap, currentTick) {
-		const chunk = this._findOrCreateChunk(archetype)
-
-		const indexInChunk = chunk.addEntity(entityID)
-		this.archetypeEntityMaps[archetype].set(entityID, { chunk, indexInChunk })
-
-		this.updateArchetypeMaxTick(archetype, currentTick)
-		const componentTypeIDs = this.archetypeComponentTypeIDs[archetype]
-		for (const typeID of componentTypeIDs) {
-			this._setComponentData(chunk, indexInChunk, typeID, componentIdMap.get(typeID))
-			chunk.dirtyTicksArrays[typeID][indexInChunk] = currentTick
-		}
 	}
 
 	/**
@@ -428,11 +360,19 @@ export class ArchetypeManager {
 	 * It moves all entities from all chunks of a source archetype to a target archetype.
 	 * @param {number} sourceArchetypeId
 	 * @param {number} targetArchetypeId
-	 * @param {number} newComponentTypeId The component being added, or -1 if none.
-	 * @param {number} newComponentSoaIndex The SoA index for the new component's data, or -1.
+	 * @param {number} newComponentTypeId The component being added, or -1 if none. * @param {number} dataOffset The offset to the binary data for the new component.
+	 * @param {number} dataLength The length of the binary data.
+	 * @param {import('../SystemManager/CommandBufferReader.js').CommandBufferReader} reader The reader for the raw command buffer.
 	 * @private
 	 */
-	_moveAllChunksToNewArchetype(sourceArchetypeId, targetArchetypeId, newComponentTypeId, newComponentSoaIndex) {
+	_moveAllChunksToNewArchetype(
+		sourceArchetypeId,
+		targetArchetypeId,
+		newComponentTypeId,
+		dataOffset,
+		dataLength,
+		reader
+	) {
 		const sourceChunks = this.archetypeChunks[sourceArchetypeId]
 		if (!sourceChunks || sourceChunks.length === 0) {
 			return
@@ -442,10 +382,16 @@ export class ArchetypeManager {
 		const currentTick = this.systemManager.currentTick
 		this.updateArchetypeMaxTick(targetArchetypeId, currentTick)
 
+		let sourceViewForNewComponent = null
+		if (newComponentTypeId !== -1) {
+			sourceViewForNewComponent = new DataView(reader.buffer, dataOffset, dataLength)
+		}
+
 		const sourceEntityMap = this.archetypeEntityMaps[sourceArchetypeId]
 		const targetEntityMap = this.archetypeEntityMaps[targetArchetypeId]
 
 		// We must process all chunks before modifying the sourceChunks array.
+		//! Heavy
 		const chunksToProcess = [...sourceChunks]
 
 		for (const sourceChunk of chunksToProcess) {
@@ -468,17 +414,17 @@ export class ArchetypeManager {
 				const sourceStartIndex = sourceCursor
 				const sourceEndIndex = sourceStartIndex + countToMoveThisBatch
 
-				// 1. Copy Entity IDs
+				// Copy Entity IDs
 				targetChunk.entities.set(sourceChunk.entities.subarray(sourceStartIndex, sourceEndIndex), startIndexInTarget)
 
-				// 2. Update entity locations
+				//  Update entity locations
 				for (let j = 0; j < countToMoveThisBatch; j++) {
 					const entityId = sourceChunk.entities[sourceStartIndex + j]
 					this.entityManager.entityArchetype[entityId] = targetArchetypeId
 					targetEntityMap.set(entityId, { chunk: targetChunk, indexInChunk: startIndexInTarget + j })
 				}
 
-				// 3. Copy existing component data
+				//  Copy existing component data
 				for (const typeID of copyPlan.toCopy) {
 					const sourceArrays = sourceChunk.componentArrays[typeID]
 					const targetArrays = targetChunk.componentArrays[typeID]
@@ -495,16 +441,10 @@ export class ArchetypeManager {
 					)
 				}
 
-				// 4. Initialize new component data
+				// Initialize new component data
 				// In a query-based move, there is only ever one new component.
 				if (newComponentTypeId !== -1) {
-					this._initializeComponentFromSoA(
-						targetChunk,
-						newComponentTypeId,
-						newComponentSoaIndex,
-						startIndexInTarget,
-						countToMoveThisBatch
-					)
+					this._fillComponentDataFromBuffer(targetChunk, newComponentTypeId, sourceViewForNewComponent, currentTick)
 				}
 
 				targetChunk.size += countToMoveThisBatch
@@ -626,7 +566,7 @@ export class ArchetypeManager {
 	 * @private
 	 */
 	_unpackPayloadOnce(typeID, sourceBuffer) {
-		const info = this.componentManager.componentInfo[typeID]
+		const info = Schema.componentInfo[typeID]
 		if (!info || info.byteSize === 0) return {}
 
 		const values = {}
@@ -640,12 +580,33 @@ export class ArchetypeManager {
 		return values
 	}
 
+	_writeComponentDataFromBuffer(chunk, indexInChunk, typeID, sourceView, componentBaseOffset) {
+		const info = Schema.componentInfo[typeID]
+		const destSoaArrays = chunk.componentArrays[typeID]
+
+		// Iterate through the flattened properties to write data.
+		for (const propKey of info.propertyKeys) {
+			const propInfo = info.properties[propKey]
+			if (!propInfo) continue
+
+			const readOffset = componentBaseOffset + propInfo.offset
+			let value
+			if (propInfo.arrayConstructor.name.startsWith('Big')) {
+				value = sourceView[propInfo.readMethod](readOffset, true)
+			} else {
+				value = sourceView[propInfo.readMethod](readOffset, true)
+			}
+			destSoaArrays[propKey][indexInChunk] = value
+		}
+	}
+
 	_addEntitiesByCopyingBatch(
 		targetArchetype,
 		sourceArchetype,
 		sourceLocations,
 		entityIds,
-		componentsToAssign,
+		componentsToAssign, // Map<typeId, { dataOffsets: number[], dataLengths: number[] }>
+		reader,
 		currentTick
 	) {
 		const count = entityIds.length
@@ -654,7 +615,6 @@ export class ArchetypeManager {
 		this.updateArchetypeMaxTick(targetArchetype, currentTick)
 
 		const copyPlan = this._getOrCreateCopyPlan(sourceArchetype, targetArchetype)
-		const sourceSoaBuffers = this.systemManager.commandBufferExecutor._currentCommandBuffer.soaData
 		const newLocationsMap = new Map()
 		const targetEntityMap = this.archetypeEntityMaps[targetArchetype]
 		let entityCursor = 0
@@ -683,7 +643,7 @@ export class ArchetypeManager {
 				for (const typeID of copyPlan.toCopy) {
 					const sourcePropArrays = sourceChunk.componentArrays[typeID]
 					const targetPropArrays = targetChunk.componentArrays[typeID]
-					const info = this.componentManager.componentInfo[typeID]
+					const info = Schema.componentInfo[typeID]
 					for (const propKey of info.propertyKeys) {
 						if (targetPropArrays?.[propKey] && sourcePropArrays?.[propKey]) {
 							const sourceSubarray = sourcePropArrays[propKey].subarray(sourceIndex, sourceIndex + 1)
@@ -698,20 +658,17 @@ export class ArchetypeManager {
 			for (const typeID of copyPlan.toInitialize) {
 				const payloadInfo = componentsToAssign.get(typeID)
 				if (!payloadInfo) continue
-				const sourceSoaArrays = sourceSoaBuffers[typeID]
-				const destSoaArrays = targetChunk.componentArrays[typeID]
-				const info = this.componentManager.componentInfo[typeID]
-				const destIndices = []
-				const sourceIndices = []
 
 				// Gather indices for this chunk
 				for (let i = 0; i < entitiesToAddInChunk; i++) {
-					destIndices.push(startIndexInChunk + i)
-					sourceIndices.push(payloadInfo.soaIndices[entityCursor + i])
+					const overallIndex = entityCursor + i
+					const destIndex = startIndexInChunk + i
+					const sourceOffset = payloadInfo.dataOffsets[overallIndex]
+					const sourceLength = payloadInfo.dataLengths[overallIndex]
+					const sourceView = new DataView(reader.buffer, sourceOffset, sourceLength)
+					this._writeComponentDataFromBuffer(targetChunk, destIndex, typeID, sourceView, 0)
+					targetChunk.dirtyTicksArrays[typeID][destIndex] = currentTick
 				}
-
-				// Blit the data for the new components
-				this._blitComponentDataFromSoA(targetChunk, typeID, destSoaArrays, sourceSoaArrays, destIndices, sourceIndices)
 			}
 			targetChunk.size += entitiesToAddInChunk
 			entityCursor += entitiesToAddInChunk

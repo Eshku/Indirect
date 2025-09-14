@@ -1,6 +1,62 @@
+//! Depricated due to entity creation overhead for little benefit
+//! Filtering can be achieved by other means.
+
+
 /**
  * Manages unique groups of shared component data.
  * This is the storage backend for the "Shared Components as Indirect References" pattern.
+ *
+ * ---
+ * # Developer Note: Working with Shared Groups
+ * ---
+ *
+ * ## 1. Overview & Purpose
+ *
+ * The primary purpose of this manager is to de-duplicate **static, immutable component data** to:
+ * 1.  **Save Memory:** Identical data (e.g., `{ value: 'common' }`) is stored only once.
+ * 2.  **Prevent Archetype Fragmentation:** Entities with different values for a shared component
+ *     (e.g., `Rarity: 'common'` vs `Rarity: 'rare'`) can live in the same archetype, because
+ *     the underlying component schema is identical (`{ groupId: 'u32' }`).
+ *
+ * ### CRITICAL: This is a "Write-Once" System
+ *
+ * This system is designed for data that does not change after an entity is created.
+ * A `groupId` is assigned once during entity creation. There is **no built-in,
+ * efficient mechanism to change a shared value at runtime and have the entity
+ * automatically move to a new group.**
+ *
+ * Attempting to modify shared data in a system would require manually reconstructing
+ * the entity's data signature and moving it to a new archetype, which is highly
+ * inefficient and defeats the purpose of this optimization.
+ *
+ * **Use Case:** Perfect for large numbers of short-lived, "fire-and-forget" entities
+ * like projectiles, or for truly static scenery objects.
+ *
+ * **Lifecycle Warning:** Be cautious with entities that change state, like loot.
+ * An item on the ground can be static, but once picked up and placed in an inventory,
+ * it may become mutable (e.g., durability changes). This pattern is not suitable for
+ * such entities unless the "ground item" and "inventory item" are treated as
+ * separate entities with different lifecycles.
+ *
+ * **Anti-Pattern:** Do not use for dynamic data like current health, status effect durations, or anything
+ * that needs to be modified during gameplay.
+ *
+ * ## 2. Advanced Use Case: The "Data Signature" Pattern
+ *
+ * While memory optimization is the primary goal, a powerful secondary use case emerges:
+ * **high-speed group filtering**.
+ *
+ * When an entity is created, all of its shared properties from all of its components are
+ * combined into a single "data signature." This manager hashes that signature and assigns
+ * it a single, unique `groupId`. This `groupId` is then written to all of the entity's
+ * shared components.
+ *
+ * This allows a system to pre-calculate the `groupId` for a specific combination of static
+ * properties it cares about, and then use a single, fast integer comparison inside its
+ * update loop to find all entities matching that exact signature.
+ *
+
+ * ```
  */
 
 /**

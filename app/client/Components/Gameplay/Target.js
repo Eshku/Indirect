@@ -3,6 +3,18 @@
  * This uses a "tagged union" pattern, where the `type` property
  * determines which of the other properties are relevant.
  */
+
+/* 
+    enum is stored as a raw integer index.
+    type:            Uint8Array[entity0, entity1, entity2, ...],
+
+     Other properties from the schema
+    entityId:        Uint32Array[entity0, entity1, entity2, ...],
+    x:               Float64Array[entity0, entity1, entity2, ...],
+    y:               Float64Array[entity0, entity1, entity2, ...]
+
+*/
+
 export const Target = {
 	/** The type of target. */
 	type: {
