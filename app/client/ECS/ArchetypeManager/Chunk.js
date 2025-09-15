@@ -31,7 +31,7 @@ export class Chunk {
 		this.markerCache = []
 
 		// Array to store the entity IDs.
-		this.entities = new Uint32Array(capacity)
+		this.entities = new BigUint64Array(capacity)
 
 		// SoA data storage
 		this.componentArrays = []
@@ -63,7 +63,7 @@ export class Chunk {
 	/**
 	 * Adds an entity to the chunk and returns its index.
 	 * Does not set component data.
-	 * @param {number} entityId The ID of the entity to add.
+	 * @param {bigint} entityId The ID of the entity to add.
 	 * @returns {number} The index of the newly added entity within the chunk.
 	 */
 	addEntity(entityId) {
@@ -76,7 +76,7 @@ export class Chunk {
 	/**
 	 * Removes an entity from the chunk by its index using the swap-and-pop method.
 	 * This is a convenience wrapper around the more performant `removeEntitiesAtIndexes`.
-	 * @param {number} indexToRemove The index of the entity to remove.
+	 * @param {number} indexToRemove The index of the entity to remove. // @returns {Map<bigint, number>} A map of `swappedEntityId -> newIndex`.
 	 * @returns {Map<number, number>} A map of `swappedEntityId -> newIndex`.
 	 */
 	removeEntityAtIndex(indexToRemove) {
@@ -91,7 +91,7 @@ export class Chunk {
 	 * It performs a "multi-swap-and-pop", moving entities from the end of the chunk
 	 * to fill the gaps left by the removed entities.
 	 * @param {number[]} sortedIndicesToRemove - An array of indices to remove, **must be sorted in descending order**.
-	 * @returns {Map<number, number>} A map of `swappedEntityId -> newIndex` for entities that were moved.
+	 * @returns {Map<bigint, number>} A map of `swappedEntityId -> newIndex` for entities that were moved.
 	 */
 	removeEntitiesAtIndexes(sortedIndicesToRemove) {
 		const numToRemove = sortedIndicesToRemove.length

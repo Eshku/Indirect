@@ -6,8 +6,8 @@ export const Parent = {
 	 * The entity ID of the parent.
 	 */
 	entityId: {
-		type: 'u32',
-		default: 0,
+		type: 'entity',
+		default: 0n,
 	},
 }
 

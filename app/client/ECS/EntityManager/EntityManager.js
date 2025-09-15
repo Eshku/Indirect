@@ -28,10 +28,12 @@
 
 export class EntityManager {
 	constructor() {
-		this.nextEntityID = 1
-		this.freeIDs = []
-		this.activeEntities = new Set()
+		this.nextEntityIndex = 1
+		this.freeIndices = []
 		this.entityArchetype = []
+
+		this.generations = []
+		this.entityVersion = [] // Stores the full 64-bit ID for a given index
 	}
 
 	async init() {
@@ -45,7 +47,7 @@ export class EntityManager {
 	}
 
 	createEntity() {
-		return this._createEntityID()
+		return this._createEntityId()
 	}
 
 	createIdenticalEntitiesInArchetype(archetypeId, payload, count) {
@@ -55,13 +57,13 @@ export class EntityManager {
 
 		const entityIDs = []
 		for (let i = 0; i < count; i++) {
-			entityIDs.push(this._createEntityID())
+			entityIDs.push(this._createEntityId())
 		}
 
 		this.archetypeManager._addIdenticalEntitiesBatch(archetypeId, entityIDs, payload, this.systemManager.currentTick)
 
 		for (const entityID of entityIDs) {
-			this.entityArchetype[entityID] = archetypeId
+			this.entityArchetype[Number(entityID & 0xffffffffn)] = archetypeId
 		}
 
 		return entityIDs
@@ -77,8 +79,9 @@ export class EntityManager {
 	 */
 	createEntityFromBinarySoAPayload(archetypeId, binarySoAPayload, currentTick) {
 		if (archetypeId === undefined) return
-		const entityID = this._createEntityID()
-		this.entityArchetype[entityID] = archetypeId
+		const entityID = this._createEntityId()
+		const index = Number(entityID & 0xffffffffn)
+		this.entityArchetype[index] = archetypeId
 		this.archetypeManager.addEntityFromBinarySoAPayload(archetypeId, entityID, binarySoAPayload, currentTick)
 		return entityID
 	}
@@ -122,18 +125,17 @@ export class EntityManager {
 	}
 
 	destroyEntity(entityID) {
-		if (!this.activeEntities.has(entityID)) {
-			return false
-		}
+		if (!this.isEntityActive(entityID)) return false
 
-		const archetype = this.entityArchetype[entityID]
+		const index = Number(entityID & 0xffffffffn)
+		const archetype = this.entityArchetype[index]
 		if (archetype !== undefined) {
 			this.archetypeManager._removeEntity(archetype, entityID)
 		}
-
-		this.entityArchetype[entityID] = undefined
-		this.activeEntities.delete(entityID)
-		this.freeIDs.push(entityID)
+		this.entityArchetype[index] = undefined
+		this.entityVersion[index] = undefined
+		this.generations[index]++ // Increment generation on destruction
+		this.freeIndices.push(index)
 
 		return true
 	}
@@ -144,16 +146,18 @@ export class EntityManager {
 		const entitiesByArchetype = new Map()
 
 		for (const entityId of entityIDs) {
-			// Use activeEntities.delete() as it returns true if the element was present
-			if (this.activeEntities.delete(entityId)) {
-				this.freeIDs.push(entityId)
-				const archetype = this.entityArchetype[entityId]
+			if (this.isEntityActive(entityId)) {
+				const index = Number(entityId & 0xffffffffn)
+				this.freeIndices.push(index)
+				this.generations[index]++
+				const archetype = this.entityArchetype[index]
 				if (archetype !== undefined) {
 					if (!entitiesByArchetype.has(archetype)) entitiesByArchetype.set(archetype, [])
 					entitiesByArchetype.get(archetype).push(entityId)
 				}
-				// Important: Nullify the entity's archetype link
-				this.entityArchetype[entityId] = undefined
+				// Important: Nullify the entity's archetype link and version
+				this.entityArchetype[index] = undefined
+				this.entityVersion[index] = undefined // CRITICAL: Invalidate the old version ID.
 			}
 		}
 
@@ -184,11 +188,13 @@ export class EntityManager {
 		for (const chunk of chunks) {
 			if (chunk.size === 0) continue
 
-			for (let i = 0; i < chunk.size; i++) {
-				const entityId = chunk.entities[i]
-				this.activeEntities.delete(entityId)
-				this.freeIDs.push(entityId)
-				this.entityArchetype[entityId] = undefined
+			const entitiesToDestroy = chunk.entities.subarray(0, chunk.size)
+			for (const entityId of entitiesToDestroy) {
+				const index = Number(entityId & 0xffffffffn)				
+				this.freeIndices.push(index)
+				this.generations[index]++
+				this.entityArchetype[index] = undefined
+				this.entityVersion[index] = undefined // CRITICAL: Invalidate the old version ID.
 			}
 			this.archetypeManager._removeEntitiesBatch(chunk.archetype, chunk.entities.subarray(0, chunk.size))
 		}
@@ -198,23 +204,27 @@ export class EntityManager {
 		if (this.archetypeManager) {
 			this.archetypeManager.clearAll()
 		}
-		this.activeEntities.clear()
-		this.freeIDs = []
-		this.nextEntityID = 1
+		this.freeIndices = []
+		this.nextEntityIndex = 1
 		this.entityArchetype = []
+		this.generations = []
+		this.entityVersion = []
 	}
 
 	isEntityActive(entityID) {
-		return this.activeEntities.has(entityID)
+		if ((entityID >> 63n) === 1n) return false; // Guard against placeholder IDs
+		if (typeof entityID !== 'bigint') return false
+		const index = Number(entityID & 0xffffffffn)
+		return this.entityVersion[index] === entityID
 	}
 
 	/**
 	 * Gets the archetype ID for a given entity.
-	 * @param {number} entityId - The ID of the entity.
+	 * @param {bigint} entityId - The ID of the entity.
 	 * @returns {number | undefined} The archetype (ID), or undefined if the entity has no archetype.
 	 */
 	getArchetypeForEntity(entityId) {
-		return this.entityArchetype[entityId]
+		return this.entityArchetype[Number(entityId & 0xffffffffn)]
 	}
 
 	/**
@@ -237,7 +247,8 @@ export class EntityManager {
 		const targetIndex = targetChunk.addEntity(entityId)
 
 		// 2. Update entity's primary location record
-		this.entityArchetype[entityId] = targetArchetypeId
+		const index = Number(entityId & 0xffffffffn)
+		this.entityArchetype[index] = targetArchetypeId
 		this.archetypeManager.archetypeEntityMaps[targetArchetypeId].set(entityId, { chunk: targetChunk, indexInChunk: targetIndex })
 
 		// 3. Copy existing component data
@@ -265,14 +276,26 @@ export class EntityManager {
 		return true
 	}
 
-	_createEntityID() {
-		const entityID = this.freeIDs.length > 0 ? this.freeIDs.pop() : this.nextEntityID++
-		this.activeEntities.add(entityID)
+	_createEntityId() {
+		const index = this.freeIndices.length > 0 ? this.freeIndices.pop() : this.nextEntityIndex++
+
 		// Ensure the archetype array is large enough, initializing with undefined.
-		if (entityID >= this.entityArchetype.length) {
-			this.entityArchetype.length = entityID + 1
+		if (index >= this.entityArchetype.length) {
+			const newLength = index + 1
+			// When we expand the arrays, we must ensure the new slots in generations are initialized.
+			// Filling with 0 is the most explicit way to do this.
+			this.generations.length = newLength
+			this.generations.fill(0, this.entityArchetype.length) // Fill only the new part
+			this.entityArchetype.length = newLength
+			this.entityVersion.length = newLength
 		}
-		return entityID
+
+		const generation = this.generations[index] // No longer need `|| 0`
+
+		const entityId = (BigInt(generation) << 32n) | BigInt(index)
+		this.entityVersion[index] = entityId
+
+		return entityId
 	}
 }
 

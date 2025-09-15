@@ -123,8 +123,8 @@ export class PropertyGroupManager {
 
 		// We create a deep copy to ensure the initial data from the prefab cache
 		// is not mutated, allowing it to be a clean template for other variants.
-		const newGroup = JSON.parse(JSON.stringify(initialSharedData))
-		this.sharedGroups[newSharedGroupId] = newGroup
+		this.sharedGroups[newSharedGroupId] = this._deepCopy(initialSharedData)
+
 
 		this.prefabIdToSharedGroupId.set(prefabId, newSharedGroupId)
 
@@ -142,7 +142,7 @@ export class PropertyGroupManager {
 		if (!this.prefabIdToSharedGroupId.has(prefabId)) {
 			// This prefab had no shared components before. Create a new group for it.
 			const newSharedGroupId = this.sharedGroups.length
-			const newGroup = JSON.parse(JSON.stringify(newSharedData)) // Deep copy
+			const newGroup = this._deepCopy(newSharedData)
 			this.sharedGroups[newSharedGroupId] = newGroup
 			this.prefabIdToSharedGroupId.set(prefabId, newSharedGroupId)
 			return newSharedGroupId
@@ -176,6 +176,34 @@ export class PropertyGroupManager {
 	 */
 	getComponentData(sharedGroupId, componentTypeId) {
 		return this.sharedGroups[sharedGroupId]?.[componentTypeId]
+	}
+
+	/**
+	 * Performs a deep copy of an object, correctly handling BigInt values.
+	 * @param {object} obj The object to copy.
+	 * @returns {object} A deep copy of the object.
+	 * @private
+	 */
+	_deepCopy(obj) {
+		if (obj === null || typeof obj !== 'object') {
+			return obj
+		}
+
+		if (obj instanceof Date) {
+			return new Date(obj.getTime())
+		}
+
+		if (Array.isArray(obj)) {
+			return obj.map(item => this._deepCopy(item))
+		}
+
+		const newObj = {}
+		for (const key in obj) {
+			if (Object.prototype.hasOwnProperty.call(obj, key)) {
+				newObj[key] = this._deepCopy(obj[key])
+			}
+		}
+		return newObj
 	}
 }
 

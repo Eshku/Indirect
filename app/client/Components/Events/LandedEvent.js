@@ -6,7 +6,7 @@ export const LandedEvent = {
 	 * The ID of the entity that landed.
 	 */
 	entityId: {
-		type: 'u32',
-		default: 0,
+		type: 'entity',
+		default: 0n,
 	},
 }

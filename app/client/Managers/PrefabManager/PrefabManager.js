@@ -1,7 +1,7 @@
 const { LRUCache } = await import(`${PATH_CORE}/DataStructures/LRUCache.js`)
 
 import * as Schema from '../../ECS/ComponentManager/ComponentSchema.js'
-const { payloadCompiler } = await import('../../ECS/SystemManager/PayloadCompiler.js')
+
 const { PrefabLoader } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabLoader.js`)
 
 /**
@@ -247,7 +247,7 @@ export class PrefabManager {
 
 		// Automatically add the Prefab component to the root entity's data.
 		// This ensures every instantiated entity knows its numeric prefab ID.
-		mergedComponents.Prefab = { id: id }
+		mergedComponents.Prefab = { id: BigInt(id) }
 
 		// The preprocessedIdMaps cache is now obsolete and can be removed.
 
@@ -358,7 +358,7 @@ export class PrefabManager {
 				currentChild.components = currentChild.components || {}
 				const childId = this.getPrefabId(prefabIdForChild)
 				if (!currentChild.components.Prefab && childId !== undefined) {
-					currentChild.components.Prefab = { id: childId }
+					currentChild.components.Prefab = { id: BigInt(childId) }
 				}
 			}
 

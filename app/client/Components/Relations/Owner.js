@@ -7,7 +7,7 @@ export const Owner = {
 	 * The entity ID of the owner.
 	 */
 	entityId: {
-		type: 'u32',
-		default: 0,
+		type: 'entity',
+		default: 0n,
 	},
 }

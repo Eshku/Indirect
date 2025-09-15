@@ -35,6 +35,7 @@ export class RawCommandBuffer {
 			const newBuffer = new SharedArrayBuffer(newSize)
 			new Uint8Array(newBuffer).set(this.uint8View)
 			this.buffer = newBuffer
+			this.uint8View = new Uint8Array(this.buffer)
 			this.view = new DataView(this.buffer)
 		}
 	}

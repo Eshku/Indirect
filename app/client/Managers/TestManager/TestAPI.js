@@ -90,6 +90,21 @@ export function expect(actual) {
 				throw new AssertionError(message, expectedValue, actual)
 			}
 		},
+		/**
+		 * Checks if a value is greater than or equal to an expected value.
+		 * @param {number | bigint} expected - The value to compare against.
+		 * @throws {AssertionError} If the assertion fails.
+		 * @example
+		 * expect(10).toBeGreaterThanOrEqual(10); // Passes
+		 * expect(11).toBeGreaterThanOrEqual(10); // Passes
+		 * expect(9).toBeGreaterThanOrEqual(10); // Fails
+		 */
+		toBeGreaterThanOrEqual(expected) {
+			const passed = actual >= expected
+			if (passed === inverted) {
+				throw new AssertionError(`Expected ${actual} ${inverted ? 'not ' : ''}to be greater than or equal to ${expected}`, `a value >= ${expected}`, actual)
+			}
+		},
 	})
 
 	return {

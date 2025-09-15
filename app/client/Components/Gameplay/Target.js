@@ -24,8 +24,8 @@ export const Target = {
 	},
 	/** The entity ID, if type is 'Entity'. */
 	entityId: {
-		type: 'u32',
-		default: 0,
+		type: 'entity',
+		default: 0n,
 	},
 	/** The X coordinate or direction component. */
 	x: {

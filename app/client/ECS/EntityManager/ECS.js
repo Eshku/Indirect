@@ -22,7 +22,7 @@ export const ECS = {
 	/**
 	 * Returns a wrapper object for a given entity ID.
 	 * This is intended for debugging and inspection, not for performance-critical code.
-	 * @param {number} entityID The ID of the entity to wrap.
+	 * @param {bigint} entityID The ID of the entity to wrap.
 	 * @param {object} [options] - Options for the entity wrapper.
 	 * @returns {Promise<import('../../Managers/EntityManager/Entity.js').Entity | null>} A Promise that resolves to an Entity wrapper instance, or null if the entity is not active.
 	 */
@@ -72,7 +72,7 @@ export const ECS = {
 	/**
 	 * Creates an entity immediately.
 	 * @param {object} [componentsInput={}] - e.g., `{ Position: { x: 10 }, Velocity: { y: 5 } }`
-	 * @returns {number|undefined} The new entity's ID.
+	 * @returns {bigint|undefined} The new entity's ID.
 	 * @example ECS.createEntity({ position: { x: 10 }, velocity: { y: 5 } })
 	 */
 	createEntity(componentsInput = {}) {
@@ -94,7 +94,7 @@ export const ECS = {
 
 	/**
 	 * Destroys an entity immediately.
-	 * @param {number} entityId The ID of the entity to destroy.
+	 * @param {bigint} entityId The ID of the entity to destroy.
 	 * @returns {boolean} True if the entity was active and destroyed.
 	 */
 	destroyEntity(entityId) {
@@ -104,7 +104,7 @@ export const ECS = {
 	/**
 	 * Instantiates an entity from a prefab immediately.
 	 * @param {string} prefabName The name of the prefab.
-	 * @param {object} [overrides={}] Component data to override prefab defaults.
+	 * @param {object} [overrides={}] Component data to override prefab defaults. // @returns {bigint|undefined} The new root entity's ID.
 	 * @returns {number|undefined} The new root entity's ID.
 	 */
 	instantiate(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
@@ -121,7 +121,7 @@ export const ECS = {
 
 	/**
 	 * Checks if an entity is active.
-	 * @param {number} entityId The entity ID.
+	 * @param {bigint} entityId The entity ID.
 	 * @returns {boolean}
 	 */
 	isEntityActive(entityId) {
@@ -130,7 +130,7 @@ export const ECS = {
 
 	/**
 	 * Adds a component to an entity immediately.
-	 * @param {number} entityId The entity ID.
+	 * @param {bigint} entityId The entity ID.
 	 * @param {string} componentName The component's string name.
 	 * @param {object} [data] The component's initial data.
 	 * @returns {boolean} True on success.
@@ -148,7 +148,7 @@ export const ECS = {
 
 	/**
 	 * Removes a component from an entity immediately.
-	 * @param {number} entityId The entity ID.
+	 * @param {bigint} entityId The entity ID.
 	 * @param {string} componentName The component's string name.
 	 * @returns {boolean} True on success.
 	 */
@@ -163,7 +163,7 @@ export const ECS = {
 
 	/**
 	 * Gets a component's data from an entity.
-	 * @param {number} entityId The entity ID.
+	 * @param {bigint} entityId The entity ID.
 	 * @param {string} componentName The component's string name.
 	 * @returns {object|undefined} The component data instance.
 	 */
@@ -204,7 +204,7 @@ export const ECS = {
 
 	/**
 	 * Checks if an entity has a component.
-	 * @param {number} entityId The entity ID.
+	 * @param {bigint} entityId The entity ID.
 	 * @param {string} componentName The component's string name.
 	 * @returns {boolean}
 	 */

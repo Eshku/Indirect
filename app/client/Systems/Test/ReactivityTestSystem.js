@@ -14,25 +14,20 @@ export class ReactivityTestSystem {
 			runStructuralChangeTest: false,
 		}
 
-		const { ReactivityTarget, ReactivityComponent, ComponentA, ComponentB } = componentManager.getTypeIDs()
+		const { reactivityTarget, reactivityComponent, componentA, componentB } = componentManager.getTypeIDs();
+		Object.assign(this, { reactivityTarget, reactivityComponent, componentA, componentB });
 
 		// --- Queries ---
 		// Query for entities to modify. We need ReactivityComponent to modify its value.
 		this.modificationTargetQuery = queryManager.getQuery({
-			with: [ReactivityTarget, ReactivityComponent],
+			with: [reactivityTarget, reactivityComponent],
 		})
 
 		// Reactive query that detects changes to ReactivityComponent
 		this.detectionQuery = queryManager.getQuery({
-			with: [ReactivityTarget, ReactivityComponent], // Ensure we can read the value
-			react: [ReactivityComponent],
+			with: [reactivityTarget, reactivityComponent], // Ensure we can read the value
+			react: [reactivityComponent],
 		})
-
-		// --- Component Type IDs ---
-		this.reactivityComponentTypeID = ReactivityComponent
-		this.reactivityTargetTypeID = ReactivityTarget
-		this.componentATypeID = ComponentA
-		this.componentBTypeID = ComponentB
 
 		// --- Test State ---
 		this.totalEntities = 10
@@ -98,8 +93,8 @@ export class ReactivityTestSystem {
 		// Every 60 ticks, modify the `value` of one entity's ReactivityComponent.
 		if (currentTick > 0 && currentTick % 60 === 0) {
 			for (const chunk of this.modificationTargetQuery.iter()) {
-				const reactComps = chunk.componentArrays[this.reactivityComponentTypeID]
-				const marker = chunk.getDirtyMarker(this.reactivityComponentTypeID, currentTick)
+				const reactComps = chunk.componentArrays[this.reactivityComponent]
+				const marker = chunk.getDirtyMarker(this.reactivityComponent, currentTick)
 
 				for (let i = 0; i < chunk.size; i++) {
 					const entityId = chunk.entities[i]
@@ -128,27 +123,27 @@ export class ReactivityTestSystem {
 				`%cReactivityTestSystem (Structural): Adding ComponentA to entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
 				'color: cyan'
 			)
-			this.commands.addComponent(this.structuralChangeEntityId, this.componentATypeID, {})
+			this.commands.addComponent(this.structuralChangeEntityId, this.componentA, {})
 		} else if (currentTick === 240) {
 			console.log(
 				`%cReactivityTestSystem (Structural): Removing ComponentA from entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
 				'color: magenta'
 			)
-			this.commands.removeComponent(this.structuralChangeEntityId, this.componentATypeID)
+			this.commands.removeComponent(this.structuralChangeEntityId, this.componentA)
 		}
 	}
 
 	_runDetection(currentTick, lastTick) {
 		// This runs every frame to see what changes the reactive query has picked up.
 		for (const chunk of this.detectionQuery.iter()) {
-			const reactComps = chunk.componentArrays[this.reactivityComponentTypeID]
+			const reactComps = chunk.componentArrays[this.reactivityComponent]
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				// hasChanged() is the key to reactivity.
 				if (this.detectionQuery.hasChanged(chunk, indexInChunk)) {
 					const entityId = chunk.entities[indexInChunk]
 					const newValue = reactComps.value[indexInChunk]
-					const dirtyTick = chunk.dirtyTicksArrays[this.reactivityComponentTypeID][indexInChunk]
+					const dirtyTick = chunk.dirtyTicksArrays[this.reactivityComponent][indexInChunk]
 
 					console.log(
 						`%cReactivityTestSystem (Detector): Detected change on entity ${entityId}! New value: ${newValue}. (System last ran at ${lastTick}, component dirtied at ${dirtyTick})`,

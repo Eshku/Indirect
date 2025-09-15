@@ -6,7 +6,7 @@ export const LeftSurfaceEvent = {
 	 * The ID of the entity that left the surface.
 	 */
 	entityId: {
-		type: 'u32',
-		default: 0,
+		type: 'entity',
+		default: 0n,
 	},
 }

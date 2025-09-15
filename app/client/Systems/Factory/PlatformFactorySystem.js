@@ -81,6 +81,7 @@ export class PlatformFactorySystem {
 
 					this.colliderMutators.collider.width[0] = width
 					this.colliderMutators.collider.height[0] = height
+
 					this.commands.setComponentData(entityId, this.colliderPayload)
 				}
 			}

@@ -72,6 +72,10 @@ export function interpret(typeID, data) {
 			case 'bool':
 				rawData[propName] = propValue ? 1 : 0
 				break
+			case 'entity':
+				// Ensure entity IDs are always treated as BigInts.
+				rawData[propName] = BigInt(propValue || 0)
+				break
 			case 'flat_array': {
 				const { capacity, lengthProperty, itemRepresentation } = rep
 				const sourceArray = propValue || []

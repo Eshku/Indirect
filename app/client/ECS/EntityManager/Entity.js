@@ -13,7 +13,7 @@ import * as Schema from '../ComponentManager/ComponentSchema.js'
  */
 export class Entity {
 	constructor(entityID) {
-		/** @type {number} The ID of the wrapped entity. */
+		/** @type {bigint} The ID of the wrapped entity. */
 		this.id = entityID
 	}
 

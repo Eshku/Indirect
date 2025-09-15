@@ -31,47 +31,49 @@ export class CommandBuffer {
 
 	/**
 	 * Records a command to add a component to an entity using a pre-compiled binary payload.
-	 * @param {number} entityId The entity to modify.
+	 * @param {bigint} entityId The entity to modify.
 	 * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload from `payloadCompiler.compileComponentData`.
 	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
 	 */
 	addComponent(entityId, payload, layer = 0) {
 		const offset = this.rawBuffer.offset
 
+		const entityIndex = Number(entityId & 0xffffffffn)
 		this.rawBuffer.writeU8(OpCodes.ADD_COMPONENT)
-		this.rawBuffer.writeU32(entityId)
+		this.rawBuffer.writeU64(entityId)
 		this.rawBuffer.writeU16(payload.typeID)
 		this.rawBuffer.writeU16(payload.data.byteLength)
 		this.rawBuffer.writeBuffer(payload.data)
 
 		const length = this.rawBuffer.offset - offset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityId, 0)
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 0)
 		this.sortableBuffer.add(key, offset, length)
 	}
 
 	/**
 	 * Records a command to set a component's data on an entity.
 	 * Assumes the component already exists. For performance, this is not checked here.
-	 * @param {number} entityId The entity to modify. * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload from `payloadCompiler.compileComponentData`.
+	 * @param {bigint} entityId The entity to modify. * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload from `payloadCompiler.compileComponentData`.
 	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
 	 */
 	setComponentData(entityId, payload, layer = 0) {
 		const offset = this.rawBuffer.offset
 
+		const entityIndex = Number(entityId & 0xffffffffn)
 		this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_DATA)
-		this.rawBuffer.writeU32(entityId)
+		this.rawBuffer.writeU64(entityId)
 		this.rawBuffer.writeU16(payload.typeID)
 		this.rawBuffer.writeU16(payload.data.byteLength)
 		this.rawBuffer.writeBuffer(payload.data)
 
 		const length = this.rawBuffer.offset - offset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityId, 2) // Secondary ID to sort after add/remove
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2) // Secondary ID to sort after add/remove
 		this.sortableBuffer.add(key, offset, length)
 	}
 
 	/**
 	 * Records a command to remove a component from an entity.
-	 * @param {number} entityId
+	 * @param {bigint} entityId
 	 * @param {number} componentTypeID
 	 * @param {number} [layer=0]
 	 */
@@ -79,29 +81,31 @@ export class CommandBuffer {
 		const offset = this.rawBuffer.offset
 		const startOffset = offset
 
+		const entityIndex = Number(entityId & 0xffffffffn)
 		this.rawBuffer.writeU8(OpCodes.REMOVE_COMPONENT)
-		this.rawBuffer.writeU32(entityId)
+		this.rawBuffer.writeU64(entityId)
 		this.rawBuffer.writeU16(componentTypeID)
 
 		const length = this.rawBuffer.offset - startOffset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityId, 1) // Use secondary ID to sort removes after adds
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 1) // Use secondary ID to sort removes after adds
 		this.sortableBuffer.add(key, offset, length)
 	}
 
 	/**
 	 * Records a command to destroy an entity.
-	 * @param {number} entityId
+	 * @param {bigint} entityId
 	 * @param {number} [layer=0]
 	 */
 	destroyEntity(entityId, layer = 0) {
 		const offset = this.rawBuffer.offset
 		const startOffset = offset
 
+		const entityIndex = Number(entityId & 0xffffffffn)
 		this.rawBuffer.writeU8(OpCodes.DESTROY_ENTITY)
-		this.rawBuffer.writeU32(entityId)
+		this.rawBuffer.writeU64(entityId)
 
 		const length = this.rawBuffer.offset - startOffset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.DESTROY, layer, entityId, 0)
+		const key = SortableCommandBuffer.encodeKey(SortPhase.DESTROY, layer, entityIndex, 0)
 		this.sortableBuffer.add(key, offset, length)
 	}
 

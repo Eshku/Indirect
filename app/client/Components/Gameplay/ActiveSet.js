@@ -8,7 +8,7 @@ export const ActiveSet = {
 	 */
 	slots: {
 		type: 'flat_array',
-		of: 'u32',
+		of: 'entity',
 		capacity: 10,
 		default: [], // Defaults to all 0s
 	},

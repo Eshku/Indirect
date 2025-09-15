@@ -105,6 +105,7 @@ export class HotbarSyncSystem {
 						totalDuration: totalDuration,
 					}
 					desiredSlotEntityIds[slot] = entityId
+
 				}
 			}
 		}
@@ -134,8 +135,10 @@ export class HotbarSyncSystem {
 					itemId: newItemId,
 					iconAsset: newState?.iconAsset || null,
 				})
+
+
 				// Use the fast mutator to update the payload data directly.
-				slotsMutator[i] = newItemId || 0
+				slotsMutator[i] = newItemId || 0n
 			}
 
 			this.commands.setComponentData(this.playerId, this.activeSetPayload.payload)

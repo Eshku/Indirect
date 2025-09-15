@@ -5,9 +5,9 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
 //! system itself is pretty heavy
 const benchmarkConfig = {
 	// true / false
-	runPerEntityChurn: false, // Creates/destroys N entities per frame, one by one.
+	runPerEntityChurn: true, // Creates/destroys N entities per frame, one by one.
 	runQueryBasedChurn: false, // Creates/destroys N entities per frame using batch commands.
-	runPrefabChurn: true, // Creates/destroys N entities per frame using prefab instantiation.
+	runPrefabChurn: false, // Creates/destroys N entities per frame using prefab instantiation.
 
 	perEntityChurn: {
 		poolSize: 20_000,
@@ -29,8 +29,8 @@ const benchmarkConfig = {
  */
 export class CreationDestructionBenchmarkSystem {
 	constructor() {
-		const { creationDestructionTag, position, velocity, componentB, testEntityTag } = componentManager.getTypeIDs()
-		Object.assign(this, { position, velocity, creationDestructionTag, componentB, testEntityTag })
+		const { creationDestructionTag, position, velocity, componentB, testEntityTag } = componentManager.getTypeIDs();
+		Object.assign(this, { creationDestructionTag, position, velocity, componentB, testEntityTag });
 
 		// --- Per-Entity Churn Test ---
 		this.churnQuery = queryManager.getQuery({

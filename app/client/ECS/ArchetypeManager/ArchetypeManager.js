@@ -299,7 +299,7 @@ export class ArchetypeManager {
 	 * Adds a single entity to an archetype and sets its component data from a pre-compiled binary SoA payload.
 	 * This is the new, "zero-overhead" creation path that reads from the binary blob and writes to the chunk.
 	 * @param {number} archetype The target archetype ID.
-	 * @param {number} entityId The ID of the new entity.
+	 * @param {bigint} entityId The ID of the new entity.
 	 * @param {ArrayBuffer} binarySoAPayload The binary SoA-structured payload data.
 	 * @param {number} currentTick The current game tick.
 	 * @private
@@ -420,7 +420,8 @@ export class ArchetypeManager {
 				//  Update entity locations
 				for (let j = 0; j < countToMoveThisBatch; j++) {
 					const entityId = sourceChunk.entities[sourceStartIndex + j]
-					this.entityManager.entityArchetype[entityId] = targetArchetypeId
+					const index = Number(entityId & 0xffffffffn)
+					this.entityManager.entityArchetype[index] = targetArchetypeId
 					targetEntityMap.set(entityId, { chunk: targetChunk, indexInChunk: startIndexInTarget + j })
 				}
 

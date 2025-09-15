@@ -37,8 +37,8 @@ const benchmarkConfig = {
  */
 export class StructuralChangeBenchmarkSystem {
 	constructor() {
-		const { componentA, componentB } = componentManager.getTypeIDs()
-		Object.assign(this, { componentA, componentB })
+		const { componentA, componentB } = componentManager.getTypeIDs();
+		Object.assign(this, { componentA, componentB });
 
 		this.addQuery = queryManager.getQuery({
 			with: [componentA],

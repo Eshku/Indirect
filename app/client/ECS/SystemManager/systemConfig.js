@@ -91,6 +91,7 @@ export const systemSchedule = {
 	Test: [
 		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
-		/* {name:'SchemaTestSystem', frequency: 'none'} */
+		/* {name: 'GenerationalEntityTestSystem', frequency: 'none'} */
+		/* {name:'SchemaTestSystem', frequency: 'none'}, */
 	],
 }

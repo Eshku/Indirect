@@ -6,7 +6,6 @@ const { testManager } = await import(`${PATH_MANAGERS}/TestManager/TestManager.j
 
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
-
 /**
  * A simple configuration object to enable or disable specific command buffer tests.
  */
@@ -30,28 +29,27 @@ export class CommandBufferTestSystem {
 	constructor() {
 		this.systemManager = systemManager
 
-		const { Position, Velocity, TestEntityTag } = componentManager.getTypeIDs()
-
-		this.PositionTypeID = Position
-		this.VelocityTypeID = Velocity
-		this.TestEntityTagTypeID = TestEntityTag
+		const { position, velocity, testEntityTag } = componentManager.getTypeIDs()
+		Object.assign(this, { position, velocity, testEntityTag })
 
 		// Create queries for verification steps.
 		// All queries now require the TestEntityTag to ensure they only match test entities.
 		this.creationQuery = queryManager.getQuery({
-			with: [Position, TestEntityTag],
-			without: [Velocity],
+			with: [position, testEntityTag],
+			without: [velocity],
 		})
 
 		this.instantiateQuery = queryManager.getQuery({
-			with: [Position, Velocity, TestEntityTag],
+			with: [position, velocity, testEntityTag],
 		})
 
 		// --- Pre-compile payloads for tests ---
-		this.addComponentPayload = payloadCompiler.compileComponent(this.VelocityTypeID, { x: 5, y: 5 })
-		this.setComponentPayload = payloadCompiler.compileComponent(this.PositionTypeID, { x: 999, y: -999 })
-		this.setComponentPayload.mutators.Position.x[0] = 999
-		this.setComponentPayload.mutators.Position.y[0] = -999
+		this.addComponentPayload = payloadCompiler.compileComponent(this.velocity, { x: 5, y: 5 }).payload
+		this.setVelocityPayload = payloadCompiler.compileComponent(this.velocity, { x: 999, y: -999 }).payload
+		this.setPositionPayload = payloadCompiler.compileComponent(this.position, { x: 100, y: 100 }).payload
+
+		// Payload for generational entity tests
+		this.generationalTestVelocityPayload = payloadCompiler.compileComponent(this.velocity, { x: 999, y: 999 })
 	}
 
 	async init() {
@@ -67,8 +65,8 @@ export class CommandBufferTestSystem {
 			if (testConfig.runCreateEntityTest) {
 				it('should create an entity with components via createEntity', () => {
 					const { payload } = payloadCompiler.compileEntity({
-						Position: { x: 10, y: 20 },
-						TestEntityTag: {},
+						position: { x: 10, y: 20},
+						testEntityTag: {},
 					})
 					this.commands.createEntity(payload)
 					flush()
@@ -81,8 +79,8 @@ export class CommandBufferTestSystem {
 
 					expect(createdEntity).not.toBe(undefined)
 
-					const pos = ECS.getComponent(createdEntity, 'Position')
-					expect(pos).toEqual({ x: 10, y: 20 })
+					const pos = ECS.getComponent(createdEntity, 'position')
+					expect(pos).toEqual({ x: 10, y: 20})
 
 					this.commands.destroyEntity(createdEntity)
 					flush()
@@ -104,16 +102,16 @@ export class CommandBufferTestSystem {
 			if (testConfig.runAddComponentTest) {
 				it('should add a component to an entity via addComponent', () => {
 					const entity = ECS.createEntity({
-						Position: { x: 1, y: 1 },
-						TestEntityTag: {}, // Add the tag for isolation
+						position: { x: 1, y: 1 },
+						testEntityTag: {}, // Add the tag for isolation
 					})
 
-					this.commands.addComponent(entity, this.addComponentPayload.payload)
+					this.commands.addComponent(entity, this.addComponentPayload)
 					flush()
-					expect(ECS.hasComponent(entity, 'Velocity')).toBe(true)
+					expect(ECS.hasComponent(entity, 'velocity')).toBe(true)
 
 					// Verify the component data was written correctly.
-					const vel = ECS.getComponent(entity, 'Velocity')
+					const vel = ECS.getComponent(entity, 'velocity')
 					expect(vel).toEqual({ x: 5, y: 5 })
 					this.commands.destroyEntity(entity)
 					flush()
@@ -124,13 +122,13 @@ export class CommandBufferTestSystem {
 			if (testConfig.runRemoveComponentTest) {
 				it('should remove a component from an entity via removeComponent', () => {
 					const entity = ECS.createEntity({
-						Position: {},
-						Velocity: { x: 5, y: 5 },
-						TestEntityTag: {},
+						position: {},
+						velocity: { x: 5, y: 5 },
+						testEntityTag: {},
 					})
-					this.commands.removeComponent(entity, this.VelocityTypeID)
+					this.commands.removeComponent(entity, this.velocity)
 					flush()
-					expect(ECS.hasComponent(entity, `Velocity`)).toBe(false)
+					expect(ECS.hasComponent(entity, `velocity`)).toBe(false)
 					this.commands.destroyEntity(entity)
 					entityManager.destroyEntity(entity)
 					flush()
@@ -141,13 +139,14 @@ export class CommandBufferTestSystem {
 			if (testConfig.runSetComponentDataTest) {
 				it('should set component data on an entity via setComponentData', () => {
 					const entity = ECS.createEntity({
-						Position: { x: 50, y: 50 },
-						TestEntityTag: {},
+						position: { x: 50, y: 50 },
+						testEntityTag: {},
 					})
-					this.commands.setComponentData(entity, this.setComponentPayload.payload)
+
+					this.commands.setComponentData(entity, this.setPositionPayload)
 					flush()
-					const pos = ECS.getComponent(entity, 'Position')
-					expect(pos).toEqual({ x: 999, y: -999 })
+					const pos = ECS.getComponent(entity, 'position')
+					expect(pos).toEqual({ x: 100, y: 100 })
 					this.commands.destroyEntity(entity)
 					flush()
 				})
@@ -164,7 +163,7 @@ export class CommandBufferTestSystem {
 						return
 					}
 					// Compile the prefab payload with overrides.
-					const { payload } = payloadCompiler.compileEntity('test_prefab', { Position: { x: 123, y: 456 } })
+					const { payload } = payloadCompiler.compileEntity('test_prefab', { position: { x: 123, y: 456 } })
 
 					this.commands.instantiate(payload, 0)
 					flush()
@@ -172,7 +171,7 @@ export class CommandBufferTestSystem {
 					let instantiatedEntity
 					for (const chunk of this.instantiateQuery.iter()) {
 						for (let i = 0; i < chunk.size; i++) {
-							const pos = ECS.getComponent(chunk.entities[i], 'Position')
+							const pos = ECS.getComponent(chunk.entities[i], 'position')
 							if (pos.x === 123 && pos.y === 456) {
 								instantiatedEntity = chunk.entities[i]
 								break
@@ -189,19 +188,16 @@ export class CommandBufferTestSystem {
 			// --- Test 8 & 9: Batch and Query-Based Modifications (Isolated) ---
 			if (testConfig.runCreateEntitiesTest && testConfig.runQueryBasedModificationTest) {
 				it('creation and all query-based modifications (add, set, remove, destroy)', () => {
-					const { QueryTestTag: QueryTestTagTypeID, QueryTestToggle: ComponentToToggleTypeID } =
+					const { queryTestTag, queryTestToggle } =
 						componentManager.getTypeIDs()
 
 					// --- COMPILE PAYLOADS ONCE ---
-					const { payload: creationPayload } = payloadCompiler.compileEntities({ QueryTestTag: { value: 1 } })
-					const { payload: addComponentPayload } = payloadCompiler.compileComponent(ComponentToToggleTypeID, {})
-					const { payload: setComponentPayload, mutators: setMutators } = payloadCompiler.compileComponent(
-						QueryTestTagTypeID,
-						{ value: 777 }
-					)
+					const { payload: creationPayload } = payloadCompiler.compileEntities({ queryTestTag: { value: 1 } })
+					const addComponentPayload = payloadCompiler.compileComponent(queryTestToggle, {}).payload
+					const setComponentPayload = payloadCompiler.compileComponent(queryTestTag, { value: 777 }).payload
 
-					const addQuery = queryManager.getQuery({ with: [QueryTestTagTypeID], without: [ComponentToToggleTypeID] })
-					const removeQuery = queryManager.getQuery({ with: [QueryTestTagTypeID, ComponentToToggleTypeID] })
+					const addQuery = queryManager.getQuery({ with: [queryTestTag], without: [queryTestToggle] })
+					const removeQuery = queryManager.getQuery({ with: [queryTestTag, queryTestToggle] })
 
 					// CREATE
 					this.commands.createEntities(creationPayload, 10)
@@ -216,11 +212,11 @@ export class CommandBufferTestSystem {
 					// SET
 					this.commands.setComponentDataOnQuery(removeQuery, setComponentPayload)
 					flush()
-					const data = ECS.getComponent(removeQuery.iter().next().value.entities[0], 'QueryTestTag')
+					const data = ECS.getComponent(removeQuery.iter().next().value.entities[0], 'queryTestTag')
 					expect(data.value).toBe(777)
 
 					// REMOVE
-					this.commands.removeComponentFromQuery(removeQuery, ComponentToToggleTypeID)
+					this.commands.removeComponentFromQuery(removeQuery, queryTestToggle)
 					flush()
 					expect(addQuery.iter().next().value?.size).toBe(10)
 
@@ -230,6 +226,122 @@ export class CommandBufferTestSystem {
 					expect(addQuery.iter().next().value).toBe(undefined)
 				})
 			}
+		})
+
+		describe('Command Buffer (Generational Entity IDs - ABA Problem)', () => {
+			let entityA_ID, entityA_Index, entityA_Generation
+			let entityB_ID
+
+			it('Step 1: should create an initial entity (A)', () => {
+				entityA_ID = ECS.createEntity({ position: { x: 1, y: 1 } })
+				entityA_Index = Number(entityA_ID & 0xffffffffn)
+				entityA_Generation = Number(entityA_ID >> 32n)
+
+				expect(entityManager.isEntityActive(entityA_ID)).toBe(true)
+				expect(entityA_Generation).toBeGreaterThanOrEqual(0)
+			})
+
+			it('Step 2: should queue a modification and destruction for entity A', () => {
+				this.commands.addComponent(entityA_ID, this.generationalTestVelocityPayload.payload)
+				this.commands.destroyEntity(entityA_ID)
+				expect(entityManager.isEntityActive(entityA_ID)).toBe(true)
+			})
+
+			it('Step 3: should execute the destruction command first', () => {
+				flush()
+				expect(entityManager.isEntityActive(entityA_ID)).toBe(false)
+			})
+
+			it('Step 4: should create a new entity (B) that reuses the index of A', () => {
+				entityB_ID = ECS.createEntity({ position: { x: 2, y: 2 } })
+				const entityB_Index = Number(entityB_ID & 0xffffffffn)
+				const entityB_Generation = Number(entityB_ID >> 32n)
+
+				expect(entityManager.isEntityActive(entityB_ID)).toBe(true)
+				expect(entityB_Index).toBe(entityA_Index)
+				expect(entityB_Generation).toBe(entityA_Generation + 1)
+			})
+
+			it('Step 5: should process the stale addComponent command and ignore it', () => {
+				flush()
+				const hasVelocity = ECS.hasComponent(entityB_ID, 'Velocity')
+				expect(hasVelocity).toBe(false)
+			})
+
+			it('Step 6: should clean up the test entity', () => {
+				const destroyed = ECS.destroyEntity(entityB_ID)
+				expect(destroyed).toBe(true)
+			})
+		})
+
+		describe('Command Buffer (Generational IDs - Advanced Scenarios)', () => {
+			it('should ignore a stale setComponentData command', () => {
+				// --- 1. Setup ---
+				const entityA_ID = ECS.createEntity({ position: { x: 1, y: 1 } })
+
+				// --- 2. Defer Commands ---
+				this.commands.setComponentData(entityA_ID, this.setPositionPayload)
+				this.commands.destroyEntity(entityA_ID)
+
+				// --- 3. Flush & Recycle ---
+				flush() // Destroys entity A
+				const entityB_ID = ECS.createEntity({ position: { x: 2, y: 2 } })
+
+				// --- 4. Flush Stale Command ---
+				flush() // Processes the stale setComponentData command
+
+				// --- 5. Verification ---
+				const posB = ECS.getComponent(entityB_ID, 'Position')
+				expect(posB.x).toBe(2) // Should not be 100
+				expect(posB.y).toBe(2) // Should not be 100
+
+				// Cleanup
+				ECS.destroyEntity(entityB_ID)
+			})
+
+			it('should ignore a stale removeComponent command', () => {
+				// --- 1. Setup ---
+				const entityA_ID = ECS.createEntity({ position: { x: 1, y: 1 }, velocity: { x: 1, y: 1 } })
+
+				// --- 2. Defer Commands ---
+				this.commands.removeComponent(entityA_ID, this.velocity)
+				this.commands.destroyEntity(entityA_ID)
+
+				// --- 3. Flush & Recycle ---
+				flush() // Destroys entity A
+				const entityB_ID = ECS.createEntity({ position: { x: 2, y: 2 }, velocity: { x: 2, y: 2 } })
+
+				// --- 4. Flush Stale Command ---
+				flush() // Processes the stale removeComponent command
+
+				// --- 5. Verification ---
+				const hasVelocity = ECS.hasComponent(entityB_ID, 'Velocity')
+				expect(hasVelocity).toBe(true) // Should not have been removed
+
+				// Cleanup
+				ECS.destroyEntity(entityB_ID)
+			})
+
+			it('should handle multiple recycle cycles correctly', () => {
+				// --- 1. Setup ---
+				const entityA_ID = ECS.createEntity({ position: { x: 1, y: 1 } })
+				const entityA_Index = Number(entityA_ID & 0xffffffffn)
+
+				// --- 2. Defer command for original entity ---
+				this.commands.addComponent(entityA_ID, this.generationalTestVelocityPayload.payload)
+				this.commands.destroyEntity(entityA_ID)
+
+				// --- 3. First Cycle ---
+				flush() // Destroys A
+				const entityB_ID = ECS.createEntity({ position: { x: 2, y: 2 } })
+				ECS.destroyEntity(entityB_ID) // Destroy B immediately
+				const entityC_ID = ECS.createEntity({ position: { x: 3, y: 3 } })
+
+				// --- 4. Flush Stale Command & Verify ---
+				flush() // Processes the original stale command for A
+				expect(ECS.hasComponent(entityC_ID, 'Velocity')).toBe(false)
+				ECS.destroyEntity(entityC_ID)
+			})
 		})
 
 		// Run all the defined tests.

@@ -60,7 +60,7 @@ export class CommandBufferExecutor {
 			switch (opCode) {
 				// --- Deletion Phase Commands ---
 				case OpCodes.DESTROY_ENTITY: {
-					const entityId = reader.readU32()
+					const entityId = reader.readU64()
 					deletions.entities.add(entityId)
 					break
 				}
@@ -72,7 +72,7 @@ export class CommandBufferExecutor {
 
 				// --- Modification Phase Commands ---
 				case OpCodes.ADD_COMPONENT: {
-					const entityId = reader.readU32()
+					const entityId = reader.readU64()
 					if (deletions.entities.has(entityId)) continue // Skip mods on deleted entities
 					const componentTypeID = reader.readU16();
 					const dataLength = reader.readU16();
@@ -88,7 +88,7 @@ export class CommandBufferExecutor {
 					break
 				}
 				case OpCodes.REMOVE_COMPONENT: {
-					const entityId = reader.readU32()
+					const entityId = reader.readU64()
 					if (deletions.entities.has(entityId)) continue
 					const componentTypeID = reader.readU16()
 					if (!modifications.remove.has(componentTypeID)) modifications.remove.set(componentTypeID, [])
@@ -96,7 +96,7 @@ export class CommandBufferExecutor {
 					break
 				}
 				case OpCodes.SET_COMPONENT_DATA: {
-					const entityId = reader.readU32()
+					const entityId = reader.readU64()
 					if (deletions.entities.has(entityId)) continue
 					const componentTypeID = reader.readU16();
 					const dataLength = reader.readU16();
@@ -217,7 +217,7 @@ export class CommandBufferExecutor {
 			const { entityIds, dataOffsets, dataLengths } = addBatch
 			for (let i = 0; i < entityIds.length; i++) {
 				const entityId = entityIds[i]
-				const sourceArchetypeId = this.entityManager.entityArchetype[entityId]
+				const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId)
 				if (sourceArchetypeId === undefined) continue
 
 				const location = this.archetypeManager.archetypeEntityMaps[sourceArchetypeId]?.get(entityId)
@@ -253,7 +253,7 @@ export class CommandBufferExecutor {
 		// Process removals
 		for (const [componentTypeID, entityIds] of modifications.remove.entries()) {
 			for (const entityId of entityIds) {
-				const sourceArchetypeId = this.entityManager.entityArchetype[entityId]
+				const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId)
 				if (sourceArchetypeId === undefined) continue
 
 				const location = this.archetypeManager.archetypeEntityMaps[sourceArchetypeId]?.get(entityId)
@@ -263,11 +263,11 @@ export class CommandBufferExecutor {
 				const targetArchetypeId = this.archetypeManager.getArchetypeByMask(this.archetypeManager.archetypeMasks[sourceArchetypeId] & ~Schema.componentBitFlags[componentTypeID])
 
 				// --- Gather into the new batch structure ---
-				if (!movesByChunk.has(sourceChunk)) movesByChunk.set(sourceChunk, new Map())
+				if (!movesByChunk.has(sourceChunk)) movesByChunk.set(sourceChunk, new Map()) // ew
 				const chunkMoves = movesByChunk.get(sourceChunk)
 
 				if (!chunkMoves.has(targetArchetypeId)) {
-					chunkMoves.set(targetArchetypeId, { entityIds: [], sourceIndices: [], componentsToAssign: new Map() })
+					chunkMoves.set(targetArchetypeId, { entityIds: [], sourceIndices: [], componentsToAssign: new Map() }) // ew
 				}
 				const moveBatch = chunkMoves.get(targetArchetypeId)
 				moveBatch.entityIds.push(entityId)
@@ -286,7 +286,8 @@ export class CommandBufferExecutor {
 				this.archetypeManager._removeEntitiesBatch(sourceChunk.archetype, entityIds)
 
 				for (const entityId of entityIds) {
-					this.entityManager.entityArchetype[entityId] = targetArchetypeId
+					const index = Number(entityId & 0xffffffffn)
+					this.entityManager.entityArchetype[index] = targetArchetypeId
 				}
 			}
 		}
@@ -303,7 +304,7 @@ export class CommandBufferExecutor {
 			const { entityIds, dataOffsets, dataLengths } = sets;
 			for (let i = 0; i < entityIds.length; i++) {
 				const entityId = entityIds[i]
-				const location = this.entityManager.archetypeManager.archetypeEntityMaps[this.entityManager.entityArchetype[entityId]]?.get(entityId);
+				const location = this.entityManager.archetypeManager.archetypeEntityMaps[this.entityManager.getArchetypeForEntity(entityId)]?.get(entityId);
 				if (!location) continue;
 
 				if (!setsByChunk.has(location.chunk)) {

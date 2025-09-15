@@ -346,13 +346,23 @@ class PayloadCompiler {
 		switch (constructor.BYTES_PER_ELEMENT) {
 			case 8:
 				if (type.startsWith('f')) view.setFloat64(offset, value, true)
-				else if (type.startsWith('i')) view.setBigInt64(offset, BigInt(value), true)
-				else view.setBigUint64(offset, BigInt(value), true)
+				else {
+					// Value might already be a bigint from the interpreter.
+					const bigIntValue = typeof value === 'bigint' ? value : BigInt(value)
+					if (type.startsWith('i')) view.setBigInt64(offset, bigIntValue, true)
+					else view.setBigUint64(offset, bigIntValue, true)
+				}
 				break
 			case 4:
-				if (type.startsWith('f')) view.setFloat32(offset, value, true)
-				else if (type.startsWith('i')) view.setInt32(offset, value, true)
-				else view.setUint32(offset, value, true)
+				if (type.startsWith('f')) {
+					view.setFloat32(offset, value, true)
+				} else {
+					// Allow bigint to be written to 32-bit fields, but it will truncate.
+					// This is expected for entity IDs where we only need the index part sometimes.
+					const numValue = typeof value === 'bigint' ? Number(value & 0xffffffffn) : value
+					if (type.startsWith('i')) view.setInt32(offset, numValue, true)
+					else view.setUint32(offset, numValue, true)
+				}
 				break
 			case 2:
 				if (type.startsWith('i')) view.setInt16(offset, value, true)
@@ -414,7 +424,8 @@ class PayloadCompiler {
 				const idOrName = prefabSharedData.id
 				// The ID could be a string name from a prefab `extends` property.
 				// We must resolve it to a numeric ID.
-				prefabId = typeof idOrName === 'string' ? this.prefabManager.getPrefabId(idOrName) : idOrName
+				prefabId =
+					typeof idOrName === 'string' ? this.prefabManager.getPrefabId(idOrName) : Number(idOrName & 0xffffffffn)
 			}
 		}
 
