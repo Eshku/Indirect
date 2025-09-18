@@ -8,45 +8,50 @@ const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningT
 
 const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
 
-const { cooldownManager } = await import(`${PATH_SUBSYSTEMS}/CooldownManager.js`)
-
 /**
  * Synchronizes the state of the player's hotbar with the Hotbar UI.
  */
 export class HotbarSyncSystem {
 	constructor() {
-		const { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet } = componentManager.getTypeIDs()
-		Object.assign(this, { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet })
+		const { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet, activeCooldown } = componentManager.getTypeIDs()
+		Object.assign(this, { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet, activeCooldown })
 
 		this.hotbarItemsQuery = queryManager.getQuery({
 			with: [owner, inActiveSet, prefab, icon, cooldown],
 		})
-		// This query is for reacting to active slot changes in the update loop.
+
 		this.playerUpdateQuery = queryManager.getQuery({
-			// This query is now reactive. It will only process when the player's ActiveSet changes.
 			with: [playerTag, activeSet],
 			react: [activeSet],
 		})
-		// This query is for finding the player entity at startup.
+
+		// This query is now REACTIVE. It will only iterate over cooldowns that
+		// have been created, destroyed, or had their remainingTime changed.
+		this.cooldownsQuery = queryManager.getQuery({
+			with: [this.activeCooldown],
+			react: [this.activeCooldown],
+		})
+
+		// Find player entity at startup.
 		this.playerInitQuery = queryManager.getQuery({ with: [playerTag] })
 
 		this.stringStorage = stringInterningTable.storage
 		this.propertyGroupManager = propertyGroupManager
-		this.cooldownManager = cooldownManager
 		this.prefabManager = prefabManager
 		this.playerId = null
 		this.cachedSlotEntityIds = Array(HOTBAR_SLOT_COUNT).fill(0)
 		this.cachedActiveSlot = -1
 
-		// Pre-compile the payload for ActiveSet component updates.
+		// Pre-compile payload for ActiveSet component updates.
 		this.activeSetPayload = payloadCompiler.compileComponent(this.activeSet, { slots: [] })
+
+		this.playerCooldowns = new Map() // Map<prefabId, remainingTime>
 		this.hotbar = null
 	}
 
 	init() {
 		this.hotbar = uiManager.getElement('Hotbar')
 
-		// Use the non-reactive query to reliably find the player at startup.
 		for (const chunk of this.playerInitQuery.iter()) {
 			this.playerId = chunk.entities[0]
 			break
@@ -79,29 +84,32 @@ export class HotbarSyncSystem {
 				const slot = slots[indexInChunk]
 
 				if (slot < HOTBAR_SLOT_COUNT) {
-					// The Prefab component now has a sharedGroupId property on the chunk.
+					// Prefab component now has a sharedGroupId property on the chunk.
 					const sharedGroupId = prefabIdArrays.sharedGroupId[indexInChunk]
 
-					// Get the shared data block for this item.
+					// Get shared data block for this item.
 					const sharedGroup = this.propertyGroupManager.sharedGroups[sharedGroupId]
 
-					// Get the prefabId from the shared group.
+					// Get prefabId from shared group.
 					const sharedPrefabData = sharedGroup?.[this.prefab]
 					const prefabId = sharedPrefabData?.id
 
-					// The Icon's assetName is a per-entity property (though the string is interned).
-					// We read its numeric reference directly from the chunk.
+					// Icon's assetName is a per-entity property (though string is interned).
+
+					//! share asset name?
+
+					// We read its numeric reference directly from chunk.
 					const iconAssetNameRef = iconArrays.assetName[indexInChunk]
 					const iconAssetStr = stringStorage[iconAssetNameRef]
 
-					// The Cooldown.duration is a shared property.
+					// Cooldown.duration is shared property.
 					const sharedCooldownData = sharedGroup[this.cooldown]
 					const totalDuration = sharedCooldownData?.duration ?? 0
 
 					desiredState[slot] = {
 						itemId: entityId,
 						prefabId: prefabId,
-						iconAsset: iconAssetStr, // This is the shared icon asset name
+						iconAsset: iconAssetStr, // This is shared icon asset name
 						totalDuration: totalDuration,
 					}
 					desiredSlotEntityIds[slot] = entityId
@@ -164,11 +172,32 @@ export class HotbarSyncSystem {
 	}
 
 	_syncCooldownVisuals(desiredState) {
+		// --- EFFICIENT REACTIVE UPDATE ---
+		// This loop now only runs if cooldowns have changed, and only iterates
+		// over the chunks containing those changed cooldowns.
+		for (const chunk of this.cooldownsQuery.iter()) {
+			const cooldowns = chunk.componentArrays[this.activeCooldown]
+			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
+				// Check if this specific entity's cooldown component has changed.
+				if (this.cooldownsQuery.hasChanged(chunk, indexInChunk)) {
+					// We only care about cooldowns owned by our player.
+					if (cooldowns.ownerId[indexInChunk] === this.playerId) {
+						const prefabId = cooldowns.prefabId[indexInChunk]
+						const remainingTime = cooldowns.remainingTime[indexInChunk]
+
+						// Update or remove the entry in our persistent map.
+						if (remainingTime > 0) this.playerCooldowns.set(prefabId, remainingTime)
+						else this.playerCooldowns.delete(prefabId)
+					}
+				}
+			}
+		}
+
 		for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
 			const itemInfo = desiredState[i]
 			if (itemInfo) {
-				const remainingTime = this.cooldownManager.getRemaining(this.playerId, itemInfo.prefabId)
-				if (remainingTime > 0) {
+				const remainingTime = this.playerCooldowns.get(Number(itemInfo.prefabId))
+				if (remainingTime) {
 					this.hotbar.updateCooldown(i, { remainingTime, totalDuration: itemInfo.totalDuration })
 				} else {
 					this.hotbar.updateCooldown(i, null)

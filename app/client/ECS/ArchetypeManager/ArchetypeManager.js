@@ -32,7 +32,7 @@
 
 const { Chunk } = await import(`${PATH_ECS}/ArchetypeManager/Chunk.js`)
 import * as Schema from '../ComponentManager/ComponentSchema.js'
-import { getComponentTypesFromMask } from '../ComponentManager/ComponentUtils.js'
+
 
 const DEFAULT_CHUNK_CAPACITY = 256
 export const MAX_ARCHETYPES = 4096
@@ -47,7 +47,7 @@ export class ArchetypeManager {
 		this.archetypeChunks = []
 		this.archetypeEntityMaps = []
 		this.archetypeTransitions = []
-		this.archetypeLastNonFullChunk = [] // OPTIMIZATION
+		this.archetypeLastNonFullChunk = []
 	}
 
 	async init() {
@@ -95,7 +95,7 @@ export class ArchetypeManager {
 		}
 
 		if (!sortedTypeIDs) {
-			sortedTypeIDs = getComponentTypesFromMask(archetypeMask)
+			sortedTypeIDs = this.getComponentTypesFromMask(archetypeMask)
 		}
 
 		this.archetypeMasks[id] = archetypeMask
@@ -103,11 +103,19 @@ export class ArchetypeManager {
 		this.archetypeChunks[id] = []
 		this.archetypeEntityMaps[id] = new Map()
 		this.archetypeTransitions[id] = { add: {}, remove: {} }
-		this.archetypeLastNonFullChunk[id] = 0 // OPTIMIZATION
+		this.archetypeLastNonFullChunk[id] = 0
 
 		this.archetypeLookup.set(archetypeMask, id)
 		this.queryManager.registerArchetype(id)
 		return id
+	}
+
+	getComponentTypesFromMask(mask) {
+		const types = []
+		for (let i = 0; i < Schema.nextComponentTypeID; i++) {
+			if ((mask & Schema.componentBitFlags[i]) !== 0n) types.push(i)
+		}
+		return types
 	}
 
 	hasComponentType(archetype, componentTypeID) {

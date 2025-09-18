@@ -14,6 +14,7 @@
 **Set expectation low.**
 
 Wobbly foundation of what could be an engine, expect bugs and unfinished features, alot of things are not tested and still changing.
+
 Expect each update to introduce breaking changes, even if they are marked as "patch" or "minor". Versioning is not tied to npm conventions.
 
 Readme might be outdated.
@@ -23,12 +24,11 @@ Readme might be outdated.
 **Next significant steps:**
 
 - Introduce dynamic (packed) arrays, stored on chunk (?).
-- Generational Entity IDs
+- Placeholder Entities.
 - Parrallelism.
 - Custom HMR, or in simple terms - hot reload.
 - Serialization \ Deserialization.
 - React on component addition \ changes as 2 separate things (?)
-- indirect everything 👀
 
 ## Tech Stack
 

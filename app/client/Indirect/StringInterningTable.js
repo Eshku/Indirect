@@ -67,7 +67,6 @@
  *
  * Only the `stringInterningTable.intern()` method should ever write to this array.
  * Writing to it from any other system will corrupt the manager's internal state
- * and lead to unpredictable, hard-to-debug issues.
  *
  * ## 4. Working with Strings: Immutability & Updates
  *
@@ -90,12 +89,6 @@
  *
  * The `storage` property is exposed for performance, trusting the developer to use
  * it responsibly.
- *
- * ## 6. Technical Limits
- *
- * The references (`ref`s) are stored in components as 32-bit unsigned integers (`u32`).
- * This imposes a theoretical maximum of `2^32 - 1` (approximately 4.3 billion)
- * unique strings that the engine can intern. Probably RAM gonna be exhausted before this limit is reached.
  */
 export class StringInterningTable {
 	constructor() {

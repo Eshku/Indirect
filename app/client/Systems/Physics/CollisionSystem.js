@@ -7,7 +7,6 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
  */
 export class CollisionSystem {
 	constructor() {
-		this.allowInternalConflicts = true
 		this.commands = null // Injected by SystemManager
 
 		const { position, velocity, isGrounded, collisionFlags, collider, platformTag, landedEvent, leftSurfaceEvent } =

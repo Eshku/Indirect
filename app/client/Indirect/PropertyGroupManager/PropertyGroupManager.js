@@ -10,6 +10,8 @@
 //! Any alternative approach would need to solve
 //! Data storage for X properties of components for all entities with specific component property of same value.
 
+//! Could also store pointer to group instead of just cleaning properties on shared components.
+
 /**
  * Manages "instance-shared" component data.
  *

@@ -141,8 +141,7 @@ export class CommandBuffer {
 	instantiate(payload, layer = 0) {
 		// Instantiate is just an alias for creating a single entity from a pre-compiled payload.
 		this.createEntity(payload, layer)
-		//! Does not support recursive children instantiation currently
-		//! Too many optimization paths, gonna come back to this.
+		//! Recursive children instantiation will be deprecated once we have placeholder entities implemented.
 	}
 
 	/**

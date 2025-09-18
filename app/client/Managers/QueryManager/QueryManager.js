@@ -54,6 +54,8 @@ class QueryManager {
 			without: withoutComponents = [],
 			any: anyComponents = [],
 			react: reactComponents = [],
+			read: readComponents = [],
+			write: writeComponents = [],
 			constants: constantsDef = {},
 		} = options
 		
@@ -62,12 +64,14 @@ class QueryManager {
 		const withoutIdsString = [...withoutComponents].sort((a, b) => a - b).join(',')
 		const anyIdsString = [...anyComponents].sort((a, b) => a - b).join(',')
 		const reactIdsString = [...reactComponents].sort((a, b) => a - b).join(',')
+		const readIdsString = [...readComponents].sort((a, b) => a - b).join(',')
+		const writeIdsString = [...writeComponents].sort((a, b) => a - b).join(',')
 
 		// Sort constant keys for canonical key generation.
 		const constantKeys = Object.keys(constantsDef).sort()
 		const constantsString = constantKeys.map(propName => `${propName}:${constantsDef[propName]}`).join(',')
 
-		return `w:${withIdsString}|wo:${withoutIdsString}|a:${anyIdsString}|r:${reactIdsString}|c:${constantsString}`
+		return `w:${withIdsString}|wo:${withoutIdsString}|a:${anyIdsString}|r:${reactIdsString}|rd:${readIdsString}|wr:${writeIdsString}|c:${constantsString}`
 	}
 
 	/**
@@ -77,6 +81,8 @@ class QueryManager {
 	 * @param {number[]} [options.without=[]] - Component type IDs that must NOT be present.
 	 * @param {number[]} [options.any=[]] - Component type IDs where at least one must be present.
 	 * @param {number[]} [options.react=[]] - Component type IDs that, if changed, will make the entity match the query.
+	 * @param {number[]} [options.read=[]] - Component type IDs that the system reads from, but are not part of the filtering criteria.
+	 * @param {number[]} [options.write=[]] - Component type IDs that the system writes to.
 	 * @param {Object.<string, number>} [options.constants={}] - A map to declaratively request
 	 *   enum/bitmask constants for optimal cache-locality. The key is the property name from the
 	 *   component's schema, and the value is the component's type ID. The resolved constant
@@ -101,9 +107,19 @@ class QueryManager {
 	 * @param {boolean} [options.mutable=false] - If true, guarantees a unique, non-cached query instance.
 	 * @returns {Query} A new or cached Query instance.
 	 */
-	getQuery({ with: withComponents = [], without = [], any = [], react = [], constants = {}, mutable = false }) {
+	getQuery({
+		with: withComponents = [],
+		without = [],
+		any = [],
+		react = [],
+		read = [],
+		write = [],
+		constants = {},
+		mutable = false,
+	}) {
 		try {
-			const options = { with: withComponents, without, any, react, constants, mutable }
+			const options = { with: withComponents, without, any, react, read, write, constants, mutable };
+
 			const queryKey = mutable ? `mutable:${this.nextQueryId}` : this._generateQueryKey(options)
 
 			const cachedQuery = this.queryCache.get(queryKey)
@@ -124,6 +140,8 @@ class QueryManager {
 				options.without,
 				options.any,
 				options.react,
+				options.read,
+				options.write,
 				constantsRequest
 			)
 

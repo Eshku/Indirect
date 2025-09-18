@@ -103,9 +103,25 @@ export const ECS = {
 
 	/**
 	 * Instantiates an entity from a prefab immediately.
+	 *
+	 * ---
+	 * ### [DEPRECATION CANDIDATE & PERFORMANCE NOTE]
+	 *
+	 * This method currently uses a recursive approach (`_instantiateChildRecursive`) to support the `children`
+	 * property in prefabs. This declarative hierarchy model is slated for
+	 * deprecation in favor of a more flexible system-driven approach.
+	 *
+	 * A key reason for this deprecation is the **performance cost**. The recursive implementation adds overhead
+	 * to **every** `instantiate` call, even for prefabs that have no children. The check for `prefabData.children`
+	* happens on this critical path, imposing a small but unnecessary "tax" on the majority of instantiations.
+	 *
+	 * By moving this logic into a dedicated system, the generic `instantiate`
+	 * method can be simplified to a single, non-recursive entity creation, and the cost of creating children
+	 * is only paid when an entity explicitly requires it.
+	 * ---
 	 * @param {string} prefabName The name of the prefab.
-	 * @param {object} [overrides={}] Component data to override prefab defaults. // @returns {bigint|undefined} The new root entity's ID.
-	 * @returns {number|undefined} The new root entity's ID.
+	 * @param {object} [overrides={}] Component data to override prefab defaults.
+	 * @returns {bigint|undefined} The new root entity's ID.
 	 */
 	instantiate(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
 		const prefabData = prefabManager.getPrefabData(prefabName)
@@ -117,6 +133,41 @@ export const ECS = {
 			return undefined
 		}
 		return this._instantiateChildRecursive(prefabData, { rootPrefabName: prefabName, overrides, parentId, ownerId })
+	},
+
+	/**
+	 * @deprecated This is the recursive implementation for the declarative `children` property in prefabs.
+	 * It will be removed when the `children` property is fully deprecated in favor of system-driven hierarchies.
+	 * @private
+	 */
+	_instantiateChildRecursive(
+		prefabData,
+		{ rootPrefabName = null, overrides = {}, parentId = null, ownerId = null } = {}
+	) {
+		const isRoot = rootPrefabName !== null
+		const componentData = { ...prefabData.components }
+
+		if (isRoot && overrides) {
+			// Deep merge overrides
+			for (const compName in overrides) {
+				componentData[compName] = { ...(componentData[compName] || {}), ...overrides[compName] }
+			}
+		}
+
+		if (parentId) componentData.Parent = { entityId: parentId }
+		if (ownerId) componentData.Owner = { entityId: ownerId }
+
+		const entityId = this.createEntity(componentData)
+		if (entityId === undefined) return undefined
+
+		const childrenOwnerId = ownerId || entityId
+
+		if (prefabData.children && prefabData.children.length > 0) {
+			for (const childData of prefabData.children) {
+				this._instantiateChildRecursive(childData, { parentId: entityId, ownerId: childrenOwnerId })
+			}
+		}
+		return entityId
 	},
 
 	/**
@@ -216,35 +267,6 @@ export const ECS = {
 		return archetype !== undefined ? archetypeManager.hasComponentType(archetype, componentTypeId) : false
 	},
 
-	_instantiateChildRecursive(
-		prefabData,
-		{ rootPrefabName = null, overrides = {}, parentId = null, ownerId = null } = {}
-	) {
-		const isRoot = rootPrefabName !== null
-		const componentData = { ...prefabData.components }
-
-		if (isRoot && overrides) {
-			// Deep merge overrides
-			for (const compName in overrides) {
-				componentData[compName] = { ...(componentData[compName] || {}), ...overrides[compName] }
-			}
-		}
-
-		if (parentId) componentData.Parent = { entityId: parentId }
-		if (ownerId) componentData.Owner = { entityId: ownerId }
-
-		const entityId = this.createEntity(componentData)
-		if (entityId === undefined) return undefined
-
-		const childrenOwnerId = ownerId || entityId
-
-		if (prefabData.children && prefabData.children.length > 0) {
-			for (const childData of prefabData.children) {
-				this._instantiateChildRecursive(childData, { parentId: entityId, ownerId: childrenOwnerId })
-			}
-		}
-		return entityId
-	},
 }
 
 window.ECS = ECS

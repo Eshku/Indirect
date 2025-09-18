@@ -10,6 +10,7 @@ import { payloadCompiler } from './PayloadCompiler.js'
 
 const { Sequence } = await import(`${PATH_CORE}/DataStructures/Sequence.js`)
 const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`)
+const { topologicalSort } = await import(`${PATH_CORE}/Algorithms/TopologicalSort.js`)
 
 /**
  * Manages the lifecycle and execution of all game systems.
@@ -42,6 +43,8 @@ export class SystemManager {
 		this._executionOrder = new Sequence()
 
 		this._executionOrderMap = new Map() // A cache mapping system names to their index
+		this._dependencyGraph = new Map()
+		this._executionStages = []
 
 		// This will store the configuration for each system's update rate.
 		// Map<SystemClass, { frequency: number | 'fixed' | 'update', groupName: string }>
@@ -97,10 +100,7 @@ export class SystemManager {
 		this.ticker = this.app.ticker
 
 		this.commandBuffer = new CommandBuffer(this.prefabManager, this.archetypeManager)
-		this.commandBufferExecutor = new CommandBufferExecutor(
-			this.entityManager,
-			this.archetypeManager
-		)
+		this.commandBufferExecutor = new CommandBufferExecutor(this.entityManager, this.archetypeManager)
 
 		// Initialize the payload compiler now that all managers are ready.
 		payloadCompiler.init()
@@ -137,6 +137,112 @@ export class SystemManager {
 
 		// Now that all systems are instantiated and initialized, queue them for execution.
 		this.queAll(this._executionOrderMap.keys())
+
+		// Build and sort the dependency graph to determine execution stages.
+		this._buildDependencyGraph()
+		const { stages, hasCycle, cycleNodes } = topologicalSort(this._dependencyGraph)
+
+		if (hasCycle) {
+			console.error(
+				`SystemManager: Circular dependency detected! The following systems depend on each other in a loop: [${cycleNodes.join(
+					', '
+				)}]`
+			)
+			console.warn('SystemManager: Falling back to manual execution order. Parallelism will be disabled.')
+
+			// Create a serial execution plan based on the manual order from systemConfig.js.
+			// Each system gets its own stage, forcing them to run one after another.
+			this._executionStages = this._executionOrder.map(systemName => [systemName])
+		} else {
+			this._executionStages = stages
+		}
+	}
+
+	/**
+	 * Builds a dependency graph between all registered systems based on their query declarations.
+	 * This method implements the logic outlined in `ParallelismPlan.md`.
+	 * @private
+	 */
+	_buildDependencyGraph() {
+		const systemDependencies = new Map() // Map<string, { reads: Set<number>, writes: Set<number> }>
+		const systemNames = Array.from(systemRegistry.systemInstances.keys())
+
+		// 1. Gather all read/write dependencies for each system.
+		for (const systemName of systemNames) {
+			const system = systemRegistry.getSystem(systemName)
+			systemDependencies.set(systemName, this._getSystemDependencies(system))
+		}
+
+		// 2. Build the graph. An edge from A to B means A must run before B.
+		const graph = new Map()
+		for (const name of systemNames) {
+			graph.set(name, new Set())
+		}
+
+		// Use the manual execution order to resolve Write-Write conflicts deterministically.
+		// This map provides O(1) lookup for a system's manual execution index.
+		const executionOrderIndex = new Map()
+		this._executionOrder.forEach((name, index) => executionOrderIndex.set(name, index))
+
+		for (let i = 0; i < systemNames.length; i++) {
+			for (let j = i + 1; j < systemNames.length; j++) {
+				const nameA = systemNames[i]
+				const nameB = systemNames[j]
+				const depsA = systemDependencies.get(nameA)
+				const depsB = systemDependencies.get(nameB)
+
+				// --- Conflict Detection (A vs B) ---
+				const writesA = depsA.writes
+				const readsA = depsA.reads
+				const writesB = depsB.writes
+				const readsB = depsB.reads
+
+				//?
+				// Read-After-Write (RAW): B reads a component that A writes. B must run after A.
+				const B_reads_what_A_writes = [...writesA].some(c => readsB.has(c))
+
+				// Write-After-Read (WAR): B writes a component that A reads. A must run before B.
+				const B_writes_what_A_reads = [...writesB].some(c => readsA.has(c))
+
+				// Write-After-Write (WAW): A and B both write to the same component.
+				const A_and_B_write_same = [...writesA].some(c => writesB.has(c))
+
+				// --- Dependency Creation ---
+				// A RAW (Read-After-Write) or WAR (Write-After-Read) dependency exists.
+				// In both cases, to ensure data correctness, A must execute before B.
+				// RAW: B needs data A just wrote.
+				// WAR: A needs to read data before B overwrites it.
+				if (B_reads_what_A_writes || B_writes_what_A_reads) {
+					graph.get(nameA).add(nameB) // Enforce A -> B
+				}
+				// WW: If both write to same component, use manual execution order as a tie-breaker
+
+				if (A_and_B_write_same) {
+					if (executionOrderIndex.get(nameA) < executionOrderIndex.get(nameB)) {
+						graph.get(nameA).add(nameB)
+					} else {
+						graph.get(nameB).add(nameA)
+					}
+				}
+
+				// --- Note on Internal System Conflicts ---
+				// This algorithm intentionally does not check for conflicts *within* a single system
+				// (e.g., a system reading from and writing to same component via different queries).
+				// This is because a system's `update` method is a single, serial execution block.
+				// Developer is responsible for ordering their internal logic (e.g., iterating query1
+				// before query2) to handle these internal data flows correctly. Sheduler only
+				// cares about preventing data races *between* different systems that might run in parallel.
+
+				//! Gonna come back to it once figure out how and what we are going to run in parallel.
+				//! Currently we have some blockers limiting us to Coarse-Grained \ system level parrallelism
+				//! even pre-processing cannot be transfered, it has to be compiled per-thread
+				//! idk, gonna figure it out later.
+				
+				//! task scheduler, work-stealing, dependency graph
+			}
+		}
+
+		this._dependencyGraph = graph
 	}
 
 	queAll(executionOrder) {
@@ -176,7 +282,7 @@ export class SystemManager {
 	}
 
 	/**
-	 * Configures the update frequencies for all game systems based on the schedule.
+	 * Configures update frequencies for all game systems based on the schedule.
 	 * @private
 	 */
 	_configureSystemFrequencies() {
@@ -437,6 +543,30 @@ export class SystemManager {
 			}
 		}
 		return out
+	}
+
+	/**
+	 * Gathers all unique component dependencies for a given system instance.
+	 * @param {object} system The system instance.
+	 * @returns {{reads: Set<number>, writes: Set<number>}}
+	 * @private
+	 */
+	_getSystemDependencies(system) {
+		const queries = this._getSystemQueries(system)
+		const reads = new Set()
+		const writes = new Set()
+
+		for (const query of queries) {
+			// According to ParallelismPlan.md:
+			// Reads = read + with + any + react
+			query.read.forEach(id => reads.add(id))
+			query.with.forEach(id => reads.add(id))
+			query.any.forEach(id => reads.add(id))
+			query.react.forEach(id => reads.add(id))
+
+			query.write.forEach(id => writes.add(id))
+		}
+		return { reads, writes }
 	}
 
 	_getReactiveQueries(system, out = []) {

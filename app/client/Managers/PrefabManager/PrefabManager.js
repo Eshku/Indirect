@@ -314,6 +314,35 @@ export class PrefabManager {
 	}
 
 	/**
+	 * [DEPRECATION CANDIDATE]
+	 *
+	 * ---
+	 * ### Architectural Discussion: Declarative vs. System-Driven Hierarchies
+	 *
+	 * This method, and the `children` property in prefabs, represents a **declarative** approach to
+	 * creating entity hierarchies. The entire object graph is defined in data (`Player.json`), and `ECS.instantiate`
+	 * creates the whole tree in a single, atomic operation.
+	 *
+	 * **Pros of the current approach:**
+	 * - **Simplicity:** `ECS.instantiate('player')` creates the player and all their skills at once.
+	 * - **Data-Purity:** The structure is entirely defined in the JSON, which is great for simple, static objects (e.g., a crate with a lid).
+	 *
+	 * **Cons & Future Direction:**
+	 * - **Rigidity:** This approach is inflexible. It cannot handle dynamic hierarchies, such as a player whose skills are determined by saved game data or in-game choices. The hierarchy is baked into the prefab data.
+	 * - **Complexity Misplacement:** It pushes significant recursive complexity into the core `PrefabManager` and instantiation logic, which should ideally be generic.
+	 *
+	 * The long-term, more flexible solution is a **system-driven** approach. In this model:
+	 * 1.  A prefab like `Player.json` would be simplified to only contain the player's core components, plus a new component like `InitialLoadout: { skills: ['fireball', 'searing_boulder'] }`. It would have no `children` array.
+	 * 2.  A new, dedicated system (e.g., `InitialLoadoutSystem`) would query for entities with an `InitialLoadout` component.
+	 * 3.  This system would then read the `skills` array and use `this.commands.instantiate()` to create the child skill entities, assigning the player as their parent.
+	 *
+	 * This moves the responsibility of "assembling a player" from the generic `PrefabManager` into a specific, logical `InitialLoadoutSystem`, which is a much cleaner design. It gives developers the power to build complex, state-dependent hierarchies using code, which is far more expressive than static JSON.
+	 *
+	 * **Prerequisite:** This superior system-driven approach is currently blocked by the lack of **placeholder entity IDs** (as outlined in `ParallelismPlan.md`). Without them, a system cannot create a parent and child in the same frame and establish a relationship between them before they have actual IDs.
+	 *
+	 * **Conclusion:** The `children` property is considered a temporary solution for simple, static hierarchies. It will be deprecated for complex entities once placeholder IDs are implemented, in favor of the more robust and flexible system-driven pattern.
+	 * ---
+	 *
 	 * Recursively resolves `extends` within an array of child entity definitions.
 	 * This allows for prefab inheritance at any level of the entity hierarchy.
 	 * @param {object[]} children - The array of child entity definitions.

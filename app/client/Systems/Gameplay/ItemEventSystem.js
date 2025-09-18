@@ -1,7 +1,7 @@
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { queryManager, componentManager, archetypeManager, entityManager, prefabManager } = theManager.getManagers()
 
-const { cooldownManager } = await import(`${PATH_SUBSYSTEMS}/CooldownManager.js`)
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
 
@@ -12,16 +12,19 @@ const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupMan
  */
 export class ItemEventSystem {
 	constructor() {
-		const { actionIntent, activeSet, prefab, cooldown } = componentManager.getTypeIDs()
-		Object.assign(this, { actionIntent, activeSet, prefab, cooldown })
+		const { actionIntent, activeSet, prefab, cooldown, activeCooldown } = componentManager.getTypeIDs()
+		Object.assign(this, { actionIntent, activeSet, prefab, cooldown, activeCooldown })
 
 		this.actorsQuery = queryManager.getQuery({ with: [actionIntent, activeSet], react: [actionIntent] })
+		this.cooldownsQuery = queryManager.getQuery({ with: [activeCooldown] })
 
 		this.archetypeManager = archetypeManager
-		this.cooldownManager = cooldownManager
-		this.entityManager = entityManager
 		this.prefabManager = prefabManager
 		this.propertyGroupManager = propertyGroupManager
+		this.entityManager = entityManager
+
+		// Pre-compile the payload for creating new Cooldown entities.
+		this.cooldownCreationPayload = payloadCompiler.compileEntity({ activeCooldown: {} })
 	}
 
 	init() {}
@@ -90,17 +93,48 @@ export class ItemEventSystem {
 
 				// Cooldown duration is now a shared property.
 				if (cooldownArrays) {
-					if (this.cooldownManager.isOnCooldown(actorId, itemPrefabId)) continue
+					if (this.isOnCooldown(actorId, Number(itemPrefabId))) continue
 
 					// We already have the sharedGroup from the Prefab lookup. We can reuse it.
 					const sharedCooldownData = sharedGroup?.[this.cooldown]
 					const itemCooldownDuration = sharedCooldownData?.duration ?? 0
-					this.cooldownManager.startCooldown(actorId, itemPrefabId, itemCooldownDuration)
+
+					// Use the pre-compiled payload and mutators for efficient entity creation.
+					const { payload, mutators } = this.cooldownCreationPayload
+					// CRITICAL FIX: Convert BigInts to Numbers before assigning to TypedArray mutators.
+					// `ownerId` is an 'entity' (BigInt), and `prefabId` is also being read as a BigInt from shared data.
+					mutators.activeCooldown.ownerId[0] = actorId // This is a BigUint64Array, so it takes a BigInt directly.
+					mutators.activeCooldown.prefabId[0] = Number(itemPrefabId)
+					mutators.activeCooldown.remainingTime[0] = itemCooldownDuration
+
+					this.commands.createEntity(payload)
 				}
 
-				const itemPrefabName = this.prefabManager.getPrefabNameById(itemPrefabId)
-				console.log(`Entity ${actorId} used ${itemPrefabName} with ID ${itemEntityId}`)
+				const itemPrefabName = this.prefabManager.getPrefabNameById(itemPrefabId) // Explicitly convert BigInts to strings for logging.
+				console.log(`Entity ${actorId.toString()} used ${itemPrefabName} with ID ${itemEntityId.toString()}`)
 			}
 		}
+	}
+
+	/**
+	 * Checks if a specific owner/prefab combination is currently on cooldown.
+	 * NOTE: This is an O(N) operation over all active cooldowns. It's acceptable
+	 * here because it only runs when a player *tries* to use an item, not every frame.
+	 * @param {bigint} ownerId The entity to check.
+	 * @param {number} prefabId The skill/item prefab to check.
+	 * @returns {boolean} True if a matching cooldown entity exists.
+	 * @private
+	 */
+	isOnCooldown(ownerId, prefabId) {
+		for (const chunk of this.cooldownsQuery.iter()) {
+			const cooldowns = chunk.componentArrays[this.activeCooldown]
+			const ownerIds = cooldowns.ownerId
+			const prefabIds = cooldowns.prefabId
+
+			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
+				if (ownerIds[indexInChunk] === ownerId && prefabIds[indexInChunk] === prefabId) return true
+			}
+		}
+		return false
 	}
 }

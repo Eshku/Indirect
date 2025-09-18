@@ -36,10 +36,10 @@ export class MovementSystem {
 			const collisionFlagsArray = collisionFlagsArrays.collisionFlags
 			const COLLISION_FLAGS = this.COLLISION_FLAGS // Local reference for the tight loop
 
-			for (let i = 0; i < chunk.size; i++) {
-				const desiredMoveX = intentX[i] // e.g., -1, 0, 1
-				const currentCollisionFlags = collisionFlagsArray[i] // raw bitmask integer
-				let finalVelX = desiredMoveX * speedVal[i] // Calculate desired velocity
+			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
+				const desiredMoveX = intentX[indexInChunk] // e.g., -1, 0, 1
+				const currentCollisionFlags = collisionFlagsArray[indexInChunk] // raw bitmask integer
+				let finalVelX = desiredMoveX * speedVal[indexInChunk] // Calculate desired velocity
 
 				// Use the cached constants for direct, highly optimizable bitwise checks.
 				const collidesRight = (currentCollisionFlags & COLLISION_FLAGS.RIGHT) !== 0
@@ -50,9 +50,9 @@ export class MovementSystem {
 					// Moving right and hit right, or moving left and hit left
 					finalVelX = 0
 				}
-				velX[i] = finalVelX
+				velX[indexInChunk] = finalVelX
 
-				velocityMarker.mark(i)
+				velocityMarker.mark(indexInChunk)
 			}
 		}
 	}
