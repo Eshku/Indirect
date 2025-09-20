@@ -33,7 +33,6 @@
 const { Chunk } = await import(`${PATH_ECS}/ArchetypeManager/Chunk.js`)
 import * as Schema from '../ComponentManager/ComponentSchema.js'
 
-
 const DEFAULT_CHUNK_CAPACITY = 256
 export const MAX_ARCHETYPES = 4096
 
@@ -41,7 +40,6 @@ export class ArchetypeManager {
 	constructor() {
 		this.archetypeLookup = new Map()
 		this.nextArchetype = 0
-		this.archetypeMaxDirtyTicks = new Uint32Array(MAX_ARCHETYPES)
 		this.archetypeMasks = []
 		this.archetypeComponentTypeIDs = []
 		this.archetypeChunks = []
@@ -50,9 +48,7 @@ export class ArchetypeManager {
 		this.archetypeLastNonFullChunk = []
 	}
 
-	async init() {
-		const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-
+	async init(theManager) {
 		this.queryManager = theManager.getManager('QueryManager')
 		this.componentManager = theManager.getManager('ComponentManager')
 		this.systemManager = theManager.getManager('SystemManager')
@@ -122,6 +118,18 @@ export class ArchetypeManager {
 		return this.archetypeComponentTypeIDs[archetype]?.has(componentTypeID)
 	}
 
+	/**
+	 * Gets the precise location of an entity within its archetype's data structures.
+	 * @param {bigint} entityId The ID of the entity to locate.
+	 * @returns {{chunk: import('./Chunk.js').Chunk, indexInChunk: number} | undefined} The entity's location or undefined if not found.
+	 */
+	getEntityLocation(entityId) {
+		const archetypeId = this.entityManager.getArchetypeForEntity(entityId)
+		if (archetypeId === undefined) return undefined
+
+		return this.archetypeEntityMaps[archetypeId]?.get(entityId)
+	}
+
 	_groupEntitiesByArchetype(entities) {
 		const entitiesByArchetype = new Map()
 		for (const entityId of entities) {
@@ -134,12 +142,6 @@ export class ArchetypeManager {
 			entitiesByArchetype.get(archetypeId).push(entityId)
 		}
 		return entitiesByArchetype
-	}
-
-	updateArchetypeMaxTick(archetype, tick) {
-		if (tick > this.archetypeMaxDirtyTicks[archetype]) {
-			this.archetypeMaxDirtyTicks[archetype] = tick
-		}
 	}
 
 	/**
@@ -163,8 +165,6 @@ export class ArchetypeManager {
 			// Process all chunks from the source archetype.
 			this._moveAllChunksToNewArchetype(sourceArchetypeId, targetArchetypeId, typeID, dataOffset, dataLength, reader)
 		}
-
-		// The move is handled directly, no need for the generic moveEntitiesInBatch.
 	}
 
 	/**
@@ -185,8 +185,6 @@ export class ArchetypeManager {
 			// Process all chunks from the source archetype.
 			this._moveAllChunksToNewArchetype(sourceArchetypeId, targetArchetypeId, -1, -1, -1, null) // -1 indicates no new component
 		}
-
-		// The move is handled directly.
 	}
 
 	setComponentDataOnQuery(query, componentTypeID, dataOffset, dataLength, reader) {
@@ -232,7 +230,7 @@ export class ArchetypeManager {
 	}
 
 	/**
-	 * The final, hyper-optimized "Blit" operation for `setComponentData`.
+	 * "Blit" operation for `setComponentData`.
 	 * This method receives pre-gathered source and destination data and performs
 	 * the tightest possible copy loop.
 	 * @param {Chunk} chunk The destination chunk.
@@ -245,6 +243,7 @@ export class ArchetypeManager {
 	 * @private
 	 */
 	_blitComponentDataFromBinary(chunk, typeID, destIndices, dataOffsets, dataLengths, reader, currentTick) {
+		chunk.lastDirtyTick = currentTick
 		const batchSize = destIndices.length
 
 		for (let i = 0; i < batchSize; i++) {
@@ -271,6 +270,7 @@ export class ArchetypeManager {
 	_fillComponentDataFromBuffer(chunk, typeID, sourceView, currentTick) {
 		const info = Schema.componentInfo[typeID]
 		// This loop is intentionally simple for JIT optimization.
+		chunk.lastDirtyTick = currentTick
 		for (let i = 0; i < chunk.size; i++) {
 			this._writeComponentDataFromBuffer(chunk, i, typeID, sourceView, 0)
 		}
@@ -281,7 +281,7 @@ export class ArchetypeManager {
 
 	/**
 	 * Fills a component's data for a range of entities in a chunk from a single AoS payload.
-	 * This is the hyper-optimized path for batch operations like `addComponentToQuery`.
+	 * This is path for batch operations like `addComponentToQuery`.
 	 * @param {Chunk} chunk The chunk to modify.
 	 * @param {number} typeID The component type ID.
 	 * @param {ArrayBuffer} aosPayload The AoS-formatted payload buffer.
@@ -300,6 +300,7 @@ export class ArchetypeManager {
 		for (const propKey in valuesToFill) {
 			propArrays[propKey]?.fill(valuesToFill[propKey], startIndex, endIndex)
 		}
+		chunk.lastDirtyTick = currentTick
 		chunk.dirtyTicksArrays[typeID].fill(currentTick, startIndex, endIndex)
 	}
 
@@ -316,7 +317,7 @@ export class ArchetypeManager {
 		const chunk = this._findOrCreateChunk(archetype)
 		const indexInChunk = chunk.addEntity(entityId)
 		this.archetypeEntityMaps[archetype].set(entityId, { chunk, indexInChunk })
-		this.updateArchetypeMaxTick(archetype, currentTick)
+		chunk.lastDirtyTick = currentTick
 
 		const sourceView = new DataView(binarySoAPayload)
 		let componentBaseOffset = 0
@@ -357,14 +358,14 @@ export class ArchetypeManager {
 			relevantInfos[typeID] = Schema.componentInfo[typeID]
 		}
 
-		const newChunk = new Chunk(archetypeId, componentTypeIDs, relevantInfos, this, DEFAULT_CHUNK_CAPACITY)
+		const newChunk = new Chunk(archetypeId, componentTypeIDs, relevantInfos, DEFAULT_CHUNK_CAPACITY)
 		chunks.push(newChunk)
 		this.archetypeLastNonFullChunk[archetypeId] = chunks.length - 1
 		return newChunk
 	}
 
 	/**
-	 * The new, hyper-optimized path for query-based structural changes.
+	 * path for query-based structural changes.
 	 * It moves all entities from all chunks of a source archetype to a target archetype.
 	 * @param {number} sourceArchetypeId
 	 * @param {number} targetArchetypeId
@@ -388,7 +389,6 @@ export class ArchetypeManager {
 
 		const copyPlan = this._getOrCreateCopyPlan(sourceArchetypeId, targetArchetypeId)
 		const currentTick = this.systemManager.currentTick
-		this.updateArchetypeMaxTick(targetArchetypeId, currentTick)
 
 		let sourceViewForNewComponent = null
 		if (newComponentTypeId !== -1) {
@@ -410,6 +410,7 @@ export class ArchetypeManager {
 
 			while (sourceCursor < totalToMove) {
 				const targetChunk = this._findOrCreateChunk(targetArchetypeId)
+				targetChunk.lastDirtyTick = currentTick
 				const spaceInTarget = targetChunk.capacity - targetChunk.size
 				const countToMoveThisBatch = Math.min(totalToMove - sourceCursor, spaceInTarget)
 
@@ -499,8 +500,6 @@ export class ArchetypeManager {
 		const count = entities.length
 		if (count === 0) return
 
-		this.updateArchetypeMaxTick(archetype, currentTick)
-
 		const entityMap = this.archetypeEntityMaps[archetype]
 		let entityCursor = 0
 
@@ -508,6 +507,7 @@ export class ArchetypeManager {
 			const chunk = this._findOrCreateChunk(archetype)
 
 			const spaceInChunk = chunk.capacity - chunk.size
+			chunk.lastDirtyTick = currentTick
 			const entitiesToAddInChunk = Math.min(count - entityCursor, spaceInChunk)
 			const startIndexInChunk = chunk.size
 			const endIndexInChunk = startIndexInChunk + entitiesToAddInChunk
@@ -621,8 +621,6 @@ export class ArchetypeManager {
 		const count = entityIds.length
 		if (count === 0) return
 
-		this.updateArchetypeMaxTick(targetArchetype, currentTick)
-
 		const copyPlan = this._getOrCreateCopyPlan(sourceArchetype, targetArchetype)
 		const newLocationsMap = new Map()
 		const targetEntityMap = this.archetypeEntityMaps[targetArchetype]
@@ -631,6 +629,7 @@ export class ArchetypeManager {
 		while (entityCursor < count) {
 			const targetChunk = this._findOrCreateChunk(targetArchetype)
 
+			targetChunk.lastDirtyTick = currentTick
 			const spaceInChunk = targetChunk.capacity - targetChunk.size
 			const entitiesToAddInChunk = Math.min(count - entityCursor, spaceInChunk)
 			const startIndexInChunk = targetChunk.size

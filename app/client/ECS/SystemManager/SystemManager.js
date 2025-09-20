@@ -557,8 +557,6 @@ export class SystemManager {
 		const writes = new Set()
 
 		for (const query of queries) {
-			// According to ParallelismPlan.md:
-			// Reads = read + with + any + react
 			query.read.forEach(id => reads.add(id))
 			query.with.forEach(id => reads.add(id))
 			query.any.forEach(id => reads.add(id))

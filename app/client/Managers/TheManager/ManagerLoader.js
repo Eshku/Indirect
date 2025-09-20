@@ -9,6 +9,10 @@
 export async function loadAllManagers() {
 	const loadedManagers = new Map()
 	//! prep for restructure, no auto-load for now
+
+	const { ecs } = await import(`${PATH_ECS}/EntityManager/ECS.js`)
+	loadedManagers.set('ECS', ecs)
+
 	// --- Core Engine & ECS Foundation ---
 	const { componentManager } = await import(`${PATH_ECS}/ComponentManager/ComponentManager.js`)
 	loadedManagers.set('ComponentManager', componentManager)

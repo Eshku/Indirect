@@ -5,40 +5,47 @@
  */
 
 export class DirtyMarker {
-	constructor() {
+	/**
+	 * @param {import('./Chunk.js').Chunk} chunk The chunk this marker belongs to.
+	 */
+	constructor(chunk) {
 		/**
 		 * The underlying TypedArray for dirty ticks.
 		 * @type {Uint32Array | Array<number> | null}
 		 * @private
 		 */
-		this._array = null;
+		this._array = null
 
 		/**
 		 * The current tick value to write.
 		 * @type {number}
 		 * @private
 		 */
-		this._tick = -1;
+		this._tick = -1
+
+		/**
+		 * @type {import('./Chunk.js').Chunk}
+		 * @private
+		 */
+		this._chunk = chunk
 	}
 
 	/**
-	 * Initializes the marker with the necessary data for a specific archetype and component.
-	 * This is called by `Archetype.getDirtyMarker`.
-	 * @param {Uint32Array | Array<number>} dirtyTicksArray - The array to write to.
-	 * @param {number} currentTick - The tick value to write.
-	 * @internal
+	 * @param {Uint32Array | Array<number>} dirtyTicksArray
+	 * @param {number} currentTick
 	 */
 	_init(dirtyTicksArray, currentTick) {
-		this._array = dirtyTicksArray;
-		this._tick = currentTick;
+		this._array = dirtyTicksArray
+		this._tick = currentTick
 	}
 
 	/**
 	 * Marks a component at a given index as dirty.
 	 * This method is designed to be extremely lightweight and inlinable by the JIT.
-	 * @param {number} entityIndex - The index of the entity within the archetype.
+	 * @param {number} entityIndex - The index of the entity within the chunk.
 	 */
 	mark(entityIndex) {
-		this._array[entityIndex] = this._tick;
+		this._chunk.lastDirtyTick = this._tick
+		this._array[entityIndex] = this._tick
 	}
 }

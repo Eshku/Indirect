@@ -8,14 +8,14 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
  */
 export class ReactivityTestSystem {
 	constructor() {
-		// isolate specific tests.
+		// true \ false
 		this.testConfig = {
 			runDirectModificationTest: true,
 			runStructuralChangeTest: false,
 		}
 
-		const { reactivityTarget, reactivityComponent, componentA, componentB } = componentManager.getTypeIDs();
-		Object.assign(this, { reactivityTarget, reactivityComponent, componentA, componentB });
+		const { reactivityTarget, reactivityComponent, componentA, componentB } = componentManager.getTypeIDs()
+		Object.assign(this, { reactivityTarget, reactivityComponent, componentA, componentB })
 
 		// --- Queries ---
 		// Query for entities to modify. We need ReactivityComponent to modify its value.
@@ -30,10 +30,13 @@ export class ReactivityTestSystem {
 		})
 
 		// --- Test State ---
-		this.totalEntities = 10
+		this.totalEntities = 2
 		this.entitiesInitialized = false
 		this.directModificationEntityId = null
 		this.structuralChangeEntityId = null
+
+		// Pre-compile the payload for adding ComponentA. Since it's a tag, the data is empty.
+		this.componentAPayload = payloadCompiler.compileComponent(this.componentA, {}).payload
 	}
 
 	init() {
@@ -58,16 +61,19 @@ export class ReactivityTestSystem {
 				allEntities.push(chunk.entities[i])
 			}
 		}
-		//console.log(allEntities.length)
-		if (allEntities.length >= 2) {
-			// We'll use two separate entities for our tests to keep them isolated.
-			this.directModificationEntityId = allEntities[0]
-			this.structuralChangeEntityId = allEntities[1]
-			this.entitiesInitialized = true
-			console.log(
-				`ReactivityTestSystem: Direct mod target: ${this.directModificationEntityId}, Structural change target: ${this.structuralChangeEntityId}`
-			)
+
+		if (allEntities.length < 2) {
+			console.warn(`ReactivityTestSystem: Not enough entities to run tests. Found ${allEntities.length}, need 2.`)
+			return
 		}
+
+		// We'll use two separate entities for our tests to keep them isolated.
+		this.directModificationEntityId = allEntities[0]
+		this.structuralChangeEntityId = allEntities[1]
+		this.entitiesInitialized = true
+		/* console.log(
+			`ReactivityTestSystem: Direct mod target: ${this.directModificationEntityId}, Structural change target: ${this.structuralChangeEntityId}`
+		) */
 	}
 
 	update(deltaTime, currentTick, lastTick) {
@@ -123,7 +129,8 @@ export class ReactivityTestSystem {
 				`%cReactivityTestSystem (Structural): Adding ComponentA to entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
 				'color: cyan'
 			)
-			this.commands.addComponent(this.structuralChangeEntityId, this.componentA, {})
+
+			this.commands.addComponent(this.structuralChangeEntityId, this.componentAPayload)
 		} else if (currentTick === 240) {
 			console.log(
 				`%cReactivityTestSystem (Structural): Removing ComponentA from entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,

@@ -1,17 +1,42 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 const { Entity } = await import(`${PATH_ECS}/EntityManager/Entity.js`)
+
 import * as Schema from '../ComponentManager/ComponentSchema.js'
-
-const { entityManager, componentManager, prefabManager, propertyGroupManager, archetypeManager, systemManager } =
-	theManager.getManagers()
-
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
-export const ECS = {
-	// --- Immediate-Mode Public API ---
-	// These methods provide a clean, high-level interface for interacting with the ECS
-	// from outside of a system's update loop (e.g., for setup, one-off events, or testing).
-	//
+/**
+ * The central, immediate-mode public API for the entire ECS.
+ * This class provides a clean, high-level interface for interacting with the ECS
+ * from outside of a system's update loop (e.g., for setup, one-off events, or testing).
+ *
+ * It is the user-facing "World" object for the engine.
+ */
+export class ECS {
+	constructor() {
+		// The constructor is now lightweight. It only holds references that will be populated by init().
+		this.entityManager = null
+		this.componentManager = null
+		this.prefabManager = null
+		this.propertyGroupManager = null
+		this.archetypeManager = null
+		this.systemManager = null
+		this.theManager = null // To hold the reference to the main manager
+
+		// The payload compiler is a stateless service, so it's fine to keep it here.
+		this.payloadCompiler = payloadCompiler
+	}
+
+	/**
+	 * Initializes the core ECS managers in the correct dependency order.
+	 * This method is called by TheManager during the engine's startup sequence.
+	 * @param {import('../../Managers/TheManager/TheManager.js').TheManager} theManager
+	 */
+	async init(theManager) {
+		// Get references to all managers. They have already been initialized by TheManager.
+		const managers = theManager.getManagers()
+		Object.assign(this, managers)
+		this.theManager = theManager
+	}
+
 	// ### Deferred vs. Immediate Mode
 	//
 	// - **Immediate Mode (this API):** Use these methods for one-off actions. They execute
@@ -30,12 +55,12 @@ export const ECS = {
 		// Dynamically import the Entity class only when needed for debugging.
 		// This keeps it out of the main bundle path and clarifies its purpose.
 
-		if (!entityManager.isEntityActive(entityID)) {
+		if (!this.entityManager.isEntityActive(entityID)) {
 			console.warn(`ECS.getEntity: Cannot get wrapper for inactive entity ID: ${entityID}`)
 			return null
 		}
 		return new Entity(entityID)
-	},
+	}
 
 	/**
 	 * Retrieves a manager instance by its name.
@@ -44,6 +69,7 @@ export const ECS = {
 	 * @returns {object | undefined} The manager instance, or undefined if not found.
 	 */
 	getManager(managerName) {
+		const theManager = this.theManager
 		if (typeof managerName !== 'string' || !managerName) {
 			console.error('ECS.getManager: A non-empty string is required for managerName.')
 			return
@@ -59,15 +85,15 @@ export const ECS = {
 			])
 		}
 		return manager
-	},
+	}
 
 	/**
 	 * Gets the current number of active entities.
 	 * @returns {number} The number of active entities.
 	 */
 	getEntityCount() {
-		return entityManager.activeEntities.size
-	},
+		return this.entityManager.activeEntities.size
+	}
 
 	/**
 	 * Creates an entity immediately.
@@ -77,20 +103,20 @@ export const ECS = {
 	 */
 	createEntity(componentsInput = {}) {
 		if (Object.keys(componentsInput).length === 0) {
-			return entityManager.createEntity()
+			return this.entityManager.createEntity()
 		}
 
-		// This now uses the same hyper-optimized binary path as the command buffer,
+		// Binary path as the command buffer,
 		// but executes immediately. This ensures all entity creation is consistent.
 		// We use the SoA path for single entity creation as it's the most efficient.
-		const { payload } = payloadCompiler.compileEntity(componentsInput)
-		const entityID = entityManager.createEntityFromBinarySoAPayload(
+		const { payload } = this.payloadCompiler.compileEntity(componentsInput)
+		const entityID = this.entityManager.createEntityFromBinarySoAPayload(
 			payload.archetypeId,
 			payload.data,
-			systemManager.currentTick
+			this.systemManager.currentTick
 		)
 		return entityID
-	},
+	}
 
 	/**
 	 * Destroys an entity immediately.
@@ -98,8 +124,8 @@ export const ECS = {
 	 * @returns {boolean} True if the entity was active and destroyed.
 	 */
 	destroyEntity(entityId) {
-		return entityManager.destroyEntity(entityId)
-	},
+		return this.entityManager.destroyEntity(entityId)
+	}
 
 	/**
 	 * Instantiates an entity from a prefab immediately.
@@ -113,7 +139,7 @@ export const ECS = {
 	 *
 	 * A key reason for this deprecation is the **performance cost**. The recursive implementation adds overhead
 	 * to **every** `instantiate` call, even for prefabs that have no children. The check for `prefabData.children`
-	* happens on this critical path, imposing a small but unnecessary "tax" on the majority of instantiations.
+	 * happens on this critical path, imposing a small but unnecessary "tax" on the majority of instantiations.
 	 *
 	 * By moving this logic into a dedicated system, the generic `instantiate`
 	 * method can be simplified to a single, non-recursive entity creation, and the cost of creating children
@@ -124,7 +150,7 @@ export const ECS = {
 	 * @returns {bigint|undefined} The new root entity's ID.
 	 */
 	instantiate(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
-		const prefabData = prefabManager.getPrefabData(prefabName)
+		const prefabData = this.prefabManager.getPrefabData(prefabName)
 
 		if (!prefabData) {
 			console.error(
@@ -133,7 +159,7 @@ export const ECS = {
 			return undefined
 		}
 		return this._instantiateChildRecursive(prefabData, { rootPrefabName: prefabName, overrides, parentId, ownerId })
-	},
+	}
 
 	/**
 	 * @deprecated This is the recursive implementation for the declarative `children` property in prefabs.
@@ -168,7 +194,7 @@ export const ECS = {
 			}
 		}
 		return entityId
-	},
+	}
 
 	/**
 	 * Checks if an entity is active.
@@ -176,8 +202,8 @@ export const ECS = {
 	 * @returns {boolean}
 	 */
 	isEntityActive(entityId) {
-		return entityManager.isEntityActive(entityId)
-	},
+		return this.entityManager.isEntityActive(entityId)
+	}
 
 	/**
 	 * Adds a component to an entity immediately.
@@ -193,9 +219,9 @@ export const ECS = {
 			return false
 		}
 		// Use the payload compiler to create the minimal binary payload for the new component.
-		const { payload } = payloadCompiler.compileComponent(componentTypeId, data)
-		return entityManager.addComponent(entityId, componentTypeId, payload)
-	},
+		const { payload } = this.payloadCompiler.compileComponent(componentTypeId, data)
+		return this.entityManager.addComponent(entityId, componentTypeId, payload)
+	}
 
 	/**
 	 * Removes a component from an entity immediately.
@@ -209,8 +235,8 @@ export const ECS = {
 			// No need to warn, the component isn't even registered in the system.
 			return false
 		}
-		return entityManager.removeComponent(entityId, componentTypeId) // This now works via _moveEntityToNewArchetype
-	},
+		return this.entityManager.removeComponent(entityId, componentTypeId)
+	}
 
 	/**
 	 * Gets a component's data from an entity.
@@ -224,13 +250,13 @@ export const ECS = {
 			// Component isn't registered, so no entity can have it.
 			return undefined
 		}
-		const archetype = entityManager.getArchetypeForEntity(entityId)
-		if (archetype === undefined || !archetypeManager.hasComponentType(archetype, componentTypeId)) {
+		const archetype = this.entityManager.getArchetypeForEntity(entityId)
+		if (archetype === undefined || !this.archetypeManager.hasComponentType(archetype, componentTypeId)) {
 			return undefined
 		}
 
 		// Reconstruct the per-entity data stored on the chunk.
-		const perEntityData = componentManager.reconstructComponentData(entityId, componentTypeId)
+		const perEntityData = this.componentManager.reconstructComponentData(entityId, componentTypeId)
 
 		// Find and merge the instance-shared data if the component has any shared properties.
 		const info = Schema.componentInfo[componentTypeId]
@@ -245,13 +271,13 @@ export const ECS = {
 			return perEntityData // No prefab, so no shared data.
 		}
 
-		const sharedGroup = propertyGroupManager.getSharedGroup(sharedGroupId)
+		const sharedGroup = this.propertyGroupManager.getSharedGroup(sharedGroupId)
 		const rawSharedData = sharedGroup ? sharedGroup[componentTypeId] : undefined
-		const reconstructedSharedData = componentManager.reconstructSharedData(componentTypeId, rawSharedData)
+		const reconstructedSharedData = this.componentManager.reconstructSharedData(componentTypeId, rawSharedData)
 
 		// Merge per-entity data over the shared data.
 		return { ...reconstructedSharedData, ...perEntityData }
-	},
+	}
 
 	/**
 	 * Checks if an entity has a component.
@@ -262,11 +288,13 @@ export const ECS = {
 	hasComponent(entityId, componentName) {
 		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
 		if (componentTypeId === undefined) return false
-		if (!entityManager.isEntityActive(entityId)) return false
-		const archetype = entityManager.getArchetypeForEntity(entityId)
-		return archetype !== undefined ? archetypeManager.hasComponentType(archetype, componentTypeId) : false
-	},
-
+		if (!this.entityManager.isEntityActive(entityId)) return false
+		const archetype = this.entityManager.getArchetypeForEntity(entityId)
+		return archetype !== undefined ? this.archetypeManager.hasComponentType(archetype, componentTypeId) : false
+	}
 }
 
-window.ECS = ECS
+// Create a single instance for the global debug API.
+// In the final architecture, the SystemManager would own this instance.
+export const ecs = new ECS()
+window.ECS = ecs

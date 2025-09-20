@@ -15,16 +15,15 @@ export class Chunk {
 	 * @param {number} archetype The ID of the archetype this chunk belongs to.
 	 * @param {Set<number>} componentTypeIDs A set of component type IDs for this archetype.
 	 * @param {object} componentInfos A map of typeID -> componentInfo object for this archetype's components.
-	 * @param {import('./ArchetypeManager.js').ArchetypeManager} archetypeManager The manager that owns this chunk.
 	 * @param {number} capacity The maximum number of entities this chunk can hold.
 	 */
-	constructor(archetype, componentTypeIDs, componentInfos, archetypeManager, capacity) {
+	constructor(archetype, componentTypeIDs, componentInfos, capacity) {
 		this.archetype = archetype
 		this.capacity = capacity
 		this.size = 0 // Current number of entities in the chunk
+		this.lastDirtyTick = 0 // The last tick any component in this chunk was modified.
 		this.componentTypeIDs = componentTypeIDs
 		this.componentInfos = componentInfos
-		this.archetypeManager = archetypeManager
 
 		// Caches for flyweight objects to reduce allocations
 		this.accessorCache = []
@@ -149,15 +148,11 @@ export class Chunk {
 
 		let marker = this.markerCache[typeID]
 		if (!marker) {
-			marker = new DirtyMarker()
+			marker = new DirtyMarker(this)
 			this.markerCache[typeID] = marker
 		}
 
 		marker._init(this.dirtyTicksArrays[typeID], currentTick)
-
-		if (currentTick > this.archetypeManager.archetypeMaxDirtyTicks[this.archetype]) {
-			this.archetypeManager.archetypeMaxDirtyTicks[this.archetype] = currentTick
-		}
 
 		return marker
 	}

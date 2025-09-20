@@ -1,28 +1,27 @@
 const { loadAllManagers } = await import(`${PATH_MANAGERS}/TheManager/ManagerLoader.js`)
+
 // Define the explicit initialization order of managers.
 // This order is crucial due to dependencies between managers.
 const MANAGER_INIT_ORDER = [
-	// --- Core Engine & ECS Foundation ---
-	// These managers provide the foundational services for the engine and the
-	// Entity-Component-System architecture. They have few dependencies on each other
-	// and must be initialized in this specific order.
-	'ComponentManager',
-
+	// Non-ECS Services & Low-Level ECS ---
+	// These have minimal dependencies and provide foundational services.
 	'LayerManager',
 	'GameManager',
 	'PhysicsManager',
 	'PrefabManager',
 	'AssetManager',
-	'EntityManager',
+	'ComponentManager', // Must be before Archetype/Entity
+
+	// Core ECS Data Structures ---
+	// These managers are tightly coupled and depend on ComponentManager.
 	'ArchetypeManager',
+	'EntityManager',
+	'QueryManager', // Depends on ArchetypeManager
 
-	// --- Logic & System Orchestration ---
-	// These managers query the game state and execute game logic.
-	'QueryManager', // Depends on ComponentManager, ArchetypeManager.
+	// High-Level Engine Systems ---
+	// These depend on a fully initialized ECS.
+	'ECS',
 	'SystemManager',
-
-	// --- User-Facing systems ---
-	// Managers that handle direct interaction with the user.
 	'UiManager',
 	'InputManager',
 
@@ -101,21 +100,11 @@ export class TheManager {
 	 */
 	async initializeManagers() {
 		for (const className of MANAGER_INIT_ORDER) {
-			const instance = this.managers.get(className) // Get instantiated manager
+			const instance = this.managers.get(className)
 
 			if (instance) {
-				if (typeof instance.init === 'function') {
-					try {
-						// The `init` method on managers can access other managers via `theManager`
-						// because they are all registered on `this` instance.
-						await instance.init()
-					} catch (error) {
-						console.error(`TheManager: Error initializing manager ${className}:`, error)
-						throw error // Re-throw to halt initialization if a core manager fails
-					}
-				}
+				await instance?.init(this)
 			} else {
-				// This is a critical failure. A manager in the init order was not loaded/registered.
 				const errorMsg = `TheManager: Critical manager "${className}" from MANAGER_INIT_ORDER was not found for initialization. Halting.`
 				console.error(errorMsg)
 				throw new Error(errorMsg)
@@ -124,5 +113,4 @@ export class TheManager {
 	}
 }
 
-// Export a singleton instance of TheManager
 export const theManager = new TheManager()

@@ -338,7 +338,7 @@ export class PrefabManager {
 	 *
 	 * This moves the responsibility of "assembling a player" from the generic `PrefabManager` into a specific, logical `InitialLoadoutSystem`, which is a much cleaner design. It gives developers the power to build complex, state-dependent hierarchies using code, which is far more expressive than static JSON.
 	 *
-	 * **Prerequisite:** This superior system-driven approach is currently blocked by the lack of **placeholder entity IDs** (as outlined in `ParallelismPlan.md`). Without them, a system cannot create a parent and child in the same frame and establish a relationship between them before they have actual IDs.
+	 * **Prerequisite:** This superior system-driven approach is currently blocked by the lack of **placeholder entity IDs**. Without them, a system cannot create a parent and child in the same frame and establish a relationship between them before they have actual IDs.
 	 *
 	 * **Conclusion:** The `children` property is considered a temporary solution for simple, static hierarchies. It will be deprecated for complex entities once placeholder IDs are implemented, in favor of the more robust and flexible system-driven pattern.
 	 * ---

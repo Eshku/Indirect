@@ -72,7 +72,7 @@ export class EntityManager {
 
 	/**
 	 * Creates a single entity from a pre-compiled binary SoA payload.
-	 * This is the new, hyper-optimized "fast path" for single entity creation.
+	 * "fast path" for single entity creation.
 	 * @param {number} archetypeId The target archetype for the entity.
 	 * @param {ArrayBuffer} binarySoAPayload The binary SoA-structured payload data.
 	 * @param {number} currentTick The current game tick.

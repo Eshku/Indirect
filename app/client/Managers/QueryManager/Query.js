@@ -142,12 +142,10 @@ export class Query {
 
 	*_iterChangedArchetypes() {
 		for (const archetype of this.matchingArchetypeIds) {
-			if (this.archetypeManager.archetypeMaxDirtyTicks[archetype] <= this.iterationLastTick) {
-				continue
-			}
 			const chunks = this.archetypeManager.archetypeChunks[archetype]
 			for (const chunk of chunks) {
-				if (chunk.size > 0) {
+				// yield only changed chunks
+				if (chunk.lastDirtyTick > this.iterationLastTick && chunk.size > 0) {
 					yield chunk
 				}
 			}

@@ -78,7 +78,7 @@ export const systemSchedule = {
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
-	],  
+	],   
 
 	// Development and stress-testing.
 
@@ -91,7 +91,6 @@ export const systemSchedule = {
 	Test: [
 		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
-		/* {name: 'GenerationalEntityTestSystem', frequency: 'none'} */
 		/* {name:'SchemaTestSystem', frequency: 'none'}, */
 		/* {name:'TopologicalSortTestSystem', frequency: 'none'}, */
 	],

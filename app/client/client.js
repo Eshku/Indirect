@@ -8,11 +8,6 @@ const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 
 await theManager.init()
 
-
-
-// Load high-level ECS debugging utilities and expose them on the window (e.g., window.ECS)
-await import(`${PATH_ECS}/EntityManager/ECS.js`)
-
 const {
 	gameManager,
 	assetManager,

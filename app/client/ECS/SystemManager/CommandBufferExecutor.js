@@ -3,7 +3,6 @@ import { CommandBufferReader } from './CommandBufferReader.js'
 import * as Schema from '../ComponentManager/ComponentSchema.js'
 const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 
-
 /**
  * Executes commands from a pre-sorted CommandBuffer using a consolidation and batching strategy.
  *
@@ -11,9 +10,9 @@ const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
  * It then executes these batches, leveraging highly optimized, archetype-aware methods in the EntityManager and ArchetypeManager.
  * This approach maximizes cache efficiency by processing entities in contiguous groups rather than one at a time.
  * Processes the command buffer, applying all queued structural changes to the world state.
- * 
- * 
- * 
+ *
+ *
+ *
  * Gather-and-Blit
  */
 export class CommandBufferExecutor {
@@ -43,7 +42,7 @@ export class CommandBufferExecutor {
 		// --- OPTIMIZATION: Zero-Allocation Consolidation ---
 		// Instead of pushing objects `{entityId, payload}` which causes GC pressure,
 		// we use parallel TypedArrays to store command data.
-		const creations = { identical: [], varied: [] };
+		const creations = { identical: [], varied: [] }
 		const modifications = {
 			// This now stores binary payload modification commands
 			add: new Map(), // Map<componentTypeID, { entityIds: number[], dataOffsets: number[], dataLengths: number[] }>
@@ -74,17 +73,17 @@ export class CommandBufferExecutor {
 				case OpCodes.ADD_COMPONENT: {
 					const entityId = reader.readU64()
 					if (deletions.entities.has(entityId)) continue // Skip mods on deleted entities
-					const componentTypeID = reader.readU16();
-					const dataLength = reader.readU16();
-					const dataOffset = reader.offset; // The offset where the binary data starts
+					const componentTypeID = reader.readU16()
+					const dataLength = reader.readU16()
+					const dataOffset = reader.offset // The offset where the binary data starts
 
 					if (!modifications.add.has(componentTypeID)) {
-						modifications.add.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] });
+						modifications.add.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
 					}
 					const addBatch = modifications.add.get(componentTypeID)
-					addBatch.dataLengths.push(dataLength);
+					addBatch.dataLengths.push(dataLength)
 					addBatch.entityIds.push(entityId)
-					addBatch.dataOffsets.push(dataOffset);
+					addBatch.dataOffsets.push(dataOffset)
 					break
 				}
 				case OpCodes.REMOVE_COMPONENT: {
@@ -98,39 +97,39 @@ export class CommandBufferExecutor {
 				case OpCodes.SET_COMPONENT_DATA: {
 					const entityId = reader.readU64()
 					if (deletions.entities.has(entityId)) continue
-					const componentTypeID = reader.readU16();
-					const dataLength = reader.readU16();
-					const dataOffset = reader.offset;
+					const componentTypeID = reader.readU16()
+					const dataLength = reader.readU16()
+					const dataOffset = reader.offset
 
 					if (!modifications.set.has(componentTypeID)) {
-						modifications.set.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] });
+						modifications.set.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
 					}
 					const setBatch = modifications.set.get(componentTypeID)
-					setBatch.entityIds.push(entityId);
-					setBatch.dataOffsets.push(dataOffset);
-					setBatch.dataLengths.push(dataLength);
+					setBatch.entityIds.push(entityId)
+					setBatch.dataOffsets.push(dataOffset)
+					setBatch.dataLengths.push(dataLength)
 					break
 				}
 				case OpCodes.ADD_COMPONENT_TO_QUERY: {
 					const queryId = reader.readU32()
-					const componentTypeID = reader.readU16();
-					const dataLength = reader.readU16();
-					const dataOffset = reader.offset;
-					queryMods.add.push({ queryId, componentTypeID, dataOffset, dataLength });
+					const componentTypeID = reader.readU16()
+					const dataLength = reader.readU16()
+					const dataOffset = reader.offset
+					queryMods.add.push({ queryId, componentTypeID, dataOffset, dataLength })
 					break
 				}
 				case OpCodes.REMOVE_COMPONENT_FROM_QUERY: {
-					const queryId = reader.readU32();
-					const componentTypeID = reader.readU16();
-					queryMods.remove.push({ queryId, componentTypeID });
+					const queryId = reader.readU32()
+					const componentTypeID = reader.readU16()
+					queryMods.remove.push({ queryId, componentTypeID })
 					break
 				}
 				case OpCodes.SET_COMPONENT_DATA_ON_QUERY: {
 					const queryId = reader.readU32()
-					const componentTypeID = reader.readU16();
-					const dataLength = reader.readU16();
-					const dataOffset = reader.offset;
-					queryMods.set.push({ queryId, componentTypeID, dataOffset, dataLength });
+					const componentTypeID = reader.readU16()
+					const dataLength = reader.readU16()
+					const dataOffset = reader.offset
+					queryMods.set.push({ queryId, componentTypeID, dataOffset, dataLength })
 					break
 				}
 
@@ -186,9 +185,9 @@ export class CommandBufferExecutor {
 
 		// --- Creation ---
 		for (const { archetypeId, payload } of creations.varied) {
-			// The new, hyper-optimized binary path for single entity creation.
 			this.entityManager.createEntityFromBinarySoAPayload(archetypeId, payload, currentTick)
 		}
+
 		for (const { count, archetypeId, payload } of creations.identical) {
 			this.entityManager.createIdenticalEntitiesInArchetype(archetypeId, payload, count, currentTick)
 		}
@@ -201,7 +200,7 @@ export class CommandBufferExecutor {
 	/**
 	 * The new, optimized "Gather-and-Blit" function for structural changes.
 	 * It gathers all `addComponent` and `removeComponent` commands, groups them by
-	 * source chunk and target archetype, and then executes them in hyper-optimized batches.
+	 * source chunk and target archetype, and then executes them in batches.
 	 * @param {object} modifications The consolidated modification commands.
 	 * @param {CommandBufferReader} reader The reader for the raw command buffer.
 	 * @param {number} currentTick The current game tick.
@@ -224,7 +223,9 @@ export class CommandBufferExecutor {
 				if (!location || this.archetypeManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
 
 				const sourceChunk = location.chunk
-				const targetArchetypeId = this.archetypeManager.getArchetypeByMask(this.archetypeManager.archetypeMasks[sourceArchetypeId] | Schema.componentBitFlags[componentTypeID])
+				const targetArchetypeId = this.archetypeManager.getArchetypeByMask(
+					this.archetypeManager.archetypeMasks[sourceArchetypeId] | Schema.componentBitFlags[componentTypeID]
+				)
 
 				// --- Gather into the new batch structure ---
 				if (!movesByChunk.has(sourceChunk)) movesByChunk.set(sourceChunk, new Map())
@@ -243,10 +244,10 @@ export class CommandBufferExecutor {
 
 				// Add the component data to be assigned
 				if (!moveBatch.componentsToAssign.has(componentTypeID)) {
-					moveBatch.componentsToAssign.set(componentTypeID, { dataOffsets: [], dataLengths: [] });
+					moveBatch.componentsToAssign.set(componentTypeID, { dataOffsets: [], dataLengths: [] })
 				}
-				moveBatch.componentsToAssign.get(componentTypeID).dataOffsets.push(dataOffsets[i]);
-				moveBatch.componentsToAssign.get(componentTypeID).dataLengths.push(dataLengths[i]);
+				moveBatch.componentsToAssign.get(componentTypeID).dataOffsets.push(dataOffsets[i])
+				moveBatch.componentsToAssign.get(componentTypeID).dataLengths.push(dataLengths[i])
 			}
 		}
 
@@ -260,7 +261,9 @@ export class CommandBufferExecutor {
 				if (!location || !this.archetypeManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
 
 				const sourceChunk = location.chunk
-				const targetArchetypeId = this.archetypeManager.getArchetypeByMask(this.archetypeManager.archetypeMasks[sourceArchetypeId] & ~Schema.componentBitFlags[componentTypeID])
+				const targetArchetypeId = this.archetypeManager.getArchetypeByMask(
+					this.archetypeManager.archetypeMasks[sourceArchetypeId] & ~Schema.componentBitFlags[componentTypeID]
+				)
 
 				// --- Gather into the new batch structure ---
 				if (!movesByChunk.has(sourceChunk)) movesByChunk.set(sourceChunk, new Map()) // ew
@@ -276,13 +279,21 @@ export class CommandBufferExecutor {
 		}
 
 		// --- Blit Pass ---
-		// Now execute the hyper-optimized batches.
+		// Now execute batches.
 		for (const [sourceChunk, targets] of movesByChunk.entries()) {
 			for (const [targetArchetypeId, moveBatch] of targets.entries()) {
 				const { entityIds, sourceIndices, componentsToAssign } = moveBatch
 				const sourceLocations = sourceIndices.map(indexInChunk => ({ chunk: sourceChunk, indexInChunk }))
 
-				this.archetypeManager._addEntitiesByCopyingBatch(targetArchetypeId, sourceChunk.archetype, sourceLocations, entityIds, componentsToAssign, reader, currentTick)
+				this.archetypeManager._addEntitiesByCopyingBatch(
+					targetArchetypeId,
+					sourceChunk.archetype,
+					sourceLocations,
+					entityIds,
+					componentsToAssign,
+					reader,
+					currentTick
+				)
 				this.archetypeManager._removeEntitiesBatch(sourceChunk.archetype, entityIds)
 
 				for (const entityId of entityIds) {
@@ -295,30 +306,38 @@ export class CommandBufferExecutor {
 
 	_executeSetDataBatches(setDataMap, reader, currentTick) {
 		for (const [componentTypeID, sets] of setDataMap.entries()) {
-			const info = Schema.componentInfo[componentTypeID];
-			if (!info) continue;
+			const info = Schema.componentInfo[componentTypeID]
+			if (!info) continue
 
 			// --- 1. Gather Pass ---
 			// First, group all modifications by their destination chunk.
-			const setsByChunk = new Map(); // Map<Chunk, { destIndices: number[], dataOffsets: number[], dataLengths: number[] }>
-			const { entityIds, dataOffsets, dataLengths } = sets;
+			const setsByChunk = new Map() // Map<Chunk, { destIndices: number[], dataOffsets: number[], dataLengths: number[] }>
+			const { entityIds, dataOffsets, dataLengths } = sets
 			for (let i = 0; i < entityIds.length; i++) {
 				const entityId = entityIds[i]
-				const location = this.entityManager.archetypeManager.archetypeEntityMaps[this.entityManager.getArchetypeForEntity(entityId)]?.get(entityId);
-				if (!location) continue;
+				const location = this.archetypeManager.getEntityLocation(entityId)
+				if (!location) continue
 
 				if (!setsByChunk.has(location.chunk)) {
-					setsByChunk.set(location.chunk, { destIndices: [], dataOffsets: [], dataLengths: [] });
+					setsByChunk.set(location.chunk, { destIndices: [], dataOffsets: [], dataLengths: [] })
 				}
-				const batch = setsByChunk.get(location.chunk);
-				batch.destIndices.push(location.indexInChunk);
-				batch.dataOffsets.push(dataOffsets[i]);
-				batch.dataLengths.push(dataLengths[i]);
+				const batch = setsByChunk.get(location.chunk)
+				batch.destIndices.push(location.indexInChunk)
+				batch.dataOffsets.push(dataOffsets[i])
+				batch.dataLengths.push(dataLengths[i])
 			}
 
 			// --- 2. Blit Pass ---
 			for (const [chunk, batch] of setsByChunk.entries()) {
-				this.archetypeManager._blitComponentDataFromBinary(chunk, componentTypeID, batch.destIndices, batch.dataOffsets, batch.dataLengths, reader, currentTick);
+				this.archetypeManager._blitComponentDataFromBinary(
+					chunk,
+					componentTypeID,
+					batch.destIndices,
+					batch.dataOffsets,
+					batch.dataLengths,
+					reader,
+					currentTick
+				)
 			}
 		}
 	}
