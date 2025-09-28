@@ -1,4 +1,5 @@
 import { DirtyMarker } from './DirtyMarker.js'
+import * as Schema from '../ComponentManager/ComponentSchema.js'
 
 /**
  * @file Defines the Chunk class for the ECS architecture.
@@ -13,17 +14,14 @@ import { DirtyMarker } from './DirtyMarker.js'
 export class Chunk {
 	/**
 	 * @param {number} archetype The ID of the archetype this chunk belongs to.
-	 * @param {Set<number>} componentTypeIDs A set of component type IDs for this archetype.
-	 * @param {object} componentInfos A map of typeID -> componentInfo object for this archetype's components.
 	 * @param {number} capacity The maximum number of entities this chunk can hold.
+	 * @param {Set<number>} componentTypeIDs The set of component type IDs for this archetype, used only for initialization.
 	 */
-	constructor(archetype, componentTypeIDs, componentInfos, capacity) {
+	constructor(archetype, capacity, componentTypeIDs) {
 		this.archetype = archetype
 		this.capacity = capacity
 		this.size = 0 // Current number of entities in the chunk
 		this.lastDirtyTick = 0 // The last tick any component in this chunk was modified.
-		this.componentTypeIDs = componentTypeIDs
-		this.componentInfos = componentInfos
 
 		// Caches for flyweight objects to reduce allocations
 		this.accessorCache = []
@@ -38,7 +36,7 @@ export class Chunk {
 
 		// Initialize data structures for each component in the archetype
 		for (const typeID of componentTypeIDs) {
-			const info = this.componentInfos[typeID]
+			const info = Schema.componentInfo[typeID]
 			const propArrays = {}
 			for (const propKey of info.propertyKeys) {
 				const constructor = info.properties[propKey].arrayConstructor
@@ -73,66 +71,6 @@ export class Chunk {
 	}
 
 	/**
-	 * Removes an entity from the chunk by its index using the swap-and-pop method.
-	 * This is a convenience wrapper around the more performant `removeEntitiesAtIndexes`.
-	 * @param {number} indexToRemove The index of the entity to remove. // @returns {Map<bigint, number>} A map of `swappedEntityId -> newIndex`.
-	 * @returns {Map<number, number>} A map of `swappedEntityId -> newIndex`.
-	 */
-	removeEntityAtIndex(indexToRemove) {
-		if (indexToRemove >= this.size || indexToRemove < 0) {
-			return new Map()
-		}
-		return this.removeEntitiesAtIndexes([indexToRemove])
-	}
-
-	/**
-	 * The core batch removal function. Removes multiple entities from the chunk efficiently.
-	 * It performs a "multi-swap-and-pop", moving entities from the end of the chunk
-	 * to fill the gaps left by the removed entities.
-	 * @param {number[]} sortedIndicesToRemove - An array of indices to remove, **must be sorted in descending order**.
-	 * @returns {Map<bigint, number>} A map of `swappedEntityId -> newIndex` for entities that were moved.
-	 */
-	removeEntitiesAtIndexes(sortedIndicesToRemove) {
-		const numToRemove = sortedIndicesToRemove.length
-		if (numToRemove === 0) {
-			return new Map()
-		}
-
-		const swappedMappings = new Map()
-		let lastIndex = this.size - 1
-
-		for (const indexToRemove of sortedIndicesToRemove) {
-			if (indexToRemove > lastIndex) {
-				continue
-			}
-
-			const isLastElement = indexToRemove === lastIndex
-
-			if (!isLastElement) {
-				const swappedEntityId = this.entities[lastIndex]
-				this.entities[indexToRemove] = swappedEntityId
-				swappedMappings.set(swappedEntityId, indexToRemove)
-
-				// Move component data using optimized block copies
-				for (const typeID of this.componentTypeIDs) {
-					const propArrays = this.componentArrays[typeID]
-					const info = this.componentInfos[typeID]
-					for (const propKey of info.propertyKeys) {
-						// Use copyWithin for efficient intra-array copying
-						propArrays[propKey].copyWithin(indexToRemove, lastIndex, lastIndex + 1)
-					}
-					this.dirtyTicksArrays[typeID].copyWithin(indexToRemove, lastIndex, lastIndex + 1)
-				}
-			}
-
-			lastIndex--
-		}
-
-		this.size -= numToRemove
-		return swappedMappings
-	}
-
-	/**
 	 * Checks if this chunk's archetype includes a specific component.
 	 * This is a high-performance check intended for use within system loops,
 	 * especially for resolving `anyOf` queries.
@@ -140,7 +78,8 @@ export class Chunk {
 	 * @returns {boolean} True if entities in this chunk have the component.
 	 */
 	hasComponent(componentTypeId) {
-		return this.componentTypeIDs.has(componentTypeId)
+		// The most reliable check is whether the data array for this component exists.
+		return this.componentArrays[componentTypeId] !== undefined
 	}
 
 	getDirtyMarker(typeID, currentTick) {

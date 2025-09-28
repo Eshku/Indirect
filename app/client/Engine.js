@@ -1,5 +1,3 @@
-const { loadAllManagers } = await import(`${PATH_MANAGERS}/TheManager/ManagerLoader.js`)
-
 // Define the explicit initialization order of managers.
 // This order is crucial due to dependencies between managers.
 const MANAGER_INIT_ORDER = [
@@ -8,34 +6,24 @@ const MANAGER_INIT_ORDER = [
 	'LayerManager',
 	'GameManager',
 	'PhysicsManager',
-	'PrefabManager',
 	'AssetManager',
-	'ComponentManager', // Must be before Archetype/Entity
-
-	// Core ECS Data Structures ---
-	// These managers are tightly coupled and depend on ComponentManager.
-	'ArchetypeManager',
-	'EntityManager',
-	'QueryManager', // Depends on ArchetypeManager
 
 	// High-Level Engine Systems ---
 	// These depend on a fully initialized ECS.
 	'ECS',
-	'SystemManager',
+	//'PropertyGroupManager', // Depends on ComponentManager, does not need to be initialized there
 	'UiManager',
 	'InputManager',
+	`WorkerManager`,
 
 	// --- Utility & Development ---
 	// Auxiliary managers for features like serialization and testing.
 	'TestManager',
 ]
 
-/**
- * A central class responsible for creating, initializing, and holding all other managers.
- * This pattern is a form of "Service Locator" or "Dependency Injection Container" and
- * helps to decouple managers from each other, making the system more modular and testable.
- */
-export class TheManager {
+const { toCamelCase } = await import(`${PATH_CORE}/utils/stringUtils.js`)
+
+export class Engine {
 	constructor() {
 		/** @type {Map<string, object>} */
 		this.managers = new Map()
@@ -46,7 +34,7 @@ export class TheManager {
 	 */
 	async init() {
 		//Load all manager modules and get their instances.
-		const loadedManagers = await loadAllManagers()
+		const loadedManagers = await this.loadAllManagers()
 
 		// Register all the loaded managers.
 		this.registerManagers(loadedManagers)
@@ -74,7 +62,7 @@ export class TheManager {
 	getManagers() {
 		const result = {}
 		for (const [className, instance] of this.managers.entries()) {
-			result[className.charAt(0).toLowerCase() + className.slice(1)] = instance
+			result[toCamelCase(className)] = instance
 		}
 		return result
 	}
@@ -87,7 +75,7 @@ export class TheManager {
 	 */
 	registerManagers(loadedManagers) {
 		for (const [className, instance] of loadedManagers.entries()) {
-			const instanceName = className.charAt(0).toLowerCase() + className.slice(1)
+			const instanceName = toCamelCase(className)
 			// For dependency injection via theManager.someManager
 			this[instanceName] = instance
 			this.managers.set(className, instance)
@@ -105,12 +93,48 @@ export class TheManager {
 			if (instance) {
 				await instance?.init(this)
 			} else {
-				const errorMsg = `TheManager: Critical manager "${className}" from MANAGER_INIT_ORDER was not found for initialization. Halting.`
+				const errorMsg = `Engine: Critical manager "${className}" from MANAGER_INIT_ORDER was not found for initialization. Halting.`
 				console.error(errorMsg)
 				throw new Error(errorMsg)
 			}
 		}
 	}
+
+	async loadAllManagers() {
+		const loadedManagers = new Map()
+		//! prep for restructure, no auto-load for now
+
+		const { ecs } = await import(`${PATH_ECS}/EntityManager/ECS.js`)
+		loadedManagers.set('ECS', ecs)
+
+		const { layerManager } = await import(`${PATH_MANAGERS}/LayerManager/LayerManager.js`)
+		loadedManagers.set('LayerManager', layerManager)
+
+		const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
+		loadedManagers.set('GameManager', gameManager)
+
+		const { physicsManager } = await import(`${PATH_MANAGERS}/PhysicsManager/PhysicsManager.js`)
+		loadedManagers.set('PhysicsManager', physicsManager)
+
+		const { assetManager } = await import(`${PATH_MANAGERS}/AssetManager/AssetManager.js`)
+		loadedManagers.set('AssetManager', assetManager)
+
+		// --- User-Facing systems ---
+		const { uiManager } = await import(`${PATH_MANAGERS}/UiManager/UiManager.js`)
+		loadedManagers.set('UiManager', uiManager)
+
+		const { inputManager } = await import(`${PATH_MANAGERS}/InputManager/InputManager.js`)
+		loadedManagers.set('InputManager', inputManager)
+
+		// --- Utility & Development ---
+		const { testManager } = await import(`${PATH_MANAGERS}/TestManager/TestManager.js`)
+		loadedManagers.set('TestManager', testManager)
+
+		const { workerManager } = await import(`${PATH_MANAGERS}/WorkerManager/WorkerManager.js`)
+		loadedManagers.set('WorkerManager', workerManager)
+
+		return loadedManagers
+	}
 }
 
-export const theManager = new TheManager()
+export const engine = new Engine()

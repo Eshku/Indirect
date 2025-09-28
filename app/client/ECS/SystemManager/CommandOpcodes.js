@@ -15,10 +15,4 @@ export const OpCodes = Object.freeze({
 
 	// Batch Creation
 	CREATE_ENTITIES_IDENTICAL: 20,
-
-	// Query-Based Modifications (Future Work - currently handled by CommandBuffer helpers)
-	ADD_COMPONENT_TO_QUERY: 30,
-	REMOVE_COMPONENT_FROM_QUERY: 31,
-	SET_COMPONENT_DATA_ON_QUERY: 32,
-	DESTROY_ENTITIES_IN_QUERY: 33,
 })

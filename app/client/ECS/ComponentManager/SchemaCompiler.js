@@ -1,5 +1,4 @@
 import { TYPED_ARRAY_MAP } from './ComponentSchema.js'
-
 const { interpret } = await import('./ComponentInterpreter.js')
 
 const getTypedArrayConstructor = (type) => TYPED_ARRAY_MAP[type] || null
@@ -50,30 +49,21 @@ Object.assign(TypeProcessors, {
 		parse: PrimitiveTypeProcessors.u32.parse, // A string is stored as a u32.
 	},
 	bitmask: {
-		/**
-		 * DEV-NOTE: A `bitmask` is stored as a single integer (the "bitfield").
-		 * Each string in the `of` array is assigned a unique power-of-two value (1, 2, 4, 8, ...).
-		 * When you provide an array of strings as a default or for setting data, the compiler
-		 * combines these values using a bitwise OR operation to create the final integer that
-		 * gets stored in the component's TypedArray.
-		 */
-		parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
+		        /**
+		         * DEV-NOTE: A `bitmask` is stored as a single integer (the "bitfield").
+		         * The `default` value for a bitmask must be a number, which is a bitwise combination
+		         * of the values in the `of` object.
+		         */		parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			if (definition.shared) {
 				throw new Error(
 					`SchemaCompiler: The 'shared' flag is not supported for bitmask properties like '${componentName}.${propName}'.`
 				)
 			}
-			const { storageType, of: values } = definition
+			const { storageType, of: flagMap } = definition
 			const arrayConstructor = getTypedArrayConstructor(storageType)
 
-			if (!Array.isArray(values) || values.some(v => typeof v !== 'string')) {
-				throw new Error(`SchemaCompiler: 'of' for bitmask ${componentName}.${propName} must be an array of strings.`)
-			}
-			const maxFlags = arrayConstructor.BYTES_PER_ELEMENT * 8
-			if (values.length > maxFlags) {
-				throw new Error(
-					`SchemaCompiler: Too many values for bitmask ${componentName}.${propName}. Type '${storageType}' supports ${maxFlags} flags, but ${values.length} were provided.`
-				)
+			if (typeof flagMap !== 'object' || flagMap === null || Array.isArray(flagMap)) {
+				throw new Error(`SchemaCompiler: 'of' for bitmask ${componentName}.${propName} must be an object map of flags to integer values.`)
 			}
 
 			const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
@@ -95,11 +85,6 @@ Object.assign(TypeProcessors, {
 			componentInfo.propertyKeys.push(propName)
 			componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
 
-			const flagMap = {}
-			for (let i = 0; i < values.length; i++) {
-				flagMap[values[i]] = 1 << i
-			}
-
 			componentInfo.representations[propName].flagMap = flagMap
 			constants[propName.toUpperCase()] = Object.freeze(flagMap)
 		},
@@ -114,34 +99,31 @@ Object.assign(TypeProcessors, {
 		 * the string representation for you when using high-level APIs.
 		 */
 		parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
-			const { storageType, of: values } = definition
+			const { storageType, of: enumMap } = definition
 			const arrayConstructor = getTypedArrayConstructor(storageType)
 
-			if (!Array.isArray(values) || values.some(v => typeof v !== 'string')) {
-				throw new Error(`SchemaCompiler: 'of' for enum ${componentName}.${propName} must be an array of strings.`)
+			if (typeof enumMap !== 'object' || enumMap === null || Array.isArray(enumMap)) {
+				throw new Error(`SchemaCompiler: 'of' for enum ${componentName}.${propName} must be an object map of names to integer values.`)
 			}
 			const maxValue = (1 << (arrayConstructor.BYTES_PER_ELEMENT * 8)) - 1
-			if (values.length > maxValue + 1) {
+			if (Object.keys(enumMap).length > maxValue + 1) {
 				throw new Error(
 					`SchemaCompiler: Too many values for enum ${componentName}.${propName}. Type '${storageType}' supports ${
 						maxValue + 1
-					} values, but ${values.length} were provided.`
+					} values, but ${Object.keys(enumMap).length} were provided.`
 				)
 			}
 
-			const enumMap = {}
 			const valueMap = []
-			for (let i = 0; i < values.length; i++) {
-				const valueName = values[i]
-				enumMap[valueName] = i
-				valueMap[i] = valueName
+			for (const valueName in enumMap) {
+				const integerValue = enumMap[valueName]
+				valueMap[integerValue] = valueName
 			}
 
-			componentInfo.representations[propName].enumMap = enumMap
-			componentInfo.representations[propName].valueMap = valueMap
-			constants[propName.toUpperCase()] = Object.freeze(enumMap)
-
 			if (definition.shared) {
+				componentInfo.representations[propName].enumMap = enumMap
+				componentInfo.representations[propName].valueMap = valueMap
+				constants[propName.toUpperCase()] = Object.freeze(enumMap)
 				return
 			}
 
@@ -163,6 +145,10 @@ Object.assign(TypeProcessors, {
 			}
 			componentInfo.propertyKeys.push(propName)
 			componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
+
+			componentInfo.representations[propName].enumMap = enumMap
+			componentInfo.representations[propName].valueMap = valueMap
+			constants[propName.toUpperCase()] = Object.freeze(enumMap)
 		},
 	},
 	dynamic_array: {
@@ -249,8 +235,7 @@ Object.assign(TypeProcessors, {
 		 * It also creates an implicit `my_array_count` property (a `u8`) to store the *current* length of the
 		 * array for each entity, which can be less than the total capacity. This design keeps data access
 		 * extremely fast and cache-friendly for fixed-size collections.
-		 */
-		parse(propName, definition, componentInfo, implicitKeys, componentName) {
+		 */parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			if (definition.shared) {
 				throw new Error(
 					`SchemaCompiler: The 'shared' flag is not supported for complex types like 'flat_array' in '${componentName}.${propName}'.`
@@ -284,27 +269,50 @@ Object.assign(TypeProcessors, {
 				case 'string':
 					itemStorageType = 'u32'
 					break
-				case 'enum':
-					if (!Array.isArray(itemSchema.of) || itemSchema.of.some(v => typeof v !== 'string'))
+				case 'bitmask': {
+					const flagMap = itemSchema.of
+					if (typeof flagMap !== 'object' || flagMap === null || Array.isArray(flagMap)) {
 						throw new Error(
-							`SchemaCompiler: 'of' for enum in flat_array ${componentName}.${propName} must be an array of strings.`
+							`SchemaCompiler: 'of' for bitmask in flat_array ${componentName}.${propName} must be an object map.`
 						)
-					if (itemSchema.of.length <= 256) {
+					}
+					// Auto-detect storage type if not provided, based on number of flags.
+					if (itemSchema.storageType) {
+						itemStorageType = itemSchema.storageType
+					} else {
+						const numFlags = Object.keys(flagMap).length
+						if (numFlags <= 8) itemStorageType = 'u8'
+						else if (numFlags <= 16) itemStorageType = 'u16'
+						else itemStorageType = 'u32'
+					}
+					itemRepresentation.flagMap = flagMap
+					constants[propName.toUpperCase()] = Object.freeze(flagMap)
+					break
+				}
+				case 'enum':
+					const enumMap = itemSchema.of
+					if (typeof enumMap !== 'object' || enumMap === null || Array.isArray(enumMap)) {
+						throw new Error(
+							`SchemaCompiler: 'of' for enum in flat_array ${componentName}.${propName} must be an object map.`
+						)
+					}
+
+					const numValues = Object.keys(enumMap).length
+					if (numValues <= 256) {
 						itemStorageType = 'u8'
-					} else if (itemSchema.of.length <= 65536) {
+					} else if (numValues <= 65536) {
 						itemStorageType = 'u16'
 					} else {
 						itemStorageType = 'u32'
 					}
-					const enumMap = {}
+
 					const valueMap = []
-					for (let i = 0; i < itemSchema.of.length; i++) {
-						const valueName = itemSchema.of[i]
-						enumMap[valueName] = i
-						valueMap[i] = valueName
+					for (const valueName in enumMap) {
+						valueMap[enumMap[valueName]] = valueName
 					}
 					itemRepresentation.enumMap = enumMap
 					itemRepresentation.valueMap = valueMap
+					constants[propName.toUpperCase()] = Object.freeze(enumMap)
 					break
 				default:
 					itemStorageType = itemSchema.type
@@ -592,26 +600,30 @@ export class SchemaCompiler {
 	// --- Stage 2: Default Value Compilation ---
 
 	/**
-	 * Compiles the `compiledDefaults` object by processing the `default`
+	 * Compiles `compiledDefaults` object by processing the `default`
 	 * values defined in the schema.
-	 * @param {object} componentInfo - The parsed schema info from _parse().
-	 * @param {object} compiledDefaults - The object to populate with default values.
+	 * @param {object} componentInfo - parsed schema info from _parse().
+	 * @param {object} compiledDefaults - object to populate with default values.
 	 * @private
 	 */
 	_compileDefaults(componentInfo, compiledDefaults) {
-		const highLevelDefaults = {}
 		for (const propName in componentInfo.representations) {
 			const rep = componentInfo.representations[propName]
-			if (rep.default !== undefined) {
-				highLevelDefaults[propName] = rep.default
+			if (rep.default === undefined) continue
+
+			// With numeric defaults for enums/bitmasks, we can assign them directly.
+			// For other simple types (u8, f32, etc.), default is already a number.
+			if (typeof rep.default === 'number' || typeof rep.default === 'boolean') {
+				compiledDefaults[propName] = rep.default
+			} else if (rep.type === 'flat_array' && Array.isArray(rep.default)) {
+				// Handle flat_array defaults directly.
+				const len = rep.default.length
+				compiledDefaults[rep.lengthProperty] = len
+				for (let i = 0; i < len; i++) {
+					compiledDefaults[`${propName}${i}`] = rep.default[i]
+				}
 			}
 		}
-
-		// Use the new stateless interpreter to transform the high-level defaults into raw data.
-		const rawDefaults = interpret(componentInfo.typeID, highLevelDefaults)
-
-		// Assign the processed defaults.
-		Object.assign(compiledDefaults, rawDefaults)
 
 		// Ensure all properties defined in the final schema have a default value, even if it's 0.
 		// This prevents `undefined` values in component arrays.

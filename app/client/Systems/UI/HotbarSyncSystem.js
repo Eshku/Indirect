@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { uiManager, queryManager, componentManager, prefabManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs, uiManager } = engine.getManagers()
+const { queryManager } = ecs
 
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
@@ -13,7 +14,7 @@ const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
  */
 export class HotbarSyncSystem {
 	constructor() {
-		const { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet, activeCooldown } = componentManager.getTypeIDs()
+		const { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet, activeCooldown } = ecs.getTypeIDs()
 		Object.assign(this, { owner, inActiveSet, prefab, icon, cooldown, playerTag, activeSet, activeCooldown })
 
 		this.hotbarItemsQuery = queryManager.getQuery({
@@ -37,7 +38,7 @@ export class HotbarSyncSystem {
 
 		this.stringStorage = stringInterningTable.storage
 		this.propertyGroupManager = propertyGroupManager
-		this.prefabManager = prefabManager
+		this.prefabManager = ecs.prefabManager
 		this.playerId = null
 		this.cachedSlotEntityIds = Array(HOTBAR_SLOT_COUNT).fill(0)
 		this.cachedActiveSlot = -1
@@ -113,7 +114,6 @@ export class HotbarSyncSystem {
 						totalDuration: totalDuration,
 					}
 					desiredSlotEntityIds[slot] = entityId
-
 				}
 			}
 		}
@@ -143,7 +143,6 @@ export class HotbarSyncSystem {
 					itemId: newItemId,
 					iconAsset: newState?.iconAsset || null,
 				})
-
 
 				// Use the fast mutator to update the payload data directly.
 				slotsMutator[i] = newItemId || 0n

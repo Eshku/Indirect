@@ -1,5 +1,10 @@
 const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
-const { uiManager, inputManager } = (await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)).theManager.getManagers()
+
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+
+const { uiManager, inputManager } = engine.getManagers()
+
+
 
 /**
  * Handles UI and application-level input actions by listening for abstract input events.

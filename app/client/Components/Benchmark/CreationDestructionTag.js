@@ -1,7 +1,4 @@
 /**
- * tag component used to identify entities that are part of the
- * `CreationDestructionBenchmarkSystem`. This allows the system's query to
- * efficiently find and operate on its own pool of entities.
+ * A tag component to isolate entities for the creation/destruction churn benchmark.
  */
 export const CreationDestructionTag = {}
-

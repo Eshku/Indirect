@@ -1,5 +1,5 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { assetManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { assetManager } = engine.getManagers()
 
 export const HOTBAR_SLOT_COUNT = 10
 const SLOT_SIZE = 64 // Example size for a slot (width and height)

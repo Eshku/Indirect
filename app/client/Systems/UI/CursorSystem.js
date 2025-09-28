@@ -2,7 +2,8 @@ const { Cursor } = await import(`${PATH_UI}/Cursor.js`)
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
 const { Easing } = await import(`${PATH_CORE}/utils/easing.js`)
 const { lerpColor } = await import(`${PATH_CORE}/utils/lerp.js`)
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+
 
 const DEFAULT_STATES = {
 	// Default "aiming" state when over empty ground.
@@ -126,14 +127,10 @@ export class CursorSystem {
 	 * Initializes the system. This is called by the SystemManager once.
 	 */
 	async init() {
-		const { componentManager, queryManager, uiManager, layerManager, gameManager, entityManager } =
-			theManager.getManagers()
-		this.componentManager = componentManager
-		this.queryManager = queryManager
+		const { uiManager, layerManager, gameManager } = engine.getManagers()
 		this.uiManager = uiManager
 		this.layerManager = layerManager
 		this.gameManager = gameManager
-		this.entityManager = entityManager
 
 		this.pixiApp = this.gameManager.getApp()
 		this.renderer = this.pixiApp.renderer
@@ -238,9 +235,7 @@ export class CursorSystem {
 	 * @private
 	 */
 	updateState() {
-		// TODO: Implement entity hover detection when EntityManager is ready
-		// const worldPos = screenToWorld(this.hardwarePosition, this.layerManager.getLayer('game'));
-		// const hoveredEntity = this.entityManager.getHoveredEntity(worldPos);
+		// TODO: Implement entity hover detection
 		const hoveredEntity = null // Placeholder for now
 		const hoveredElement = this.uiManager.getHoveredElement(this.hardwarePosition)
 

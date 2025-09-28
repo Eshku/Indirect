@@ -11,7 +11,13 @@ export const Damage = {
 		type: 'flat_array',
 		of: {
 			type: 'enum',
-			of: ['Physical', 'Fire', 'Ice', 'Lightning', 'Poison'],
+			of: {
+				Physical: 0,
+				Fire: 1,
+				Ice: 2,
+				Lightning: 3,
+				Poison: 4,
+			},
 		},
 		capacity: 5,
 		default: [],

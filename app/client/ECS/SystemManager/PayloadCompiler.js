@@ -14,22 +14,19 @@
  * (`ArchetypeManager`, `PrefabManager`) to assemble the final payload.
  */
 
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-
 const { interpret } = await import('../ComponentManager/ComponentInterpreter.js')
 import * as Schema from '../ComponentManager/ComponentSchema.js'
 
 class PayloadCompiler {
 	constructor() {
 		this.componentManager = null
-		this.archetypeManager = null
 		this.prefabManager = null
 	}
 
-	init() {
-		this.componentManager = theManager.getManager('ComponentManager')
-		this.archetypeManager = theManager.getManager('ArchetypeManager')
-		this.prefabManager = theManager.getManager('PrefabManager')
+	init(ecs) {
+		this.componentManager = ecs.componentManager
+		this.entityManager = ecs.entityManager
+		this.prefabManager = ecs.prefabManager
 	}
 
 	/**
@@ -89,7 +86,7 @@ class PayloadCompiler {
 		}
 
 		// The "archetype" for a single component is just that component itself.
-		const archetypeId = this.archetypeManager.getArchetype([typeID])
+		const archetypeId = this.entityManager.getArchetype([typeID])
 
 		// Interpret the high-level data into a raw, flattened data object.
 		const rawData = interpret(typeID, data)
@@ -129,7 +126,7 @@ class PayloadCompiler {
 	 * @private
 	 */
 	_compileAoS(archetypeId, componentDataMap) {
-		const componentTypeIDs = this.archetypeManager.archetypeComponentTypeIDs[archetypeId]
+		const componentTypeIDs = this.entityManager.archetypeComponentTypeIDs[archetypeId]
 		if (!componentTypeIDs) {
 			throw new Error(`PayloadCompiler: Archetype with ID ${archetypeId} not found.`)
 		}
@@ -224,7 +221,7 @@ class PayloadCompiler {
 	 * @private
 	 */
 	_compileSoA(archetypeId, componentDataMap) {
-		const componentTypeIDs = this.archetypeManager.archetypeComponentTypeIDs[archetypeId]
+		const componentTypeIDs = this.entityManager.archetypeComponentTypeIDs[archetypeId]
 		if (!componentTypeIDs) {
 			throw new Error(`PayloadCompiler: Archetype with ID ${archetypeId} not found.`)
 		}
@@ -304,7 +301,7 @@ class PayloadCompiler {
 		const componentDataMap = this._createIdMapFromData(componentDataObject)
 
 		// Determine the archetype from the provided components.
-		const archetypeId = this.archetypeManager.getArchetype(componentDataMap.keys())
+		const archetypeId = this.entityManager.getArchetype(componentDataMap.keys())
 		return compileFn(archetypeId, componentDataMap)
 	}
 

@@ -1,8 +1,8 @@
 import { OpCodes } from './CommandOpcodes.js'
 import { CommandBufferReader } from './CommandBufferReader.js'
 import * as Schema from '../ComponentManager/ComponentSchema.js'
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
 
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 /**
  * Executes commands from a pre-sorted CommandBuffer using a consolidation and batching strategy.
  *
@@ -16,11 +16,10 @@ const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
  * Gather-and-Blit
  */
 export class CommandBufferExecutor {
-	constructor(entityManager, archetypeManager) {
-		this.entityManager = entityManager
-		this.archetypeManager = archetypeManager
-		this.prefabManager = theManager.getManager('PrefabManager') // Get via service locator
-		this.queryManager = theManager.getManager('QueryManager')
+	constructor() {
+		this.entityManager = engine.getManager('ECS').entityManager
+		this.prefabManager = engine.getManager('ECS').prefabManager
+		this.queryManager = engine.getManager('ECS').queryManager
 		this._currentCommandBuffer = null // To avoid passing it down through every function call
 	}
 
@@ -49,8 +48,7 @@ export class CommandBufferExecutor {
 			remove: new Map(), // Map<componentTypeID, number[]>
 			set: new Map(), // Map<componentTypeID, { entityIds: number[], soaIndices: number[] }>
 		}
-		const deletions = { entities: new Set(), queries: new Set() }
-		const queryMods = { add: [], remove: [], set: [] }
+		const deletions = new Set()
 
 		for (let i = 0; i < sortedOffsets.length; i++) {
 			reader.seek(sortedOffsets[i])
@@ -60,19 +58,14 @@ export class CommandBufferExecutor {
 				// --- Deletion Phase Commands ---
 				case OpCodes.DESTROY_ENTITY: {
 					const entityId = reader.readU64()
-					deletions.entities.add(entityId)
-					break
-				}
-				case OpCodes.DESTROY_ENTITIES_IN_QUERY: {
-					const queryId = reader.readU32()
-					deletions.queries.add(queryId)
+					deletions.add(entityId)
 					break
 				}
 
 				// --- Modification Phase Commands ---
 				case OpCodes.ADD_COMPONENT: {
 					const entityId = reader.readU64()
-					if (deletions.entities.has(entityId)) continue // Skip mods on deleted entities
+					if (deletions.has(entityId)) continue // Skip mods on deleted entities
 					const componentTypeID = reader.readU16()
 					const dataLength = reader.readU16()
 					const dataOffset = reader.offset // The offset where the binary data starts
@@ -88,7 +81,7 @@ export class CommandBufferExecutor {
 				}
 				case OpCodes.REMOVE_COMPONENT: {
 					const entityId = reader.readU64()
-					if (deletions.entities.has(entityId)) continue
+					if (deletions.has(entityId)) continue
 					const componentTypeID = reader.readU16()
 					if (!modifications.remove.has(componentTypeID)) modifications.remove.set(componentTypeID, [])
 					modifications.remove.get(componentTypeID).push(entityId)
@@ -96,7 +89,7 @@ export class CommandBufferExecutor {
 				}
 				case OpCodes.SET_COMPONENT_DATA: {
 					const entityId = reader.readU64()
-					if (deletions.entities.has(entityId)) continue
+					if (deletions.has(entityId)) continue
 					const componentTypeID = reader.readU16()
 					const dataLength = reader.readU16()
 					const dataOffset = reader.offset
@@ -108,28 +101,6 @@ export class CommandBufferExecutor {
 					setBatch.entityIds.push(entityId)
 					setBatch.dataOffsets.push(dataOffset)
 					setBatch.dataLengths.push(dataLength)
-					break
-				}
-				case OpCodes.ADD_COMPONENT_TO_QUERY: {
-					const queryId = reader.readU32()
-					const componentTypeID = reader.readU16()
-					const dataLength = reader.readU16()
-					const dataOffset = reader.offset
-					queryMods.add.push({ queryId, componentTypeID, dataOffset, dataLength })
-					break
-				}
-				case OpCodes.REMOVE_COMPONENT_FROM_QUERY: {
-					const queryId = reader.readU32()
-					const componentTypeID = reader.readU16()
-					queryMods.remove.push({ queryId, componentTypeID })
-					break
-				}
-				case OpCodes.SET_COMPONENT_DATA_ON_QUERY: {
-					const queryId = reader.readU32()
-					const componentTypeID = reader.readU16()
-					const dataLength = reader.readU16()
-					const dataOffset = reader.offset
-					queryMods.set.push({ queryId, componentTypeID, dataOffset, dataLength })
 					break
 				}
 
@@ -159,29 +130,11 @@ export class CommandBufferExecutor {
 		// Execute consolidated batches in the correct order: Destroy > Modify > Create
 
 		// --- Deletion ---
-		for (const queryId of deletions.queries) {
-			const query = this.queryManager.getQueryById(queryId)
-			if (query) this.entityManager.destroyEntitiesInQuery(query)
-		}
-		this.entityManager.destroyEntitiesInBatch(deletions.entities)
+		this.entityManager.destroyEntitiesInBatch(deletions)
 
 		// --- Modification ---
 		this._buildAndExecuteMoveBatches(modifications, reader, currentTick)
 		this._executeSetDataBatches(modifications.set, reader, currentTick)
-
-		// --- Query-based Modifications ---
-		for (const { queryId, componentTypeID, dataOffset, dataLength } of queryMods.add) {
-			const query = this.queryManager.getQueryById(queryId)
-			if (query) this.archetypeManager.addComponentToQuery(query, componentTypeID, dataOffset, dataLength, reader)
-		}
-		for (const { queryId, componentTypeID } of queryMods.remove) {
-			const query = this.queryManager.getQueryById(queryId)
-			if (query) this.archetypeManager.removeComponentFromQuery(query, componentTypeID)
-		}
-		for (const { queryId, componentTypeID, dataOffset, dataLength } of queryMods.set) {
-			const query = this.queryManager.getQueryById(queryId)
-			if (query) this.archetypeManager.setComponentDataOnQuery(query, componentTypeID, dataOffset, dataLength, reader)
-		}
 
 		// --- Creation ---
 		for (const { archetypeId, payload } of creations.varied) {
@@ -219,12 +172,12 @@ export class CommandBufferExecutor {
 				const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId)
 				if (sourceArchetypeId === undefined) continue
 
-				const location = this.archetypeManager.archetypeEntityMaps[sourceArchetypeId]?.get(entityId)
-				if (!location || this.archetypeManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
+				const location = this.entityManager.getEntityLocation(entityId)
+				if (!location || this.entityManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
 
 				const sourceChunk = location.chunk
-				const targetArchetypeId = this.archetypeManager.getArchetypeByMask(
-					this.archetypeManager.archetypeMasks[sourceArchetypeId] | Schema.componentBitFlags[componentTypeID]
+				const targetArchetypeId = this.entityManager.getArchetypeByMask(
+					this.entityManager.archetypeMasks[sourceArchetypeId] | Schema.componentBitFlags[componentTypeID]
 				)
 
 				// --- Gather into the new batch structure ---
@@ -257,12 +210,12 @@ export class CommandBufferExecutor {
 				const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId)
 				if (sourceArchetypeId === undefined) continue
 
-				const location = this.archetypeManager.archetypeEntityMaps[sourceArchetypeId]?.get(entityId)
-				if (!location || !this.archetypeManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
+				const location = this.entityManager.getEntityLocation(entityId)
+				if (!location || !this.entityManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
 
 				const sourceChunk = location.chunk
-				const targetArchetypeId = this.archetypeManager.getArchetypeByMask(
-					this.archetypeManager.archetypeMasks[sourceArchetypeId] & ~Schema.componentBitFlags[componentTypeID]
+				const targetArchetypeId = this.entityManager.getArchetypeByMask(
+					this.entityManager.archetypeMasks[sourceArchetypeId] & ~Schema.componentBitFlags[componentTypeID]
 				)
 
 				// --- Gather into the new batch structure ---
@@ -285,7 +238,7 @@ export class CommandBufferExecutor {
 				const { entityIds, sourceIndices, componentsToAssign } = moveBatch
 				const sourceLocations = sourceIndices.map(indexInChunk => ({ chunk: sourceChunk, indexInChunk }))
 
-				this.archetypeManager._addEntitiesByCopyingBatch(
+				this.entityManager._addEntitiesByCopyingBatch(
 					targetArchetypeId,
 					sourceChunk.archetype,
 					sourceLocations,
@@ -294,12 +247,7 @@ export class CommandBufferExecutor {
 					reader,
 					currentTick
 				)
-				this.archetypeManager._removeEntitiesBatch(sourceChunk.archetype, entityIds)
-
-				for (const entityId of entityIds) {
-					const index = Number(entityId & 0xffffffffn)
-					this.entityManager.entityArchetype[index] = targetArchetypeId
-				}
+				this.entityManager._removeEntitiesBatch(sourceChunk.archetype, entityIds)
 			}
 		}
 	}
@@ -315,8 +263,10 @@ export class CommandBufferExecutor {
 			const { entityIds, dataOffsets, dataLengths } = sets
 			for (let i = 0; i < entityIds.length; i++) {
 				const entityId = entityIds[i]
-				const location = this.archetypeManager.getEntityLocation(entityId)
+				const location = this.entityManager.getEntityLocation(entityId)
 				if (!location) continue
+
+				//Developer is responsible for ensuring the entity has the component.
 
 				if (!setsByChunk.has(location.chunk)) {
 					setsByChunk.set(location.chunk, { destIndices: [], dataOffsets: [], dataLengths: [] })
@@ -329,7 +279,7 @@ export class CommandBufferExecutor {
 
 			// --- 2. Blit Pass ---
 			for (const [chunk, batch] of setsByChunk.entries()) {
-				this.archetypeManager._blitComponentDataFromBinary(
+				this.entityManager._blitComponentDataFromBinary(
 					chunk,
 					componentTypeID,
 					batch.destIndices,

@@ -1,6 +1,5 @@
-const { inputManager, uiManager, gameManager } = (
-	await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-).theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { inputManager, uiManager, gameManager } = engine.getManagers()
 
 /**
  * Manages input context by enabling or disabling specific actions based on UI state.

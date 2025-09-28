@@ -69,12 +69,9 @@ export class PrefabManager {
 		this.componentManager = null
 	}
 
-	async init() {
-		const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-
-		const { componentManager } = theManager.getManagers()
-		this.componentManager = componentManager
-
+	async init(ecs) {
+		// This manager is now owned by ECS, so it gets its dependencies from there.
+		this.componentManager = ecs.componentManager
 		await this.loader.loadManifest()
 
 		let currentId = 0
@@ -483,5 +480,3 @@ export class PrefabManager {
 		return item && typeof item === 'object' && !Array.isArray(item)
 	}
 }
-
-export const prefabManager = new PrefabManager()

@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager } = ecs
 
 /**
  * Updates all active cooldowns in the world. This system embodies the "cooldown-as-an-entity" pattern.
@@ -56,7 +57,7 @@ const { queryManager, componentManager } = theManager.getManagers()
  */
 export class CooldownSystem {
 	constructor() {
-		const { activeCooldown } = componentManager.getTypeIDs()
+		const { activeCooldown } = ecs.getTypeIDs()
 		this.activeCooldown = activeCooldown
 
 		this.cooldownsQuery = queryManager.getQuery({

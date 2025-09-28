@@ -56,7 +56,6 @@ export class Query {
 			}
 			const bitFlag = Schema.componentBitFlags[typeID]
 			if (bitFlag === undefined) {
-				// This case should theoretically not be hit if typeID is valid.
 				throw new Error(`Query: ${categoryName} component with typeID "${typeID}" does not have a valid bitflag.`)
 			}
 			mask |= bitFlag
@@ -68,7 +67,6 @@ export class Query {
 		const typeIDs = new Set()
 		for (const typeID of componentTypeIDs) {
 			if (typeof typeID !== 'number') {
-				// This case should theoretically not be hit if typeID is valid.
 				throw new Error(`Query: ${categoryName} component identifier must be a numeric typeID. Received: ${typeID}`)
 			}
 			typeIDs.add(typeID)
@@ -79,7 +77,7 @@ export class Query {
 	constructor(
 		id,
 		queryManager,
-		archetypeManager,
+		entityManager,
 		withComponents,
 		withoutComponents = [],
 		anyComponents = [],
@@ -89,7 +87,7 @@ export class Query {
 	) {
 		this.id = id
 		this.queryManager = queryManager
-		this.archetypeManager = archetypeManager
+		this.entityManager = entityManager
 		this.iterationLastTick = null
 
 		this.with = Query._createComponentTypeIDSet(withComponents, 'With')
@@ -131,7 +129,7 @@ export class Query {
 
 	*_iterAllArchetypes() {
 		for (const archetype of this.matchingArchetypeIds) {
-			const chunks = this.archetypeManager.archetypeChunks[archetype]
+			const chunks = this.entityManager.archetypeChunks[archetype]
 			for (const chunk of chunks) {
 				if (chunk.size > 0) {
 					yield chunk
@@ -142,7 +140,7 @@ export class Query {
 
 	*_iterChangedArchetypes() {
 		for (const archetype of this.matchingArchetypeIds) {
-			const chunks = this.archetypeManager.archetypeChunks[archetype]
+			const chunks = this.entityManager.archetypeChunks[archetype]
 			for (const chunk of chunks) {
 				// yield only changed chunks
 				if (chunk.lastDirtyTick > this.iterationLastTick && chunk.size > 0) {
@@ -169,7 +167,7 @@ export class Query {
 	}
 
 	archetypeMatches(archetype) {
-		const archetypeMask = this.archetypeManager.archetypeMasks[archetype]
+		const archetypeMask = this.entityManager.archetypeMasks[archetype]
 
 		if ((archetypeMask & this._requiredMask) !== this._requiredMask) {
 			return false
@@ -191,7 +189,7 @@ export class Query {
 			if (this.isReactiveQuery) {
 				const relevantTypeIDs = []
 				for (const typeID of this.react) {
-					if (this.archetypeManager.hasComponentType(archetype, typeID)) {
+					if (this.entityManager.archetypeComponentTypeIDs[archetype]?.has(typeID)) {
 						relevantTypeIDs.push(typeID)
 					}
 				}

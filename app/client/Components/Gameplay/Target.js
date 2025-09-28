@@ -19,7 +19,12 @@ export const Target = {
 	/** The type of target. */
 	type: {
 		type: 'enum',
-		of: ['None', 'Entity', 'Position', 'Direction'],
+		of: {
+			None: 0,
+			Entity: 1,
+			Position: 2,
+			Direction: 3,
+		},
 		default: 'None',
 	},
 	/** The entity ID, if type is 'Entity'. */

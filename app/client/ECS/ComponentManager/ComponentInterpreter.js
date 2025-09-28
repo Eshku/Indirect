@@ -1,7 +1,8 @@
 /**
- * A stateless service for transforming "designer-friendly" component data into
- * its "engine-friendly" raw, numeric format. This is the single source of truth
- * for the "write path" of data transformation.
+ * A stateless service for transforming component data between its "designer-friendly"
+ * high-level format (e.g., objects with strings) and its "engine-friendly" raw,
+ * numeric format. This is the single source of truth for both the "write" and "read"
+ * data transformation paths.
  *
  * It has no dependencies on any managers and can be safely used at any point
  * in the engine's lifecycle, including the initial schema compilation.
@@ -9,10 +10,9 @@
  * ---
  * ### DEV-NOTE: The "Write" Transformation Authority
  * This service is the single authority for the **"Write Path" data transformation**.
- * Its sole responsibility is to take a high-level, "designer-friendly" data object
- * and interpret it into its raw, "engine-friendly" numeric equivalent. It is stateless,
- * has no manager dependencies, and can be used safely by any part of the engine at any
- * time (e.g., by `SchemaCompiler` at startup or `PayloadCompiler` at runtime).
+ * Its responsibility is to take a high-level, "designer-friendly" data object
+ * and interpret it into its raw, "engine-friendly" numeric equivalent. It also handles
+ * the reverse "reconstruction" process. It is stateless and has no manager dependencies.
  */
 
 const { compileFormulaToRPN } = await import(`${PATH_CORE}/Algorithms/FormulaParser.js`)
@@ -37,6 +37,7 @@ function getRpnConfig() {
 }
 
 /**
+ * WRITE PATH:
  * Interprets a high-level data object for a given component, returning a new
  * object with raw, engine-friendly values.
  * @param {number} typeID The component's type ID.
@@ -47,10 +48,10 @@ export function interpret(typeID, data) {
 	const info = Schema.componentInfo[typeID]
 	if (!info) return data
 
-	const constants = Schema.componentConstants[typeID]
 	const rawData = { ...data } // Work on a copy
 	const propKeys = Object.keys(rawData)
 
+	// This loop handles the direct properties provided in the `data` object.
 	for (const propName of propKeys) {
 		const rep = info.representations[propName]
 		if (!rep) continue
@@ -59,12 +60,6 @@ export function interpret(typeID, data) {
 		if (propValue === undefined || typeof propValue === 'number') continue
 
 		switch (rep.type) {
-			case 'enum':
-				rawData[propName] = constants[propName.toUpperCase()][propValue]
-				break
-			case 'bitmask':
-				rawData[propName] = propValue.reduce((mask, flag) => mask | constants[propName.toUpperCase()][flag], 0)
-				break
 			case 'string':
 				rawData[propName] = stringInterningTable.intern(propValue)
 				break
@@ -83,10 +78,9 @@ export function interpret(typeID, data) {
 				for (let i = 0; i < capacity; i++) {
 					const key = `${propName}${i}`
 					if (i < liveLength) {
-						const value = sourceArray[i]
-						if (itemRepresentation.originalType === 'string') rawData[key] = stringInterningTable.intern(value ?? '')
-						else if (itemRepresentation.originalType === 'enum') rawData[key] = itemRepresentation.enumMap[value] ?? 0
-						else rawData[key] = value ?? 0
+						// We now expect raw numeric values for enums/bitmasks in arrays.
+						const value = sourceArray[i] ?? 0
+						rawData[key] = itemRepresentation.originalType === 'string' ? stringInterningTable.intern(value) : value
 					} else {
 						rawData[key] = 0
 					}
@@ -116,4 +110,72 @@ export function interpret(typeID, data) {
 		}
 	}
 	return rawData
+}
+
+/**
+ * READ PATH:
+ * Reconstructs a high-level, "designer-friendly" data object from a raw,
+ * engine-friendly data object.
+ * @param {number} typeID The component's type ID.
+ * @param {object} rawData The raw data object to reconstruct.
+ * @returns {object} A new object with the reconstructed high-level data.
+ */
+export function reconstruct(typeID, rawData) {
+	const info = Schema.componentInfo[typeID]
+	if (!info || !rawData) return {}
+
+	const highLevelData = {}
+
+	// Iterate over the original schema keys to reconstruct complex types correctly.
+	for (const propName of info.originalSchemaKeys) {
+		const rep = info.representations[propName]
+		if (!rep || rep.shared) continue
+
+		const rawValue = rawData[propName]
+
+		switch (rep.type) {
+			case 'string':
+				highLevelData[propName] = stringInterningTable.get(rawValue)
+				break
+			case 'flat_array': {
+				const sourceArray = []
+				const len = rawData[rep.lengthProperty]
+				const itemRep = rep.itemRepresentation
+				for (let i = 0; i < len; i++) {
+					const value = rawData[`${propName}${i}`]
+					// Enums/bitmasks are now returned as numbers. The consumer can use the constants to interpret them.
+					sourceArray.push(itemRep.originalType === 'string' ? stringInterningTable.get(value) : value)
+				}
+				highLevelData[propName] = sourceArray
+				break
+			}
+			case 'rpn': {
+				// Reconstruct the three underlying flat arrays for the RPN type.
+				const streamRep = info.representations[rep.streamProperty]
+				const startsRep = info.representations[rep.startsProperty]
+				const lengthsRep = info.representations[rep.lengthsProperty]
+
+				const streamArray = []
+				const streamLen = rawData[streamRep.lengthProperty]
+				for (let i = 0; i < streamLen; i++) streamArray.push(rawData[`${rep.streamProperty}${i}`])
+
+				const startsArray = []
+				const startsLen = rawData[startsRep.lengthProperty]
+				for (let i = 0; i < startsLen; i++) startsArray.push(rawData[`${rep.startsProperty}${i}`])
+
+				const lengthsArray = []
+				const lengthsLen = rawData[lengthsRep.lengthProperty]
+				for (let i = 0; i < lengthsLen; i++) lengthsArray.push(rawData[`${rep.lengthsProperty}${i}`])
+
+				highLevelData[rep.streamProperty] = streamArray
+				highLevelData[rep.startsProperty] = startsArray
+				highLevelData[rep.lengthsProperty] = lengthsArray
+				break
+			}
+			default: // Primitives
+				if (rawValue !== undefined) highLevelData[propName] = rawValue
+				break
+		}
+	}
+	return highLevelData
 }

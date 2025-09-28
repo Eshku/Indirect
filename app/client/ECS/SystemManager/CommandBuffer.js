@@ -14,11 +14,9 @@ const SOA_BUFFER_INITIAL_CAPACITY = 1024
  * It combines a RawCommandBuffer for data and a SortableCommandBuffer for execution order.
  */
 export class CommandBuffer {
-	constructor() {
+	constructor() { // No longer needs prefabManager or archetypeManager
 		this.rawBuffer = new RawCommandBuffer()
 		this.sortableBuffer = new SortableCommandBuffer()
-		// The internal SoA buffer for component modifications has been removed.
-		// All data is now written directly as binary payloads into the rawBuffer.
 	}
 
 	/**
@@ -156,86 +154,19 @@ export class CommandBuffer {
 		//! will call createEntities after resolving all the crap on low-level
 		//! Gonna use AoS too.
 	}
-
-	/**
-	 * Queues a command to destroy every entity matching a query.
-	 * @param {import('../../Managers/QueryManager/Query.js').Query} query The query to iterate.
-	 * @param {number} [layer=0]
-	 */
-	destroyEntitiesInQuery(query, layer = 0) {
-		const offset = this.rawBuffer.offset
-		const startOffset = offset
-
-		this.rawBuffer.writeU8(OpCodes.DESTROY_ENTITIES_IN_QUERY)
-		this.rawBuffer.writeU32(query.id) // Write query's numeric ID
-
-		const length = this.rawBuffer.offset - startOffset
-		// Sort by phase, then layer. Primary/secondary IDs are not needed for query ops.
-		const key = SortableCommandBuffer.encodeKey(SortPhase.DESTROY, layer, 0, 0)
-		this.sortableBuffer.add(key, offset, length)
-	}
-
-	/**
-	 * Queues a command to add a component to every entity matching a query.
-	 * @param {import('../../Managers/QueryManager/Query.js').Query} query The query to modify.
-	 * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload.
-	 * @param {number} [layer=0]
-	 */
-	addComponentToQuery(query, payload, layer = 0) {
-		const offset = this.rawBuffer.offset
-		const startOffset = offset
-
-		this.rawBuffer.writeU8(OpCodes.ADD_COMPONENT_TO_QUERY)
-		this.rawBuffer.writeU32(query.id)
-		this.rawBuffer.writeU16(payload.typeID)
-		this.rawBuffer.writeU16(payload.data.byteLength)
-		this.rawBuffer.writeBuffer(payload.data)
-
-		const length = this.rawBuffer.offset - startOffset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, 0, 0)
-		this.sortableBuffer.add(key, offset, length)
-	}
 	
 	/**
-	 * Queues a command to remove a component from every entity matching a query.
-	 * @param {import('../../Managers/QueryManager/Query.js').Query} query
-	 * @param {number} componentTypeID
+	 * [PLACEHOLDER] Records a command to add a component to all entities in a specific chunk.
+	 * @param {object} chunk - A reference to the target chunk.
+	 * @param {{typeID: number, data: ArrayBuffer}} payload - The pre-compiled component payload.
 	 * @param {number} [layer=0]
 	 */
-	removeComponentFromQuery(query, componentTypeID, layer = 0) {
-		const offset = this.rawBuffer.offset
-		const startOffset = offset
-
-		this.rawBuffer.writeU8(OpCodes.REMOVE_COMPONENT_FROM_QUERY)
-		this.rawBuffer.writeU32(query.id)
-		this.rawBuffer.writeU16(componentTypeID)
-
-		const length = this.rawBuffer.offset - startOffset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, 0, 0)
-		this.sortableBuffer.add(key, offset, length)
+	addComponentToChunk(chunk, payload, layer = 0) {
+		// TODO: Implement chunk-based command. This will write the chunk's unique ID
+		// and the payload to the raw buffer.
 	}
 
-	/**
-	 * Queues a command to set component data for every entity matching a query.
-	 * This is an efficient way to apply in-place data changes to a group of entities.
-	 * @param {import('../../Managers/QueryManager/Query.js').Query} query The query to modify.
-	 * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload.
-	 * @param {number} [layer=0]
-	 */
-	setComponentDataOnQuery(query, payload, layer = 0) {
-		const offset = this.rawBuffer.offset
-		const startOffset = offset
-
-		this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_DATA_ON_QUERY)
-		this.rawBuffer.writeU32(query.id)
-		this.rawBuffer.writeU16(payload.typeID)
-		this.rawBuffer.writeU16(payload.data.byteLength)
-		this.rawBuffer.writeBuffer(payload.data)
-
-		const length = this.rawBuffer.offset - startOffset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, 0, 0)
-		this.sortableBuffer.add(key, offset, length)
-	}
+	// TODO: Add removeComponentFromChunk, setComponentDataOnChunk, and destroyEntitiesInChunk
 
 	/**
 	 * @private

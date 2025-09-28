@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager } = ecs
 
 /**
  * This system is responsible for cleaning up transient event entities at the end of each frame.
@@ -28,7 +29,7 @@ const { queryManager, componentManager } = theManager.getManagers()
  */
 export class EventEntityCleanupSystem {
 	constructor() {
-		const { landedEvent, leftSurfaceEvent } = componentManager.getTypeIDs()
+		const { landedEvent, leftSurfaceEvent } = ecs.getTypeIDs()
 		// By querying for any of these event components, we can handle all
 		// transient event cleanup in a single pass.
 		this.transientEventQuery = queryManager.getQuery({
@@ -37,7 +38,12 @@ export class EventEntityCleanupSystem {
 	}
 
 	update() {
-		//delete all in batch based on query.
-		this.commands.destroyEntitiesInQuery(this.transientEventQuery)
+		// With query-based commands removed, we must now iterate and issue
+		// a command for each entity individually.
+		for (const chunk of this.transientEventQuery.iter()) {
+			for (let i = 0; i < chunk.size; i++) {
+				this.commands.destroyEntity(chunk.entities[i]);
+			}
+		}
 	}
 }

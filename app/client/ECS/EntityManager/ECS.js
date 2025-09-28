@@ -1,7 +1,12 @@
-const { Entity } = await import(`${PATH_ECS}/EntityManager/Entity.js`)
-
 import * as Schema from '../ComponentManager/ComponentSchema.js'
+const { ComponentManager } = await import('../ComponentManager/ComponentManager.js')
+const { EntityManager } = await import('./EntityManager.js')
+const { QueryManager } = await import('../../Managers/QueryManager/QueryManager.js')
+const { PrefabManager } = await import('../../Managers/PrefabManager/PrefabManager.js')
+const { SystemManager } = await import('../SystemManager/SystemManager.js')
+
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
 
 /**
  * The central, immediate-mode public API for the entire ECS.
@@ -12,14 +17,15 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
  */
 export class ECS {
 	constructor() {
-		// The constructor is now lightweight. It only holds references that will be populated by init().
-		this.entityManager = null
-		this.componentManager = null
-		this.prefabManager = null
-		this.propertyGroupManager = null
-		this.archetypeManager = null
-		this.systemManager = null
-		this.theManager = null // To hold the reference to the main manager
+		this.componentManager = new ComponentManager()
+		this.queryManager = new QueryManager()
+		this.entityManager = new EntityManager()
+		this.prefabManager = new PrefabManager()
+		this.systemManager = new SystemManager()
+
+		this.propertyGroupManager = propertyGroupManager
+
+		this.engine = null // To hold the reference to the main engine instance
 
 		// The payload compiler is a stateless service, so it's fine to keep it here.
 		this.payloadCompiler = payloadCompiler
@@ -27,14 +33,20 @@ export class ECS {
 
 	/**
 	 * Initializes the core ECS managers in the correct dependency order.
-	 * This method is called by TheManager during the engine's startup sequence.
-	 * @param {import('../../Managers/TheManager/TheManager.js').TheManager} theManager
+	 * This method is called by engine during the engine's startup sequence.
+	 * @param {import('../../Engine.js').Engine} engine
 	 */
-	async init(theManager) {
-		// Get references to all managers. They have already been initialized by TheManager.
-		const managers = theManager.getManagers()
-		Object.assign(this, managers)
-		this.theManager = theManager
+	async init(engine) {
+		// Initialize our own scoped managers in the correct dependency order.
+		await this.componentManager.init(this)
+		await this.entityManager.init(this) // EntityManager now depends on ComponentManager
+		await this.queryManager.init(this)
+		await this.prefabManager.init(this)
+		await this.systemManager.init(this)
+
+		// Finally, initialize the payload compiler which depends on our managers.
+		this.payloadCompiler.init(this)
+		this.engine = engine
 	}
 
 	// ### Deferred vs. Immediate Mode
@@ -45,46 +57,32 @@ export class ECS {
 	//   use the `commands` object (the CommandBuffer) to queue structural changes. This is vastly more performant.
 
 	/**
-	 * Returns a wrapper object for a given entity ID.
-	 * This is intended for debugging and inspection, not for performance-critical code.
-	 * @param {bigint} entityID The ID of the entity to wrap.
-	 * @param {object} [options] - Options for the entity wrapper.
-	 * @returns {Promise<import('../../Managers/EntityManager/Entity.js').Entity | null>} A Promise that resolves to an Entity wrapper instance, or null if the entity is not active.
+	 * Returns a debug-friendly object for inspecting an entity's state.
+	 * This is intended for debugging and console interaction, not for performance-critical code.
+	 * @param {bigint} entityID The ID of the entity to view.
+	 * @returns {object | null} An inspection object, or null if the entity is not active.
 	 */
-	getEntity(entityID) {
-		// Dynamically import the Entity class only when needed for debugging.
-		// This keeps it out of the main bundle path and clarifies its purpose.
-
-		if (!this.entityManager.isEntityActive(entityID)) {
-			console.warn(`ECS.getEntity: Cannot get wrapper for inactive entity ID: ${entityID}`)
+	viewEntity(entityID) {
+		if (!this.isEntityActive(entityID)) {
+			console.warn(`ECS.viewEntity: Cannot view inactive entity ID: ${entityID}`)
 			return null
 		}
-		return new Entity(entityID)
-	}
 
-	/**
-	 * Retrieves a manager instance by its name.
-	 * This is a convenience method for console debugging.
-	 * @param {string} managerName - The name of the manager (e.g., 'componentManager' or 'ComponentManager').
-	 * @returns {object | undefined} The manager instance, or undefined if not found.
-	 */
-	getManager(managerName) {
-		const theManager = this.theManager
-		if (typeof managerName !== 'string' || !managerName) {
-			console.error('ECS.getManager: A non-empty string is required for managerName.')
-			return
+		const archetypeId = this.entityManager.getArchetypeForEntity(entityID)
+		const components =
+			archetypeId !== undefined ? [...this.componentManager.getComponentNamesForArchetype(archetypeId)].sort() : []
+
+		const data = {}
+		for (const componentName of components) {
+			data[componentName] = this.getComponent(entityID, componentName)
 		}
 
-		// Allow for both 'componentManager' and 'ComponentManager' by ensuring PascalCase.
-		const className = managerName.charAt(0).toUpperCase() + managerName.slice(1)
-		const manager = theManager.getManager(className)
-
-		if (!manager) {
-			console.warn(`ECS.getManager: Manager "${className}" not found. Available managers:`, [
-				...theManager.managers.keys(),
-			])
+		return {
+			id: entityID,
+			archetypeId: archetypeId,
+			components: components,
+			data: data,
 		}
-		return manager
 	}
 
 	/**
@@ -220,7 +218,7 @@ export class ECS {
 		}
 		// Use the payload compiler to create the minimal binary payload for the new component.
 		const { payload } = this.payloadCompiler.compileComponent(componentTypeId, data)
-		return this.entityManager.addComponent(entityId, componentTypeId, payload)
+		return this.entityManager.addComponent(entityId, componentTypeId, payload.data)
 	}
 
 	/**
@@ -251,7 +249,7 @@ export class ECS {
 			return undefined
 		}
 		const archetype = this.entityManager.getArchetypeForEntity(entityId)
-		if (archetype === undefined || !this.archetypeManager.hasComponentType(archetype, componentTypeId)) {
+		if (archetype === undefined || !this.entityManager.hasComponentType(archetype, componentTypeId)) {
 			return undefined
 		}
 
@@ -289,12 +287,23 @@ export class ECS {
 		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
 		if (componentTypeId === undefined) return false
 		if (!this.entityManager.isEntityActive(entityId)) return false
-		const archetype = this.entityManager.getArchetypeForEntity(entityId)
-		return archetype !== undefined ? this.archetypeManager.hasComponentType(archetype, componentTypeId) : false
+		const archetypeId = this.entityManager.getArchetypeForEntity(entityId)
+		return archetypeId !== undefined ? this.entityManager.hasComponentType(archetypeId, componentTypeId) : false
+	}
+
+	/**
+	 * Retrieves an object mapping all registered component names to their numeric type IDs.
+	 * This is a convenience method that delegates to the ComponentManager. It's ideal for
+	 * destructuring in a system's constructor for clean, cached access.
+	 * e.g., `const { Position, Velocity } = ecs.getTypeIDs();`
+	 * @returns {Object.<string, number>} An object mapping component names to their type IDs.
+	 */
+	getTypeIDs() {
+		return this.componentManager.getTypeIDs()
 	}
 }
 
 // Create a single instance for the global debug API.
-// In the final architecture, the SystemManager would own this instance.
+//! Move it out to the engine \ rename the Manager
 export const ecs = new ECS()
 window.ECS = ecs

@@ -44,7 +44,7 @@ class Reloader {
 	 */
 	soft(paths) {
 		const reloadWindows = debounce(() => {
-			console.log('[Reloader] Renderer files changed. Reloading windows...')
+			console.log('[Reloader] Renderer files changed. Reloading window...')
 			BrowserWindow.getAllWindows().forEach(win => {
 				if (win && !win.isDestroyed()) {
 					win.webContents.reloadIgnoringCache()

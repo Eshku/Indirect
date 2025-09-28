@@ -7,7 +7,13 @@ export const CollisionFlags = {
 	 */
 	collisionFlags: {
 		type: 'bitmask',
-		of: ['NONE', 'TOP', 'BOTTOM', 'LEFT', 'RIGHT'],
-		default: ['NONE'],
+		of: {
+			NONE: 0,
+			TOP: 1 << 0,
+			BOTTOM: 1 << 1,
+			LEFT: 1 << 2,
+			RIGHT: 1 << 3,
+		},
+		default: 0, // NONE
 	},
 }

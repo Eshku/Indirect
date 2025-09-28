@@ -4,22 +4,20 @@ const isDev = (await window.electronAPI.getEnv()) === 'development'
 
 const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
 
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 
-await theManager.init()
+await engine.init()
 
+// Get the global managers from the Engine
 const {
 	gameManager,
 	assetManager,
-	systemManager,
 	physicsManager,
 	layerManager,
-	entityManager,
 	uiManager,
 	inputManager,
-	componentManager,
-	prefabManager,
-} = theManager.getManagers()
+	ecs, // The ECS instance is now a manager itself
+} = engine.getManagers()
 
 const setupBackground = async () => {
 	const pixi = await gameManager.getApp()
@@ -33,7 +31,7 @@ const preload = async () => {
 	await assetManager.loadAssetAsync('fireball_icon', `${PATH_ICONS}/skills/64/fireball.png`)
 	await assetManager.loadAssetAsync('searing_boulder_icon', `${PATH_ICONS}/skills/64/SearingBoulder.png`)
 
-	await prefabManager.preload([
+	await ecs.prefabManager.preload([
 		'player_character',
 		'test_prefab',
 		'platform',
@@ -66,7 +64,7 @@ await setupPlatforms()
 Logger.end('Setup')
 
 
-await systemManager.initAll()
+await ecs.systemManager.initAll()
 
 
-await systemManager.startLoop()
+await ecs.systemManager.startLoop()

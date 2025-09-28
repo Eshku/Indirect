@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, assetManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs, assetManager } = engine.getManagers()
+const { queryManager } = ecs
 
 /**
  * Synchronizes the visual properties (position, rotation, scale) of a PIXI.Sprite
@@ -8,7 +9,7 @@ const { queryManager, componentManager, assetManager } = theManager.getManagers(
  */
 export class SyncTransforms {
 	constructor() {
-		const { viewable, position, rotation, scale } = componentManager.getTypeIDs()
+		const { viewable, position, rotation, scale } = ecs.getTypeIDs()
 		Object.assign(this, { viewable, position, rotation, scale })
 
 		this.positionQuery = queryManager.getQuery({

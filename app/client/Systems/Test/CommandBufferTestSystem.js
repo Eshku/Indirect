@@ -1,8 +1,9 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { componentManager, entityManager, queryManager, prefabManager, systemManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs, testManager} = engine.getManagers()
+
+const { entityManager, queryManager, prefabManager, systemManager } = ecs
 
 const { describe, it, expect } = await import(`${PATH_MANAGERS}/TestManager/TestAPI.js`)
-const { testManager } = await import(`${PATH_MANAGERS}/TestManager/TestManager.js`)
 
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
@@ -18,7 +19,7 @@ const testConfig = {
 	runSetComponentDataTest: true,
 	runInstantiateTest: true,
 	runCreateEntitiesTest: true,
-	runQueryBasedModificationTest: true,
+	runQueryBasedModificationTest: false, // This test is no longer valid.
 }
 
 /**
@@ -29,7 +30,7 @@ export class CommandBufferTestSystem {
 	constructor() {
 		this.systemManager = systemManager
 
-		const { position, velocity, testEntityTag } = componentManager.getTypeIDs()
+		const { position, velocity, testEntityTag } = ecs.getTypeIDs()
 		Object.assign(this, { position, velocity, testEntityTag })
 
 		// Create queries for verification steps.
@@ -130,7 +131,6 @@ export class CommandBufferTestSystem {
 					flush()
 					expect(ECS.hasComponent(entity, `velocity`)).toBe(false)
 					this.commands.destroyEntity(entity)
-					entityManager.destroyEntity(entity)
 					flush()
 				})
 			}
@@ -187,44 +187,7 @@ export class CommandBufferTestSystem {
 
 			// --- Test 8 & 9: Batch and Query-Based Modifications (Isolated) ---
 			if (testConfig.runCreateEntitiesTest && testConfig.runQueryBasedModificationTest) {
-				it('creation and all query-based modifications (add, set, remove, destroy)', () => {
-					const { queryTestTag, queryTestToggle } =
-						componentManager.getTypeIDs()
-
-					// --- COMPILE PAYLOADS ONCE ---
-					const { payload: creationPayload } = payloadCompiler.compileEntities({ queryTestTag: { value: 1 } })
-					const addComponentPayload = payloadCompiler.compileComponent(queryTestToggle, {}).payload
-					const setComponentPayload = payloadCompiler.compileComponent(queryTestTag, { value: 777 }).payload
-
-					const addQuery = queryManager.getQuery({ with: [queryTestTag], without: [queryTestToggle] })
-					const removeQuery = queryManager.getQuery({ with: [queryTestTag, queryTestToggle] })
-
-					// CREATE
-					this.commands.createEntities(creationPayload, 10)
-					flush()
-					expect(addQuery.iter().next().value?.size).toBe(10)
-
-					// ADD
-					this.commands.addComponentToQuery(addQuery, addComponentPayload)
-					flush()
-					expect(removeQuery.iter().next().value?.size).toBe(10)
-
-					// SET
-					this.commands.setComponentDataOnQuery(removeQuery, setComponentPayload)
-					flush()
-					const data = ECS.getComponent(removeQuery.iter().next().value.entities[0], 'queryTestTag')
-					expect(data.value).toBe(777)
-
-					// REMOVE
-					this.commands.removeComponentFromQuery(removeQuery, queryTestToggle)
-					flush()
-					expect(addQuery.iter().next().value?.size).toBe(10)
-
-					// DESTROY
-					this.commands.destroyEntitiesInQuery(addQuery)
-					flush()
-					expect(addQuery.iter().next().value).toBe(undefined)
-				})
+				// This test is disabled because query-based command buffer operations have been removed.
 			}
 		})
 

@@ -1,9 +1,10 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, archetypeManager, entityManager, prefabManager } = theManager.getManagers()
-
-const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager, entityManager, prefabManager } = ecs
 
 const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
+
+const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
  * This system is the first step in the action pipeline. It finds an entity's
@@ -12,16 +13,15 @@ const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupMan
  */
 export class ItemEventSystem {
 	constructor() {
-		const { actionIntent, activeSet, prefab, cooldown, activeCooldown } = componentManager.getTypeIDs()
+		const { actionIntent, activeSet, prefab, cooldown, activeCooldown } = ecs.getTypeIDs()
 		Object.assign(this, { actionIntent, activeSet, prefab, cooldown, activeCooldown })
 
 		this.actorsQuery = queryManager.getQuery({ with: [actionIntent, activeSet], react: [actionIntent] })
 		this.cooldownsQuery = queryManager.getQuery({ with: [activeCooldown] })
 
-		this.archetypeManager = archetypeManager
 		this.prefabManager = prefabManager
 		this.propertyGroupManager = propertyGroupManager
-		this.entityManager = entityManager
+		this.entityManager = ecs.entityManager
 
 		// Pre-compile the payload for creating new Cooldown entities.
 		this.cooldownCreationPayload = payloadCompiler.compileEntity({ activeCooldown: {} })
@@ -66,11 +66,11 @@ export class ItemEventSystem {
 				const itemArchetypeId = this.entityManager.getArchetypeForEntity(itemEntityId)
 				if (itemArchetypeId === undefined) continue
 
-				const itemLocation = this.archetypeManager.archetypeEntityMaps[itemArchetypeId].get(itemEntityId)
+				const itemLocation = this.entityManager.getEntityLocation(itemEntityId)
 				if (!itemLocation) continue
 
 				const { chunk: itemChunk, indexInChunk: itemIndexInChunk } = itemLocation
-				
+
 				// Get PrefabId first, as it's needed for logging and cooldowns.
 				const prefabIdArrays = itemChunk.componentArrays[this.prefab]
 				if (!prefabIdArrays) {
@@ -80,7 +80,7 @@ export class ItemEventSystem {
 
 				// The Prefab.id is now a shared property. We must look it up via the sharedGroupId.
 				const prefabSharedGroupId = prefabIdArrays.sharedGroupId[itemIndexInChunk]
-				const sharedGroup = this.propertyGroupManager.sharedGroups[prefabSharedGroupId]
+				const sharedGroup = this.propertyGroupManager.getSharedGroup(prefabSharedGroupId)
 				const sharedPrefabData = sharedGroup?.[this.prefab]
 				const itemPrefabId = sharedPrefabData?.id
 

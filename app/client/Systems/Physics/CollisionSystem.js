@@ -1,5 +1,7 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+
+const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
@@ -10,7 +12,8 @@ export class CollisionSystem {
 		this.commands = null // Injected by SystemManager
 
 		const { position, velocity, isGrounded, collisionFlags, collider, platformTag, landedEvent, leftSurfaceEvent } =
-			componentManager.getTypeIDs()
+			ecs.getTypeIDs()
+			
 		Object.assign(this, {
 			position,
 			velocity,
@@ -35,7 +38,7 @@ export class CollisionSystem {
 		this.leftSurfaceEventPayload = leftSurfaceEventPayload
 		this.leftSurfaceEventMutators = leftSurfaceEventMutators
 
-		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(collisionFlags, 'collisionFlags')
+		this.collisionFlagsConstants = ecs.componentManager.getConstantsForProperty(collisionFlags, 'collisionFlags')
 
 		this.characterQuery = queryManager.getQuery({
 			with: [position, velocity, isGrounded, collisionFlags, collider],
@@ -153,7 +156,7 @@ export class CollisionSystem {
 				charPosX[charIndexInChunk] = finalTargetX
 				charPosY[charIndexInChunk] = finalTargetY
 
-				let collisionDirectionFlagsThisFrame = this.COLLISION_FLAGS.NONE
+				let collisionDirectionFlagsThisFrame = this.collisionFlagsConstants.NONE
 				let isGroundedThisFrame = false
 
 				if (charPosX[charIndexInChunk] !== originalCharX || charPosY[charIndexInChunk] !== originalCharY) {
@@ -163,7 +166,7 @@ export class CollisionSystem {
 				if (bestHorizontalPlatform) {
 					charVelX[charIndexInChunk] = 0
 					const dx = originalCharX - bestHorizontalPlatform.centerX
-					collisionDirectionFlagsThisFrame |= dx > 0 ? this.COLLISION_FLAGS.RIGHT : this.COLLISION_FLAGS.LEFT
+					collisionDirectionFlagsThisFrame |= dx > 0 ? this.collisionFlagsConstants.RIGHT : this.collisionFlagsConstants.LEFT
 				}
 				if (bestVerticalPlatform) {
 					charVelY[charIndexInChunk] = 0
@@ -174,9 +177,9 @@ export class CollisionSystem {
 					if (dy > 0) {
 						isGroundedThisFrame = true
 
-						collisionDirectionFlagsThisFrame |= this.COLLISION_FLAGS.BOTTOM
+						collisionDirectionFlagsThisFrame |= this.collisionFlagsConstants.BOTTOM
 					} else {
-						collisionDirectionFlagsThisFrame |= this.COLLISION_FLAGS.TOP
+						collisionDirectionFlagsThisFrame |= this.collisionFlagsConstants.TOP
 					}
 				}
 

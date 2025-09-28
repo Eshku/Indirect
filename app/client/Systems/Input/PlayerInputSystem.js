@@ -1,8 +1,8 @@
 const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
 
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-
-const { queryManager, componentManager, uiManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs, uiManager } = engine.getManagers()
+const { queryManager } = ecs
 
 const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
 
@@ -13,7 +13,7 @@ const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
  */
 export class PlayerInputSystem {
 	constructor() {
-		const { playerTag, movementIntent, jump, actionIntent, activeSet } = componentManager.getTypeIDs()
+		const { playerTag, movementIntent, jump, actionIntent, activeSet } = ecs.getTypeIDs()
 		Object.assign(this, { playerTag, movementIntent, jump, actionIntent, activeSet })
 
 		this.playerQuery = queryManager.getQuery({
@@ -33,7 +33,10 @@ export class PlayerInputSystem {
 		this.playerId = null
 	}
 
-	init() {
+	async init() {
+
+
+
 		this.hotbar = uiManager.getElement('Hotbar')
 
 		findPlayer: for (const chunk of this.playerQuery.iter()) {

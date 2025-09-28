@@ -25,10 +25,11 @@ Readme might be outdated.
 
 - Introduce dynamic (packed) arrays, stored on chunk (?).
 - Placeholder Entities.
+- Relational Queries (?)
 - Parrallelism.
 - Custom HMR, or in simple terms - hot reload.
 - Serialization \ Deserialization.
-- React on component addition \ changes as 2 separate things (?)
+- React on component addition \ changes \ removal as separate things (?)
 
 ## Tech Stack
 
@@ -48,15 +49,15 @@ Readme might be outdated.
 - **[Managers](app/client/Managers)**: Storage of some resource, API to interact with it.
 - **[Service](app/client/Services)**: Glorified set of on-demand utilities.
 
-#### Archetypes: Defining Entity Structures
+#### Archetypes and Chunks: Core of Data Management
 
-**Archetype** defines a unique combination of components. Each Archetype manages a collection of data containers - **Chunks**.
+[`EntityManager`](./app/client/ECS/EntityManager/EntityManager.js) is the heart of the ECS, responsible for managing all entities, archetypes, and their data.
 
-- **Immortal Archetypes:** Archetype _definitions_ are "immortal". Once created, they are never destroyed, even if they contain no entities. This is a performance optimization that avoids "archetype churn"- expensive process of repeatedly creating and destroying archetypes, which would force `QueryManager` to constantly re-evaluate all active queries. This trades a small amount of memory for a gain in structural change performance.
+**Archetypes** define the structure of entities. An archetype represents a unique combination of components. All entities with the exact same set of components belong to the same archetype. This is managed internally by the `EntityManager`.
 
-#### [Chunks](app/client/Managers/ArchetypeManager/Chunk.js): Unit of Iteration (and Parallelism)
+- **Immortal Archetypes:** Archetype definitions are "immortal." Once an archetype is created (e.g., by creating an entity with a new combination of components), it is never destroyed, even if it contains no entities. This avoids the performance cost of "archetype churn" (repeatedly creating and destroying archetypes), which would force the `QueryManager` to constantly re-evaluate all active queries.
 
-Each archetype's data is organized into fixed-size **Chunks**. A Chunk is a contiguous block of memory that directly stores entities and their associated component data in a Structure of Arrays (SoA) layout.
+Each archetype's data is organized into fixed-size **[Chunks](./app/client/ECS/ArchetypeManager/Chunk.js)**. A Chunk is a contiguous block of memory that directly stores entities and their associated component data in a Structure of Arrays (SoA) layout.
 
 - **Direct Data Storage:** Chunk holds:
   - An array of entity IDs (`Uint32Array`).
@@ -75,15 +76,106 @@ Components are defined as plain JavaScript objects that act as a schema. This sc
 
 A component file exports a named constant matching the component's name.
 
-_Example `Position.js` component:_
+Below are several examples of component schemas, demonstrating various data types and features.
+
+_Example `PlayerTag` (Tag Component):_
 
 ```javascript
-/**
- * A component that stores an entity's position in 2D space.
- */
-export const Position = {
-	x: { type: 'f64', default: 0 },
-	y: { type: 'f64', default: 0 },
+export const PlayerTag = {}
+```
+
+_Example `Health` (Primitives with Defaults):_
+
+```javascript
+export const Health = {
+	value: { type: 'f32', default: 100 },
+	max: { type: 'f32', default: 100 },
+}
+```
+
+_Example `Name.js` (String):_
+
+```javascript
+export const Name = {
+	name: { type: 'string', default: 'No Name Defined' },
+}
+```
+
+_Example `Damage` (Parallel Arrays):_
+
+```javascript
+export const Damage = {
+	types: {
+		type: 'flat_array',
+		capacity: 5,
+		of: {
+			type: 'enum',
+			of: {
+				Physical: 0,
+				Fire: 1,
+				Ice: 2,
+				Lightning: 3,
+				Poison: 4,
+			},
+		},
+	},
+	baseValues: {
+		type: 'flat_array',
+		of: 'f32',
+		capacity: 5,
+	},
+	formulas: {
+		type: 'rpn',
+		streamCapacity: 128, // Total tokens for all formulas
+		instanceCapacity: 5, // Max number of formulas
+	},
+}
+```
+
+_Example `StatusEffects` (Bitmask):_
+
+```javascript
+export const StatusEffects = {
+	flags: {
+		type: 'bitmask',
+		of: {
+			NONE: 0,
+			STUN: 1 << 0,
+			ROOT: 1 << 1,
+			SILENCE: 1 << 2,
+		},
+		default: 0, // Default to no active effects
+	},
+}
+```
+
+_Example `State` (Enum):_
+
+```javascript
+export const State = {
+	state: {
+		type: 'enum',
+		of: {
+			IDLE: 0,
+			WALKING: 1,
+			ATTACKING: 2,
+			JUMPING: 3,
+		},
+		default: 0, // Default to IDLE
+	},
+}
+```
+
+_Example `Hotbar.js` (Fixed-size Array):_
+
+```javascript
+export const Hotbar = {
+	slots: {
+		type: 'flat_array',
+		of: 'entity',
+		capacity: 10,
+		default: [],
+	},
 }
 ```
 
@@ -94,29 +186,36 @@ Every property in a schema must be an object containing a `type` and an optional
 - **`type`**: A string specifying the data type.
 - **`default`**: A default value to use for the property when a component is added without specifying a value. If omitted, a zero-equivalent (0, false, "") is used.
 - **`shared`**: A boolean. If `true`, this property's data is shared across all entities that have the same value for it.
-- Other keys like `of`, `capacity`, `storageType` are used for more complex types.
 
 **Schema Types:**
 
 - **Primitive Types:** For simple numeric properties. These are the most common and performant types, directly mapping to `TypedArray`s.
 
   - **Definition:** `{ type: 'f64' }`
-  - **Supported Types:** `f64`, `f32`, `i32`, `u32`, `i16`, `u16`, `i8`, `u8`, `boolean`.
+  - **Supported Types:** `f64`, `f32`, `i32`, `u32`, `i16`, `u16`, `i8`, `u8`, `boolean`, `u64`, `entity`.
 
-- **`string`:** For string data. The engine stores a single copy of each unique string and uses an integer reference (`u32`) to it. This process is called string interning. See [Working with Interned Strings](#working-with-interned-strings) for details on how to read this data.
+- **`string`:** For string data. The engine stores a single copy of each unique string and uses an integer reference (`u32`) to it.
 
   - **Definition:** `{ type: 'string' }`
   - All strings are **interned**. This means that each unique string (e.g., "Magic Missile", "Player_Character_Name") is stored only once in a global table, and the component itself stores a lightweight numeric ID (a `u32` reference) pointing to that string.
 
-- **`enum`:** For properties that can only be one of a set of mutually exclusive string values.
+- **`enum`:** For properties that can only be one of a set of mutually exclusive values.
 
-  - **Definition:** `{ type: 'enum', of: ['STATE_A', 'STATE_B'] }`.
-  - The underlying storage type (`u8`, `u16`, `u32`) is automatically inferred based on the number of options. A static lookup object is generated for readable comparisons.
+  - **Definition:** `{ type: 'enum', of: { STATE_A: 0, STATE_B: 1 } }`
+  - The `of` property must be an object where keys are the string names and values are their explicit numeric representations.
+  - The underlying storage type (`u8`, `u16`, `u32`) is automatically inferred based on the largest numeric value provided. A static lookup object is generated for readable comparisons.
 
 - **`bitmask`:** For properties that can have multiple states simultaneously.
 
-  - **Definition:** `{ type: 'bitmask', of: ['FLAG_A', 'FLAG_B'], storageType: 'u8' }`.
-  - The `storageType` (`u8`, `u16`, `u32`) is automatically inferred if not provided. A static lookup object is generated for bitwise operations.
+  - **Definition:** `{ type: 'bitmask', of: { FLAG_A: 1 << 0, FLAG_B: 1 << 1 }, default: 1 << 0 }`
+  - The `of` property must be an object where keys are the flag names and values are their explicit integer bit values.
+  - The `storageType` (`u8`, `u16`, `u32`) is automatically inferred if not provided.
+  - The `default` value must be a number, typically a bitwise combination of the values from the `of` object (e.g., `(1 << 0) | (1 << 1)`).
+  - A static lookup object is generated for readable bitwise operations in systems.
+
+- **`rpn`:** For storing Reverse-Polish Notation (RPN) formulas as a stream of tokens. Used for complex, data-driven calculations.
+
+  - **Definition:** `{ type: 'rpn', streamCapacity: 128, instanceCapacity: 5 }`
 
 - **`flat_array`**: For fixed-size collections of simple data.
 
@@ -209,7 +308,7 @@ The `update` method iterates through chunks, and for each entity, it performs `h
 
 The engine provides native support for defining and working with enumerations and bitmasks directly within component schemas.
 
-When a schema with an `enum` or `bitmask` is compiled, the `ComponentManager` makes a lookup object available via `componentManager.getConstantsFor('ComponentName')`. This allows for readable code without sacrificing performance.
+When a schema with an `enum` or `bitmask` is compiled, the `ComponentManager` makes the `of` object available as a lookup table via `componentManager.getConstantsFor('ComponentName')`. This allows for readable code without sacrificing performance.
 
 ```javascript
 export class CombatSystem {
@@ -223,8 +322,8 @@ export class CombatSystem {
 		this.statusEffectsTypeID = StatusEffects
 
 		// Get the lookup objects for readable code.
-		this.WeaponState = componentManager.getConstantsFor('WeaponState')
-		this.StatusEffects = componentManager.getConstantsFor('StatusEffects')
+		this.weaponState = componentManager.getConstantsFor('WeaponState')
+		this.statusEffects = componentManager.getConstantsFor('StatusEffects')
 	}
 
 	update(deltaTime, currentTick) {
@@ -237,11 +336,11 @@ export class CombatSystem {
 				const currentFlags = statusEffectsArrays.flags[entityIndex]
 
 				// Use the cached lookup objects for readable comparisons.
-				const isStunned = (currentFlags & this.StatusEffects.FLAGS.STUNNED) !== 0
+				const isStunned = (currentFlags & this.statusEffects.STUNNED) !== 0
 
-				if (currentState === this.WeaponState.STATE.IDLE && !isStunned) {
+				if (currentState === this.weaponState.IDLE && !isStunned) {
 					// Write the new raw integer value for the enum.
-					weaponStateArrays.state[entityIndex] = this.WeaponState.STATE.ATTACKING
+					weaponStateArrays.state[entityIndex] = this.weaponState.ATTACKING
 				}
 			}
 		}
@@ -251,90 +350,63 @@ export class CombatSystem {
 
 ### Command Buffer: Safe and Efficient Structural Changes
 
-Command Buffer is a crucial mechanism for safely managing structural changes (adding/removing components, creating/destroying entities). Command buffer solves this by recording all change requests and executing them in a safe, sorted, and consolidated manner at the end of the frame.
+Command Buffer is a mechanism for managing structural changes (adding/removing components, creating/destroying entities). It solves concurrency and data consistency issues by recording all change requests and executing them in a safe, sorted, and consolidated manner at the end of the frame.
 
-#### API and Examples
+Workflow is:
 
-Systems receive a `commands` object, which is an instance of `CommandBuffer`.
+1.  **Compile a Payload:** In a system's constructor, define an entity "template" and compile it once into a `payload`. This payload also contains `mutators`.
+2.  **Mutate (Optional):** In `update` loop, use `mutators` to change parts of payload. Mutators are `TypedArray` views that modify payload's underlying `ArrayBuffer` directly.
+3.  **Command:** Pass pre-compiled payload to a command buffer method like `createEntity()`, `addComponent()`, or `setComponentData()`.
 
-**Basic Commands**
-
-Component Type IDs are used to specify which components to modify.
-
-```javascript
-this.commands.createEntity({
-	Position: { x: 100, y: 200 },
-	Health: { value: 100 },
-})
-
-this.commands.addComponent(entityID, this.healthTypeID, { value: 50 })
-
-this.commands.removeComponent(entityID, this.positionTypeID)
-
-this.commands.destroyEntity(entityID)
-```
-
-**Instantiating Prefabs**
-
-Instantiating from a prefab uses the prefab's string name and an optional object of component overrides.
-
-```javascript
-// In the update loop
-
-const overrides = {
-	Position: { x: this.muzzlePoint.x, y: this.muzzlePoint.y },
-	Velocity: { x: 1000, y: 0 },
-}
-this.commands.instantiate('fireball_projectile', overrides)
-```
-
-**Query-based Batch Operations**
-
-The `CommandBuffer` provides helper methods to apply changes to all entities matching a query.
-
-```javascript
-// In a system that applies a "burning" effect
-const burningQuery = queryManager.getQuery({ with: [Flammable], without: [BurningEffect] })
-const { BurningEffect } = componentManager.getTypeIDs()
-
-// ... some logic ...
-
-// Add the BurningEffect component to all flammable entities that aren't already burning.
-this.commands.addComponentToQuery(burningQuery, BurningEffect, { duration: 5 })
-```
-
-#### Batch Creation with Mutators
-
-For scenarios requiring the creation of many similar entities every frame, the engine provides a high-performance path using the [`PayloadCompiler`](./app/client/Managers/SystemManager/PayloadCompiler.js) that avoids repeated data processing costs.
-
-The workflow is:
-
-1.  **Compile a Payload:** In a system's constructor, define an entity "template" and compile it once into a binary `payload`. This payload also contains `mutators`.
-2.  **Mutate:** In the `update` loop, use the `mutators` to efficiently change parts of the binary payload. Mutators are `TypedArray` views that modify the payload's underlying `ArrayBuffer` directly.
-3.  **Command:** Pass the updated payload to `commands.createEntities()`.
+**Example: Creating a Single Entity**
 
 ```javascript
 // In a system's constructor:
-// 1. Compile the payload once. Initial values don't matter if they will be mutated.
-this.projectilePayload = payloadCompiler.compileCreationPayloadFromObject({
+// 1. Compile payload once.
+const { payload, mutators } = payloadCompiler.compileEntity({
 	Position: { x: 0, y: 0 },
-	Velocity: { vx: 0, vy: 0 },
+	Velocity: { x: 0, y: 0 },
 	Sprite: { texture: 'projectile_sprite' },
 })
+this.projectilePayload = payload
+this.projectileMutators = mutators
+
+// In update loop:
+// 2. Use mutators to update binary data with zero allocations.
+this.projectileMutators.position.x[0] = player.x
+this.projectileMutators.position.y[0] = player.y
+this.projectileMutators.velocity.vx[0] = aimVector.x * 1000
+this.projectileMutators.velocity.vy[0] = aimVector.y * 1000
+
+// 3. Command creation of an entity from mutated payload.
+this.commands.createEntity(this.projectilePayload)
+```
+
+**Example: Adding/Setting a Component**
+
+Same pattern applies to adding or setting component data.
+
+```javascript
+// In a system's constructor:
+const { payload, mutators } = payloadCompiler.compileComponent(positionTypeID, { x: 0, y: 0 })
+this.positionPayload = payload
+this.positionMutators = mutators
 
 // In the update loop:
+this.positionMutators.position.x[0] = newX
+this.positionMutators.position.y[0] = newY
 
-// 2. Get the mutators and the data payload.
-const { mutators, ...payload } = this.projectilePayload
+// This command works for both adding a new component and updating an existing one.
+this.commands.setComponentData(entityId, this.positionPayload)
 
-// Use mutators to update the binary data with zero allocations.
-mutators.Position.x[0] = player.x
-mutators.Position.y[0] = player.y
-mutators.Velocity.vx[0] = aimVector.x * 1000
-mutators.Velocity.vy[0] = aimVector.y * 1000
+// Create a batch of identical entities (using an un-mutated payload)
+this.commands.createEntities(this.staticPayload, 100)
 
-// 3. Command the creation of one or more entities from the mutated payload.
-this.commands.createEntities(payload, 1)
+// Remove a component
+this.commands.removeComponent(entityID, this.positionTypeID)
+
+// Destroy an entity
+this.commands.destroyEntity(entityID)
 ```
 
 ### Prefab Definitions: Manifest-Driven Approach
@@ -439,23 +511,7 @@ For debugging, testing, and performing one-off actions outside of systems, the e
 
 #### Inspecting Entities
 
-To inspect an entity's state from developer console, use `ECS.getEntity(entityID)`. This returns a debug wrapper object for entity.
-
-```javascript
-// Get the wrapper for entity with ID 123
-const myEntity = ECS.getEntity(123)
-
-// See all components and their data
-console.log(myEntity.components)
-
-// Get a specific component instance
-const position = myEntity.getComponent('Position')
-
-// Check for a component
-if (myEntity.hasComponent('PlayerTag')) {
-	// The entity has the PlayerTag component
-}
-```
+To inspect an entity's state from the developer console, use `ecs.viewEntity(entityID)`. This returns a plain object containing a snapshot of the entity's data.
 
 #### Immediate-Mode Commands
 
@@ -463,28 +519,23 @@ if (myEntity.hasComponent('PlayerTag')) {
 
 ```javascript
 // Create a new entity with components
-const newEntityId = ECS.createEntity({
-	Position: { x: 10, y: 20 },
-	Velocity: { x: 5, y: 0 },
+const newEntityId = ecs.createEntity({
+	position: { x: 10, y: 20 },
+	velocity: { x: 5, y: 0 },
 })
 
-// Add a component to an existing entity.
+ecs.addComponent(newEntityId, Health, { value: 100 })
 
-ECS.addComponent(newEntityId, Health, { value: 100 })
+ecs.removeComponent(newEntityId, Velocity)
 
-// Remove a component
-ECS.removeComponent(newEntityId, Velocity)
+ecs.destroyEntity(newEntityId)
 
-// Destroy an entity
-ECS.destroyEntity(newEntityId)
-
-// Instantiate from a prefab
-const sword = ECS.instantiate('obsidian_sword')
+const sword = ecs.instantiate('obsidian_sword')
 ```
 
 ## Acknowledgements
 
-Architecture heavily inspired by Unity's DOTS, Bevy and data-driven mod-friendly games like Minecraft, Don't Starve.
+Inspired by ECS engines like Unity DoTS and Bevy.
 
 ## Roadmap and Future Directions
 

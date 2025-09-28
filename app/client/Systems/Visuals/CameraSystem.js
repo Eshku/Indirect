@@ -1,11 +1,11 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, layerManager, gameManager, entityManager } =
-	theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs, layerManager, gameManager } = engine.getManagers()
+const { queryManager } = ecs
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
 
 export class CameraSystem {
 	constructor() {
-		const { playerTag, position } = componentManager.getTypeIDs()
+		const { playerTag, position } = ecs.getTypeIDs()
 		Object.assign(this, { playerTag, position })
 
 		this.playerQuery = queryManager.getQuery({

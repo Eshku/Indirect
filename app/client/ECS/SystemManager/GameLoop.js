@@ -134,8 +134,8 @@ export class GameLoop {
 	/**
 	 * @param {import('./SystemManager.js').SystemManager} systemManager - The system manager instance.
 	 */
-	constructor(systemManager) {
-		this.systemManager = systemManager
+	constructor() {
+
 
 		this.lastTick = -1
 		this.currentTick = 0
@@ -154,9 +154,13 @@ export class GameLoop {
 	/**
 	 * Initializes the game loop with the PIXI application instance.
 	 */
-	init() {
-		this.app = this.systemManager.app
-		this.renderer = this.systemManager.renderer
+	async init(ecs) {
+		this.ecs = ecs
+		//console.log(ecs)
+
+		this.systemManager = ecs.systemManager
+		this.app = this.ecs.systemManager.app
+		this.renderer = this.ecs.systemManager.renderer
 
 		// We no longer hook into PIXI's runners. We drive the loop ourselves.
 	}

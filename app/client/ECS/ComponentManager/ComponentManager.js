@@ -75,52 +75,16 @@
 const { loadAllComponents } = await import(`${PATH_ECS}/ComponentManager/componentLoader.js`)
 const { schemaCompiler } = await import('./SchemaCompiler.js')
 const { componentDataReconstructor } = await import('./ComponentDataReconstructor.js')
+const {toCamelCase} = await import(`${PATH_CORE}/utils/stringUtils.js`)
 
 import * as Schema from './ComponentSchema.js'
 
-/**
- * Converts a PascalCase string to a smart camelCase, correctly handling acronyms at the start of the string.
- * - `Position` -> `position`
- * - `PlayerTag` -> `playerTag`
- * - `RWMTag` -> `rwmTag` (acronym at the start)
- * - `URLShortener` -> `urlShortener` (acronym followed by another word)
- * - `PlayerID` -> `playerID` (acronyms not at the start are treated as regular PascalCase)
- *
- * Note: This function is designed to only handle acronyms at the beginning of a string.
- * Mid-string acronyms are intentionally not converted to lowercase to keep the logic simple and predictable.
- * For example, `PlayerID` becomes `playerID`, not `playerId`.
- *
- * @param {string} str The PascalCase string to convert.
- * @returns {string} The camelCased string.
- */
-function toCamelCase(str) {
-	if (!str) return '';
-
-	// Match the initial sequence of uppercase letters.
-	const acronymRegex = /^[A-Z0-9]+(?=[A-Z0-9][a-z]|$)/;
-	const match = str.match(acronymRegex);
-
-	if (match) {
-		// This is an acronym (like RWM or URL). Lowercase the whole acronym.
-		const acronym = match[0];
-		return acronym.toLowerCase() + str.slice(acronym.length);
-	} else {
-		// This is standard PascalCase (like Position or FlatArray). Lowercase only the first letter.
-		return str.charAt(0).toLowerCase() + str.slice(1)
-	}
-}
-
 export class ComponentManager {
 	constructor() {
-		// The manager no longer holds the data itself. It orchestrates the population
-		// of the standalone ComponentSchema module.
-		// For backward compatibility during refactoring, it provides getters that
-		// point to the new central data store.
 		this.componentInfo = Schema.componentInfo
 		this.componentConstants = Schema.componentConstants
 		this.compiledDefaults = Schema.compiledDefaults
 
-		this.archetypeManager = null // self-reference after init
 		this.propertyGroupManager = null // self-reference after init
 		this.entityManager = null // self-reference after init
 		this._cachedComponentsObject = null
@@ -131,30 +95,23 @@ export class ComponentManager {
 		return Schema.nextComponentTypeID
 	}
 
-	async init() {
+	async init(ecs) {
 		const componentModules = await loadAllComponents()
 
-		const { theManager} = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-
-		const { entityManager, prefabManager, archetypeManager } = theManager.getManagers()
-		this.entityManager = entityManager
-		this.prefabManager = prefabManager
-		this.archetypeManager = archetypeManager
-
-		// Explicitly import managers we depend on that initialize before us.
+		this.entityManager = ecs.entityManager
 
 		this.propertyGroupManager = (await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)).propertyGroupManager
 		await this.registerComponents(componentModules)
 		componentDataReconstructor.init({
-			archetypeManager: this.archetypeManager,
+			entityManager: this.entityManager,
 		})
 	}
 
 	async registerComponents(componentModules) {
-		// Register all the loaded component classes.
 		for (const { moduleName, module, category } of componentModules) {
+
+			// Default exports supported...for now //?
 			const componentSchema = module.default || module[moduleName]
-			//default exports are allowed, but ew
 			if (componentSchema && typeof componentSchema === 'object') {
 				this.registerComponent(moduleName, componentSchema)
 			} else {
@@ -178,8 +135,6 @@ export class ComponentManager {
 		if (Schema.nextComponentTypeID >= Schema.MAX_COMPONENTS) {
 			const errorMsg = `ComponentManager: Cannot register component ${componentName}. Maximum component limit of ${Schema.MAX_COMPONENTS} reached.`
 			console.error(errorMsg)
-			// This is a critical architectural limit. Throwing an error stops execution
-			// and makes it clear that MAX_COMPONENTS needs to be increased if this is intentional.
 			throw new Error(errorMsg)
 		}
 
@@ -188,29 +143,24 @@ export class ComponentManager {
 			const typeID = Schema.nextComponentTypeID
 			Schema.setNextComponentTypeID(typeID + 1)
 
-			// Convert to camelCase and store it as the canonical name.
 			Schema.componentNames[typeID] = toCamelCase(componentName)
-			Schema.componentBitFlags[typeID] = 1n << BigInt(typeID) // Assign a unique bit flag
+			Schema.componentBitFlags[typeID] = 1n << BigInt(typeID)
 			this._parseAndStoreSchema(componentName, schema, typeID)
 
-			// Store by canonical (lowercase) name for case-insensitive lookup
 			Schema.componentNameToTypeID.set(lowerCaseName, typeID)
 
-			// Invalidate the cache whenever a new component is registered.
 			this._cachedComponentsObject = null
 		}
 	}
 
 	/**
-	 * Parses a component's schema and stores the structured information for the ArchetypeManager.
+	 * Parses a component's schema and stores the structured information.
 	 * @param {string} componentName - The name of the component.
 	 * @param {object} schema - The component's schema object.
 	 * @param {number} typeID - The component's type ID.
 	 * @private
 	 */
 	_parseAndStoreSchema(componentName, schema, typeID) {
-		// Instantiate the unified compiler. It handles both parsing and program generation.
-
 		const { componentInfo, constants, compiledDefaults } = schemaCompiler.compile(componentName, schema, typeID)
 		Schema.componentInfo[typeID] = componentInfo
 		Schema.componentConstants[typeID] = constants
@@ -273,7 +223,7 @@ export class ComponentManager {
 
 		this._cachedComponentsObject = {}
 		for (let i = 0; i < Schema.nextComponentTypeID; i++) {
-			const name = Schema.componentNames[i] // This is now camelCase
+			const name = Schema.componentNames[i]
 			this._cachedComponentsObject[name] = this.componentConstants[i]
 		}
 
@@ -289,7 +239,7 @@ export class ComponentManager {
 	getTypeIDs() {
 		const idMap = {}
 		for (let i = 0; i < Schema.nextComponentTypeID; i++) {
-			const name = Schema.componentNames[i] // This is now camelCase
+			const name = Schema.componentNames[i]
 			if (name) {
 				idMap[name] = i
 			}
@@ -319,6 +269,7 @@ export class ComponentManager {
 	 * @returns {object | undefined} The read-only constant map (e.g., `{ LEFT: 1, RIGHT: 2, ... }`), or undefined if not found.
 	 */
 	getConstantsForProperty(componentIdentifier, propertyName) {
+
 		const componentConstants = this.getConstantsFor(componentIdentifier)
 		if (!componentConstants) {
 			console.warn(`ComponentManager: Could not find constants for component "${componentIdentifier}".`)
@@ -354,13 +305,11 @@ export class ComponentManager {
 	 * @returns {string[]} An array of component names.
 	 */
 	getComponentNamesForArchetype(archetypeId) {
-		const typeIDs = this.archetypeManager.archetypeComponentTypeIDs[archetypeId]
+		const typeIDs = this.entityManager.archetypeComponentTypeIDs[archetypeId]
 		if (!typeIDs) {
-			// This can happen if the archetypeId is invalid or not yet fully registered.
 			console.warn(`ComponentManager: Could not find type IDs for archetype ${archetypeId}.`)
 			return []
 		}
-		// The 'typeIDs' is a Set. Convert it to an array to map over it.
 		return [...typeIDs].map(id => Schema.componentNames[id])
 	}
 
@@ -373,12 +322,10 @@ export class ComponentManager {
 	 * @returns {boolean} True if the archetype contains the component type, false otherwise.
 	 */
 	hasComponent(archetype, componentTypeID) {
-		// This check operates on the archetype's structure, not a specific entity,
-		// as all entities in an archetype have the same components.
 		if (archetype === undefined) {
 			return false
 		}
-		return this.archetypeManager.hasComponentType(archetype, componentTypeID)
+		return this.entityManager.hasComponentType(archetype, componentTypeID)
 	}
 }
 

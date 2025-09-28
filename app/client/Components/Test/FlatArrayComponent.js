@@ -10,7 +10,13 @@ export const FlatArrayComponent = {
 	},
 	enumArray: {
 		type: 'flat_array',
-		of: { type: 'enum', of: ['VAL1', 'VAL2'] },
+		of: {
+			type: 'enum',
+			of: {
+				VAL1: 0,
+				VAL2: 1,
+			},
+		},
 		capacity: 3,
 		default: [],
 	},

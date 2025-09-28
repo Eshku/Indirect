@@ -1,5 +1,5 @@
-const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
-const { layerManager } = await import(`${PATH_MANAGERS}/LayerManager/LayerManager.js`)
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { gameManager, layerManager } = engine.getManagers()
 
 export class FpsCounter {
 	constructor() {

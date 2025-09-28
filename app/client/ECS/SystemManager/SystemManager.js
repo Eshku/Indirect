@@ -2,7 +2,7 @@ const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.j
 
 import { loadAllSystems } from './systemLoader.js'
 import { systemRegistry } from './SystemRegistry.js'
-import { GameLoop } from './GameLoop.js'
+
 import { systemSchedule } from './systemConfig.js'
 import { CommandBuffer } from './CommandBuffer.js'
 import { CommandBufferExecutor } from './CommandBufferExecutor.js'
@@ -24,7 +24,6 @@ const { topologicalSort } = await import(`${PATH_CORE}/Algorithms/TopologicalSor
  */
 export class SystemManager {
 	constructor() {
-		this.gameLoop = new GameLoop(this)
 
 		this.app = null
 		this.ticker = null
@@ -83,27 +82,31 @@ export class SystemManager {
 	 * 2. Registers system classes.
 	 * 3. Configures system execution order and frequencies.
 	 */
-	async init() {
+	async init(ecs) {
+		const {GameLoop} = await import(`${PATH_ECS}/SystemManager/GameLoop.js`)
+
+
+		this.gameLoop = new GameLoop()
+
+
+		// Get our manager dependencies from the ECS instance.
+		this.entityManager = ecs.entityManager
+		this.archetypeManager = ecs.archetypeManager
+		this.componentManager = ecs.componentManager
+		this.queryManager = ecs.queryManager
+		this.prefabManager = ecs.prefabManager
+
+
 		const systemModules = await loadAllSystems()
 
-		const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-		const { entityManager, prefabManager, archetypeManager, componentManager, queryManager } = theManager.getManagers()
-
-		this.entityManager = entityManager
-		this.archetypeManager = archetypeManager
-		this.componentManager = componentManager
-		this.queryManager = queryManager
-		this.prefabManager = prefabManager
 
 		this.app = gameManager.getApp()
 		this.renderer = this.app.renderer
 		this.ticker = this.app.ticker
 
-		this.commandBuffer = new CommandBuffer(this.prefabManager, this.archetypeManager)
-		this.commandBufferExecutor = new CommandBufferExecutor(this.entityManager, this.archetypeManager)
+		this.commandBuffer = new CommandBuffer()
 
-		// Initialize the payload compiler now that all managers are ready.
-		payloadCompiler.init()
+		this.commandBufferExecutor = new CommandBufferExecutor()
 
 		systemRegistry.registerSystemClasses(systemModules)
 
@@ -114,7 +117,7 @@ export class SystemManager {
 		this._rebuildExecutionOrderMap() // --- Configuration Validation Step ---
 		this._validateSystemConfiguration()
 		// Initialize the game loop, which will handle its own prerender hook.
-		this.gameLoop.init()
+		await this.gameLoop.init(ecs)
 	}
 
 	/**
@@ -740,5 +743,3 @@ export class SystemManager {
 		this._systemConfig.clear()
 	}
 }
-
-export const systemManager = new SystemManager()

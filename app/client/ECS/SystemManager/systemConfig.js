@@ -78,20 +78,17 @@ export const systemSchedule = {
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
-	],   
-
-	// Development and stress-testing.
+	],
 
 	Benchmark: [
 		/* { name: 'RWMBenchmark', frequency: 'visuals' }, */
-		/* { name: 'StructuralChangeBenchmarkSystem', frequency: 'visuals' }, */
-		/* { name: 'CreationDestructionBenchmarkSystem', frequency: 'visuals' }, */
+		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
 	Test: [
 		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
 		/* {name:'SchemaTestSystem', frequency: 'none'}, */
-		/* {name:'TopologicalSortTestSystem', frequency: 'none'}, */
+		/* { name: 'ParallelismTestSystem', frequency: 'visuals' }, */
 	],
 }

@@ -1,5 +1,7 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { componentManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { componentManager } = ecs
+
 
 const { testManager } = await import(`${PATH_CLIENT}/Managers/TestManager/TestManager.js`)
 const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManager/TestAPI.js`)
@@ -10,17 +12,33 @@ const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManag
  */
 export class SchemaTestSystem {
 	constructor() {
+
+
+		const {
+			primitiveComponent: primitiveComponentID,
+			stringComponent: stringComponentID,
+			enumComponent: enumComponentID,
+			bitmaskComponent: bitmaskComponentID,
+			flatArrayComponent: flatArrayComponentID,
+			rpnComponent: rpnComponentID,
+		} = componentManager.getTypeIDs();
+
+		// Get the canonical string names for the high-level ECS API.
+		const componentNames = Object.keys(componentManager.getTypeIDs());
 		this.testConfig = {
 			primitiveTypes: true,
 			internedStrings: true,
 			enums: true,
+			enumConstants: true,
 			bitmasks: true,
+			bitmaskConstants: true,
 			flatArrayPrimitives: true,
 			flatArrayEnums: true,
 			flatArrayStrings: true,
 			flatArrayPartial: true,
 			rpn: true,
 		}
+
 	}
 
 	async init() {
@@ -39,6 +57,7 @@ export class SchemaTestSystem {
 						boolean: true,
 					}
 					const entityId = ECS.createEntity({ PrimitiveComponent: initialData })
+					
 					const retrievedData = ECS.getComponent(entityId, 'PrimitiveComponent')
 
 					// f32 has precision limitations, so we check it with a tolerance.
@@ -63,6 +82,7 @@ export class SchemaTestSystem {
 				it('should correctly store and retrieve interned strings', () => {
 					const initialData = { value: 'hello_world' }
 					const entityId = ECS.createEntity({ StringComponent: initialData })
+					
 					const retrievedData = ECS.getComponent(entityId, 'StringComponent')
 
 					expect(retrievedData.value).toBe('hello_world')
@@ -73,30 +93,53 @@ export class SchemaTestSystem {
 
 			if (this.testConfig.enums) {
 				it('should correctly store and retrieve enum values', () => {
-					const initialData = { state: 'JUMPING' }
+					const stateConstants = componentManager.getConstantsForProperty('EnumComponent', 'state')
+					const initialData = { state: stateConstants.JUMPING } // Use numeric value
 					const entityId = ECS.createEntity({ EnumComponent: initialData })
+					
 					const retrievedData = ECS.getComponent(entityId, 'EnumComponent')
 
-					expect(retrievedData.state).toBe('JUMPING')
+					// The component now returns the raw numeric value.
+					expect(retrievedData.state).toBe(stateConstants.JUMPING)
 
 					ECS.destroyEntity(entityId)
 				})
 			}
 
+			if (this.testConfig.enumConstants) {
+				it('should correctly retrieve enum constants via the ComponentManager', () => {
+					const stateConstants = componentManager.getConstantsForProperty('EnumComponent', 'state')
+					expect(stateConstants).toBeDefined()
+					expect(stateConstants).toEqual({ IDLE: 0, RUNNING: 1, JUMPING: 2 })
+
+					//nothing to destroy silly
+					//ECS.destroyEntity(entityId)
+				})
+			}
+
 			if (this.testConfig.bitmasks) {
 				it('should correctly store and retrieve bitmask values', () => {
-					const initialData = { flags: ['FLAG_A', 'FLAG_C'] }
+					const flagConstants = componentManager.getConstantsForProperty('BitmaskComponent', 'flags')
+					const initialData = { flags: flagConstants.FLAG_A | flagConstants.FLAG_C } // Use numeric value
 					const entityId = ECS.createEntity({ BitmaskComponent: initialData })
+					
 					const retrievedData = ECS.getComponent(entityId, 'BitmaskComponent')
 
-					// The order of flags is not guaranteed, so sort both arrays to ensure
-					// the content is identical before comparing.
-					const expectedFlags = ['FLAG_A', 'FLAG_C'].sort()
-					const actualFlags = retrievedData.flags.sort()
-					expect(actualFlags).toEqual(expectedFlags)
-					expect(retrievedData.flags.length).toBe(2)
+					// The component now returns the raw numeric bitmask.
+					const expectedFlags = flagConstants.FLAG_A | flagConstants.FLAG_C
+					expect(retrievedData.flags).toBe(expectedFlags)
 
 					ECS.destroyEntity(entityId)
+				})
+			}
+
+			if (this.testConfig.bitmaskConstants) {
+				it('should correctly retrieve bitmask constants via the ComponentManager', () => {
+					const flagConstants = componentManager.getConstantsForProperty('BitmaskComponent', 'flags')
+					expect(flagConstants).toBeDefined()
+					expect(flagConstants).toEqual({ FLAG_A: 1, FLAG_B: 2, FLAG_C: 4, FLAG_D: 8 })
+
+					//ECS.destroyEntity(entityId)
 				})
 			}
 
@@ -106,6 +149,7 @@ export class SchemaTestSystem {
 						primitiveArray: [10, -20, 30],
 					}
 					const entityId = ECS.createEntity({ FlatArrayComponent: initialData })
+					
 					const retrievedData = ECS.getComponent(entityId, 'FlatArrayComponent')
 
 					expect(retrievedData.primitiveArray).toEqual([10, -20, 30])
@@ -119,13 +163,15 @@ export class SchemaTestSystem {
 
 			if (this.testConfig.flatArrayEnums) {
 				it('should correctly store and retrieve a flat array of enums', () => {
+					const enumArrayConstants = componentManager.getConstantsForProperty('FlatArrayComponent', 'enumArray')
 					const initialData = {
-						enumArray: ['VAL2', 'VAL1'],
+						enumArray: [enumArrayConstants.VAL2, enumArrayConstants.VAL1], // Use numeric values
 					}
 					const entityId = ECS.createEntity({ FlatArrayComponent: initialData })
 					const retrievedData = ECS.getComponent(entityId, 'FlatArrayComponent')
 
-					expect(retrievedData.enumArray).toEqual(['VAL2', 'VAL1'])
+					// The component now returns raw numeric values in the array.
+					expect(retrievedData.enumArray).toEqual([enumArrayConstants.VAL2, enumArrayConstants.VAL1])
 					expect(retrievedData.primitiveArray).toEqual([])
 					expect(retrievedData.stringArray).toEqual([])
 

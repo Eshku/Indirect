@@ -7,7 +7,12 @@ export const BitmaskComponent = {
 	 */
 	flags: {
 		type: 'bitmask',
-		of: ['FLAG_A', 'FLAG_B', 'FLAG_C', 'FLAG_D'],
+		of: {
+			FLAG_A: 1 << 0,
+			FLAG_B: 1 << 1,
+			FLAG_C: 1 << 2,
+			FLAG_D: 1 << 3,
+		},
 		default: [],
 	},
 }

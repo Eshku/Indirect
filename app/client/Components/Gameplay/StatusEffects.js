@@ -9,7 +9,16 @@ export const StatusEffects = {
 	 */
 	flags: {
 		type: 'bitmask',
-		of: ['NONE', 'STUNNED', 'PARALYZED', 'ROOTED', 'SILENCED', 'POISONED', 'BLEEDING', 'BURNING'],
-		default: ['NONE'],
+		of: {
+			NONE: 0,
+			STUNNED: 1 << 0,
+			PARALYZED: 1 << 1,
+			ROOTED: 1 << 2,
+			SILENCED: 1 << 3,
+			POISONED: 1 << 4,
+			BLEEDING: 1 << 5,
+			BURNING: 1 << 6,
+		},
+		default: 0, // NONE
 	},
 }

@@ -8,8 +8,11 @@ export const LifecycleState = {
 	 */
 	flags: {
 		type: 'bitmask',
-		of: ['ACTIVE', 'DYING', 'POOLED'],
-		default: ['POOLED'],
+		of: {
+			ACTIVE: 1 << 0,
+			DYING: 1 << 1,
+			POOLED: 1 << 2,
+		},
+		default: 1 << 2, // POOLED
 	},
 }
-

@@ -33,8 +33,6 @@ class InputManager {
 	}
 
 	async init() {
-		this.theManager = (await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)).theManager
-
 		this.loadControlScheme()
 		this.setupInputListeners()
 	}

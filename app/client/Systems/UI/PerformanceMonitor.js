@@ -1,4 +1,7 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const {systemManager} = ecs
+
 
 // --- Constants for Configuration ---
 const PANEL_UPDATE_INTERVAL_S = 0.5 // Seconds
@@ -58,7 +61,7 @@ export class PerformanceMonitor {
 	}
 
 	init() {
-		this.systemManager = theManager.getManager('SystemManager')
+		this.systemManager = systemManager
 		this._createPanel()
 		// @ts-ignore
 		window.performanceMonitor = this

@@ -1,4 +1,4 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 
 /**
  * Manages UI elements that can be interacted with, for effects like hovering.
@@ -24,7 +24,7 @@ export class UiManager {
 		const { Hotbar } = await import(`${PATH_UI}/Hotbar.js`)
 		const { ItemTooltip } = await import(`${PATH_UI}/ItemTooltip.js`)
 
-		const { gameManager, layerManager } = theManager.getManagers()
+		const { gameManager, layerManager } = engine.getManagers()
 
 		const pixiApp = await gameManager.getApp()
 

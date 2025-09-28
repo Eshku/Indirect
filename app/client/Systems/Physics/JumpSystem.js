@@ -1,10 +1,10 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager } = theManager.getManagers()
-
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager } = ecs
 
 export class JumpSystem {
 	constructor() {
-		const { playerTag, position, velocity, jump, isGrounded } = componentManager.getTypeIDs()
+		const { playerTag, position, velocity, jump, isGrounded } = ecs.getTypeIDs()
 		Object.assign(this, { playerTag, position, velocity, jump, isGrounded })
 
 		this.query = queryManager.getQuery({

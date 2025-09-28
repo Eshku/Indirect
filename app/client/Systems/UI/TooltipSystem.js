@@ -1,5 +1,5 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { uiManager, entityManager, componentManager, archetypeManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs, uiManager } = engine.getManagers()
 
 const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
@@ -42,8 +42,8 @@ export class TooltipSystem {
 		this.targetPosition = { x: 0, y: 0 }
 		this.hotbar = null
 		
-		const { tooltip, parent, displayName, damage, cooldown, range, strength, dexterity, intelligence } =
-			componentManager.getTypeIDs()
+		const { tooltip, parent, displayName, damage, cooldown, range, strength, dexterity, intelligence } = ecs.getTypeIDs()
+
 		Object.assign(this, { tooltip, parent, displayName, damage, cooldown, range })
 
 		this.statComponentTypeIds = new Map()
@@ -170,15 +170,12 @@ export class TooltipSystem {
 			return cachedResult
 		}
 
-		if (!entityManager.isEntityActive(itemEntityId)) return null
+		if (!ecs.entityManager.isEntityActive(itemEntityId)) return null
 
-		const archetypeId = entityManager.getArchetypeForEntity(itemEntityId)
+		const archetypeId = ecs.entityManager.getArchetypeForEntity(itemEntityId)
 		if (archetypeId === null) return null
 
-		const entityMap = archetypeManager.archetypeEntityMaps[archetypeId]
-		if (!entityMap) return null
-
-		const location = entityMap.get(itemEntityId)
+		const location = ecs.entityManager.getEntityLocation(itemEntityId)
 		if (!location) return null
 
 		const { chunk, indexInChunk } = location
@@ -304,17 +301,14 @@ export class TooltipSystem {
 
 	getOwnerStats(ownerId) {
 		const stats = {}
-		if (ownerId === null || !entityManager.isEntityActive(ownerId)) {
+		if (ownerId === null || !ecs.entityManager.isEntityActive(ownerId)) {
 			return stats
 		}
 
-		const ownerArchetypeId = entityManager.getArchetypeForEntity(ownerId)
+		const ownerArchetypeId = ecs.entityManager.getArchetypeForEntity(ownerId)
 		if (ownerArchetypeId === null) return stats
 
-		const ownerEntityMap = archetypeManager.archetypeEntityMaps[ownerArchetypeId]
-		if (!ownerEntityMap) return stats
-
-		const location = ownerEntityMap.get(ownerId)
+		const location = ecs.entityManager.getEntityLocation(ownerId)
 		if (!location) return stats
 
 		const { chunk, indexInChunk } = location

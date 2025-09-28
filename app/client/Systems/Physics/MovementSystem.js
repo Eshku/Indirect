@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager } = ecs
 
 /**
  * This system is responsible for horizontal character movement based on their `MovementIntent`.
@@ -9,7 +10,7 @@ const { queryManager, componentManager } = theManager.getManagers()
 export class MovementSystem {
 	constructor() {
 		// Get all numeric IDs at once for efficient use in the update loop.
-		const { velocity, speed, movementIntent, collisionFlags } = componentManager.getTypeIDs()
+		const { velocity, speed, movementIntent, collisionFlags } = ecs.getTypeIDs()
 		Object.assign(this, { velocity, speed, movementIntent, collisionFlags })
 
 		// Use numeric type IDs to define the query's structure for efficiency.
@@ -17,8 +18,8 @@ export class MovementSystem {
 			with: [velocity, speed, movementIntent, collisionFlags],
 		})
 
-		// Use the numeric type ID to get constants.
-		this.COLLISION_FLAGS = componentManager.getConstantsForProperty(collisionFlags, 'collisionFlags')
+		// Cache the constants for the 'collisionFlags' property using a camelCase convention.
+		this.collisionFlagsConstants = ecs.componentManager.getConstantsForProperty(collisionFlags, 'collisionFlags')
 	}
 
 	update(deltaTime, currentTick) {
@@ -34,16 +35,16 @@ export class MovementSystem {
 			const intentX = intentArrays.desiredX
 			const speedVal = speedArrays.value
 			const collisionFlagsArray = collisionFlagsArrays.collisionFlags
-			const COLLISION_FLAGS = this.COLLISION_FLAGS // Local reference for the tight loop
+			const collisionFlags = this.collisionFlagsConstants // Local reference for the tight loop
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				const desiredMoveX = intentX[indexInChunk] // e.g., -1, 0, 1
 				const currentCollisionFlags = collisionFlagsArray[indexInChunk] // raw bitmask integer
 				let finalVelX = desiredMoveX * speedVal[indexInChunk] // Calculate desired velocity
 
-				// Use the cached constants for direct, highly optimizable bitwise checks.
-				const collidesRight = (currentCollisionFlags & COLLISION_FLAGS.RIGHT) !== 0
-				const collidesLeft = (currentCollisionFlags & COLLISION_FLAGS.LEFT) !== 0
+				// Use the cached constants for direct, bitwise checks.
+				const collidesRight = (currentCollisionFlags & collisionFlags.RIGHT) !== 0
+				const collidesLeft = (currentCollisionFlags & collisionFlags.LEFT) !== 0
 
 				// Apply collision logic
 				if ((desiredMoveX > 0 && collidesRight) || (desiredMoveX < 0 && collidesLeft)) {

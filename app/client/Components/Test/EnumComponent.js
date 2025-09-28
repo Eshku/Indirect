@@ -7,7 +7,11 @@ export const EnumComponent = {
 	 */
 	state: {
 		type: 'enum',
-		of: ['IDLE', 'RUNNING', 'JUMPING'],
+		of: {
+			IDLE: 0,
+			RUNNING: 1,
+			JUMPING: 2,
+		},
 		default: 'IDLE',
 	},
 }

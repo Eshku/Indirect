@@ -1,5 +1,4 @@
 /**
- * A tag component to identify entities created by the LogicBenchmarkSystem for logic-only tests.
+ * A tag component to isolate entities for the Read/Write/Modify (RWM) benchmark.
  */
 export const RWMTag = {}
-

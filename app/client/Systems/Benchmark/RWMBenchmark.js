@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, archetypeManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
@@ -7,7 +8,7 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
  */
 export class RWMBenchmark {
 	constructor() {
-		const { position, velocity, rwmTag } = componentManager.getTypeIDs()
+		const { position, velocity, rwmTag } = ecs.getTypeIDs()
 		Object.assign(this, { position, velocity, rwmTag })
 
 		this.query = queryManager.getQuery({

@@ -1,5 +1,7 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, layerManager, assetManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs, layerManager, assetManager } = engine.getManagers()
+
+const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 
@@ -13,7 +15,7 @@ const UNINITIALIZED_REF = 0
  */
 export class SpriteFactorySystem {
 	constructor() {
-		const { spriteDescriptor, viewable } = componentManager.getTypeIDs()
+		const { spriteDescriptor, viewable } = ecs.getTypeIDs()
 		Object.assign(this, { spriteDescriptor, viewable })
 
 		this.initializationQuery = queryManager.getQuery({

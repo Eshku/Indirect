@@ -1,11 +1,10 @@
 /**
  * A standalone module that holds all compiled component schema data.
- * This data is generated at startup by the ComponentManager and SchemaCompiler.
+ * This data is generated at startup by ComponentManager and SchemaCompiler.
  *
  * By centralizing this static data, we decouple all other engine systems
- * from the ComponentManager instance. Core modules like ArchetypeManager,
- * PayloadCompiler, and Chunk can import this data directly, which is crucial
- * for future AOT compilation and multi-threading.
+ * from ComponentManager instance. Core modules like ArchetypeManager,
+ * PayloadCompiler, and Chunk can import this data directly.
  */
 
 export const TYPED_ARRAY_MAP = {

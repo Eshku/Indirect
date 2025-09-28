@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, layerManager, assetManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs, layerManager, assetManager } = engine.getManagers()
+const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 
@@ -9,7 +10,7 @@ const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningT
  */
 export class PlatformFactorySystem {
 	constructor() {
-		const { shapeDescriptor, platformTag, position, viewable, collider } = componentManager.getTypeIDs()
+		const { shapeDescriptor, platformTag, position, viewable, collider } = ecs.getTypeIDs()
 		Object.assign(this, { shapeDescriptor, viewable, collider })
 
 		this.initializationQuery = queryManager.getQuery({

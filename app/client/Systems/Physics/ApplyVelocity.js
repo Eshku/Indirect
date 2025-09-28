@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager } = ecs
 
 /**
  * A final-pass physics system that integrates velocity into position.
@@ -9,7 +10,7 @@ const { queryManager, componentManager } = theManager.getManagers()
  */
 export class ApplyVelocity {
 	constructor() {
-		const { position, velocity } = componentManager.getTypeIDs()
+		const { position, velocity } = ecs.getTypeIDs()
 		Object.assign(this, { position, velocity })
 
 		this.query = queryManager.getQuery({

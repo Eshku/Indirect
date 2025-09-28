@@ -13,15 +13,16 @@
 
 const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 import * as Schema from './ComponentSchema.js'
+const { reconstruct: reconstructWithInterpreter } = await import('./ComponentInterpreter.js')
 
 class ComponentDataReconstructor {
 	constructor() {
 		// This service is stateless.
-		this.archetypeManager = null
+		this.entityManager = null
 	}
 
-	init({ archetypeManager }) {
-		this.archetypeManager = archetypeManager
+	init({ entityManager }) {
+		this.entityManager = entityManager
 	}
 
 	/**
@@ -32,12 +33,12 @@ class ComponentDataReconstructor {
 	 * @returns {object | undefined} The reconstructed component data, or undefined if not found.
 	 */
 	reconstruct(entityId, typeID) {
-		const archetypeId = this.archetypeManager.entityManager.getArchetypeForEntity(entityId)
-		if (archetypeId === undefined || !this.archetypeManager.hasComponentType(archetypeId, typeID)) {
+		const archetypeId = this.entityManager.getArchetypeForEntity(entityId)
+		if (archetypeId === undefined || !this.entityManager.hasComponentType(archetypeId, typeID)) {
 			return undefined
 		}
 
-		const location = this.archetypeManager.archetypeEntityMaps[archetypeId]?.get(entityId)
+		const location = this.entityManager.getEntityLocation(entityId)
 		if (!location) return undefined
 
 		const { chunk, indexInChunk } = location
@@ -52,81 +53,25 @@ class ComponentDataReconstructor {
 	 * @returns {object} The reconstructed shared data (e.g., `{ value: 'common' }`).
 	 */
 	reconstructShared(typeID, rawSharedData) {
-		if (!rawSharedData) return {}
-
-		const reconstructedData = {}
-		const info = Schema.componentInfo[typeID]
-
-		for (const propName in rawSharedData) {
-			const rep = info.representations[propName]
-			const rawValue = rawSharedData[propName]
-
-			if (!rep) {
-				reconstructedData[propName] = rawValue
-				continue
-			}
-
-			switch (rep.type) {
-				case 'enum':
-					reconstructedData[propName] = rep.valueMap[rawValue]
-					break
-				case 'string':
-					reconstructedData[propName] = stringInterningTable.get(rawValue)
-					break
-				default: // Primitives
-					reconstructedData[propName] = rawValue
-					break
-			}
-		}
-		return reconstructedData
+		// Delegate directly to the centralized interpreter.
+		return reconstructWithInterpreter(typeID, rawSharedData)
 	}
 
 	_reconstructFromChunk(chunk, indexInChunk, typeID) {
-		const componentData = {}
+		const rawData = {}
 		const info = Schema.componentInfo[typeID]
 		const componentArrays = chunk.componentArrays[typeID]
 
-		for (const propName in info.representations) {
-			const rep = info.representations[propName]
-			if (!rep || rep.shared) continue
-
-			if (propName === 'sharedGroupId') {
-				if (componentArrays[propName]) componentData[propName] = componentArrays[propName][indexInChunk]
-				continue
-			}
-
-			switch (rep.type) {
-				case 'rpn':
-					break // Composite type, handled by its flattened properties.
-				case 'flat_array': {
-					const sourceArray = []
-					const len = componentArrays[rep.lengthProperty][indexInChunk]
-					const itemRep = rep.itemRepresentation
-					for (let i = 0; i < len; i++) {
-						const rawValue = componentArrays[`${propName}${i}`][indexInChunk]
-						if (itemRep.originalType === 'string') sourceArray.push(stringInterningTable.get(rawValue))
-						else if (itemRep.originalType === 'enum') sourceArray.push(itemRep.valueMap[rawValue])
-						else sourceArray.push(rawValue)
-					}
-					componentData[propName] = sourceArray
-					break
-				}
-				case 'enum':
-					componentData[propName] = rep.valueMap[componentArrays[propName][indexInChunk]]
-					break
-				case 'bitmask':
-					const rawValue = componentArrays[propName][indexInChunk]
-					componentData[propName] = Object.keys(rep.flagMap).filter(flag => (rawValue & rep.flagMap[flag]) !== 0)
-					break
-				case 'string':
-					componentData[propName] = stringInterningTable.get(componentArrays[propName][indexInChunk])
-					break
-				default: // Primitives
-					if (componentArrays?.[propName]) componentData[propName] = componentArrays[propName][indexInChunk]
-					break
+		// First, gather all the raw, flattened data for the entity from the chunk's SoA arrays.
+		for (const propKey of info.propertyKeys) {
+			const propArray = componentArrays[propKey]
+			if (propArray) {
+				rawData[propKey] = propArray[indexInChunk]
 			}
 		}
-		return componentData
+
+		// Now, use the centralized interpreter to reconstruct the high-level object.
+		return reconstructWithInterpreter(typeID, rawData)
 	}
 }
 

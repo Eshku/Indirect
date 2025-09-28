@@ -1,5 +1,6 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager, systemManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
@@ -14,7 +15,7 @@ export class ReactivityTestSystem {
 			runStructuralChangeTest: false,
 		}
 
-		const { reactivityTarget, reactivityComponent, componentA, componentB } = componentManager.getTypeIDs()
+		const { reactivityTarget, reactivityComponent, componentA, componentB } = ecs.getTypeIDs()
 		Object.assign(this, { reactivityTarget, reactivityComponent, componentA, componentB })
 
 		// --- Queries ---
@@ -30,6 +31,7 @@ export class ReactivityTestSystem {
 		})
 
 		// --- Test State ---
+		// Needs at least 2
 		this.totalEntities = 2
 		this.entitiesInitialized = false
 		this.directModificationEntityId = null

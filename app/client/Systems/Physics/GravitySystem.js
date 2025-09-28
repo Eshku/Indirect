@@ -1,9 +1,11 @@
-const { theManager } = await import(`${PATH_MANAGERS}/TheManager/TheManager.js`)
-const { queryManager, componentManager } = theManager.getManagers()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+
+const { queryManager } = ecs
 
 export class GravitySystem {
 	constructor() {
-		const { isGrounded, velocity } = componentManager.getTypeIDs()
+		const { isGrounded, velocity } = ecs.getTypeIDs()
 		Object.assign(this, { isGrounded, velocity })
 
 		this.query = queryManager.getQuery({
