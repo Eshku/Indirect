@@ -44,18 +44,18 @@ Readme might be outdated.
 
 - **Entity**: ID representing game object.
 - **Component**: Class that acts as a **schema** for component data, defining how it's stored in TypedArrays.
-- **Archetype**: All entities with the exact same set of components are categorized under same archetype.
+- **Archetype**: All entities with exact same set of components are categorized under same archetype.
 - **[System](app/client/Systems)**: Container for logic. Systems operate on entities that have a specific set of components.
 - **[Managers](app/client/Managers)**: Storage of some resource, API to interact with it.
 - **[Service](app/client/Services)**: Glorified set of on-demand utilities.
 
 #### Archetypes and Chunks: Core of Data Management
 
-[`EntityManager`](./app/client/ECS/EntityManager/EntityManager.js) is the heart of the ECS, responsible for managing all entities, archetypes, and their data.
+[`EntityManager`](./app/client/ECS/EntityManager/EntityManager.js) is the heart of ECS, responsible for managing all entities, archetypes, and their data.
 
-**Archetypes** define the structure of entities. An archetype represents a unique combination of components. All entities with the exact same set of components belong to the same archetype. This is managed internally by the `EntityManager`.
+**Archetypes** define structure of entities. An archetype represents a unique combination of components. All entities with exact same set of components belong to the same archetype. This is managed internally by `EntityManager`.
 
-- **Immortal Archetypes:** Archetype definitions are "immortal." Once an archetype is created (e.g., by creating an entity with a new combination of components), it is never destroyed, even if it contains no entities. This avoids the performance cost of "archetype churn" (repeatedly creating and destroying archetypes), which would force the `QueryManager` to constantly re-evaluate all active queries.
+- **Immortal Archetypes:** Archetype definitions are "immortal." Once an archetype is created (e.g., by creating an entity with a new combination of components), it is never destroyed, even if it contains no entities. This avoids the performance cost of "archetype churn" (repeatedly creating and destroying archetypes), which would force `QueryManager` to constantly re-evaluate all active queries.
 
 Each archetype's data is organized into fixed-size **[Chunks](./app/client/ECS/ArchetypeManager/Chunk.js)**. A Chunk is a contiguous block of memory that directly stores entities and their associated component data in a Structure of Arrays (SoA) layout.
 
@@ -74,7 +74,7 @@ Each archetype's data is organized into fixed-size **[Chunks](./app/client/ECS/A
 
 Components are defined as plain JavaScript objects that act as a schema. This schema dictates how component data is stored and accessed. Complex data types are stored as numeric references to objects managed elsewhere.
 
-A component file exports a named constant matching the component's name.
+A component file exports a named constant matching component's name.
 
 Below are several examples of component schemas, demonstrating various data types and features.
 
@@ -183,34 +183,34 @@ export const Hotbar = {
 
 Every property in a schema must be an object containing a `type` and an optional `default` value.
 
-- **`type`**: A string specifying the data type.
-- **`default`**: A default value to use for the property when a component is added without specifying a value. If omitted, a zero-equivalent (0, false, "") is used.
-- **`shared`**: A boolean. If `true`, this property's data is shared across all entities that have the same value for it.
+- **`type`**: A string specifying data type.
+- **`default`**: A default value to use for property when a component is added without specifying a value. If omitted, a zero-equivalent (0, false, "") is used.
+- **`shared`**: A boolean. If `true`, this property's data is shared across all entities that have same value for it.
 
 **Schema Types:**
 
-- **Primitive Types:** For simple numeric properties. These are the most common and performant types, directly mapping to `TypedArray`s.
+- **Primitive Types:** For simple numeric properties. These are most common types, directly mapping to `TypedArray`s.
 
   - **Definition:** `{ type: 'f64' }`
   - **Supported Types:** `f64`, `f32`, `i32`, `u32`, `i16`, `u16`, `i8`, `u8`, `boolean`, `u64`, `entity`.
 
-- **`string`:** For string data. The engine stores a single copy of each unique string and uses an integer reference (`u32`) to it.
+- **`string`:** For string data. Engine stores a single copy of each unique string and uses an integer reference (`u32`) to it.
 
   - **Definition:** `{ type: 'string' }`
-  - All strings are **interned**. This means that each unique string (e.g., "Magic Missile", "Player_Character_Name") is stored only once in a global table, and the component itself stores a lightweight numeric ID (a `u32` reference) pointing to that string.
+  - All strings are **interned**. This means that each unique string (e.g., "Magic Missile", "Player_Character_Name") is stored only once in a global table, and component itself stores a lightweight numeric ID (a `u32` reference) pointing to that string.
 
 - **`enum`:** For properties that can only be one of a set of mutually exclusive values.
 
   - **Definition:** `{ type: 'enum', of: { STATE_A: 0, STATE_B: 1 } }`
-  - The `of` property must be an object where keys are the string names and values are their explicit numeric representations.
-  - The underlying storage type (`u8`, `u16`, `u32`) is automatically inferred based on the largest numeric value provided. A static lookup object is generated for readable comparisons.
+  - `of` property must be an object where keys are string names and values are their explicit numeric representations.
+  - Storage type (`u8`, `u16`, `u32`) is automatically inferred.
 
 - **`bitmask`:** For properties that can have multiple states simultaneously.
 
   - **Definition:** `{ type: 'bitmask', of: { FLAG_A: 1 << 0, FLAG_B: 1 << 1 }, default: 1 << 0 }`
-  - The `of` property must be an object where keys are the flag names and values are their explicit integer bit values.
-  - The `storageType` (`u8`, `u16`, `u32`) is automatically inferred if not provided.
-  - The `default` value must be a number, typically a bitwise combination of the values from the `of` object (e.g., `(1 << 0) | (1 << 1)`).
+  - `of` property must be an object where keys are flag names and values are their explicit integer bit values.
+  -  Storage type (`u8`, `u16`, `u32`) is automatically inferred.
+  - `default` value must be a number, typically a bitwise combination of the values from the `of` object (e.g., `(1 << 0) | (1 << 1)`).
   - A static lookup object is generated for readable bitwise operations in systems.
 
 - **`rpn`:** For storing Reverse-Polish Notation (RPN) formulas as a stream of tokens. Used for complex, data-driven calculations.
@@ -239,16 +239,16 @@ When creating a query using `queryManager.getQuery()`, you provide an object spe
 
 **Query Iteration Methods:**
 
-The primary way to iterate over entities is `query.iter()`, which yields `Chunk` objects, allowing systems to process data in cache-friendly blocks.
+Primary way to iterate over entities is `query.iter()`, which yields `Chunk` objects, allowing systems to process data in cache-friendly blocks.
 
 - **Normal Iteration**: Yields all `Chunk`s from archetypes that structurally match the query.
 - **Reactive Iteration**: If `react` is used, `query.iter()` only yields `Chunk`s where a `react` component has been modified. Inside the loop, `query.hasChanged(chunk, indexInChunk)` can check if a specific entity's reactive components have changed.
 
 ### System Loop
 
-Systems are classes that encapsulate game logic. They operate on entities that possess a specific set of components, processing their data each frame. The core logic of a system resides within its `update` method.
+Systems are classes that encapsulate game logic. They operate on entities that possess a specific set of components, processing their data each frame. Core logic of a system resides within its `update` method.
 
-A system's constructor is the ideal place to get references to managers, set up queries, and cache component Type IDs for use in the hot path.
+A system's constructor is the ideal place to get references to managers, set up queries, and cache component Type IDs for use in hot path.
 
 `Update` method receives `deltaTime` (time elapsed since last frame) and `currentTick`. Within this method, systems typically iterate over entities that match their defined queries.
 
@@ -261,37 +261,37 @@ export class ApplyVelocity {
 		const { Position, Velocity } = componentManager.getTypeIDs()
 
 		// Define a query for entities that have both Position and Velocity.
-		// The `react` property makes this a reactive query.
+		// `react` property makes this a reactive query.
 		this.query = queryManager.getQuery({
 			with: [Position, Velocity],
 			react: [Velocity], // Only process entities whose Velocity has changed.
 		})
 
-		// Cache the IDs on `this` for fast access in the update loop.
+		// Cache IDs on `this` for fast access in update loop.
 		this.positionTypeID = Position
 		this.velocityTypeID = Velocity
 	}
 
 	update(deltaTime, currentTick) {
-		// Iterate over all Chunks that contain entities matching the query.
+		// Iterate over all Chunks that contain entities matching query.
 		for (const chunk of this.query.iter()) {
 			// Get a marker to flag which entities we change.
 			const positionMarker = chunk.getDirtyMarker(this.positionTypeID, currentTick)
 
-			// Get direct references to the raw TypedArrays for the components.
+			// Get direct references to raw TypedArrays for components.
 			const posArrays = chunk.componentArrays[this.positionTypeID]
 			const velArrays = chunk.componentArrays[this.velocityTypeID]
 
-			// Loop through each entity in the chunk.
+			// Loop through each entity in chunk.
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				// Because this is a reactive query, check if the specific entity's
+				// Because this is a reactive query, check if specific entity's
 				// Velocity component has changed before doing any work.
 				if (this.query.hasChanged(chunk, indexInChunk)) {
 					// Apply velocity to position.
 					posArrays.x[indexInChunk] += velArrays.x[indexInChunk] * deltaTime
 					posArrays.y[indexInChunk] += velArrays.y[indexInChunk] * deltaTime
 
-					// Mark the Position component as dirty so other reactive systems can see the change.
+					// Mark Position component as dirty so other reactive systems can see this change.
 					positionMarker.mark(indexInChunk)
 				}
 			}
@@ -300,13 +300,13 @@ export class ApplyVelocity {
 }
 ```
 
-In the example above, `ApplyVelocity` first retrieves the component Type IDs it needs using `componentManager.getTypeIDs()`. It then uses these IDs to define a **reactive query** that will only yield entities whose `Velocity` component has changed.
+In example above, `ApplyVelocity` first retrieves component Type IDs it needs using `componentManager.getTypeIDs()`. It then uses these IDs to define a **reactive query** that will only yield entities whose `Velocity` component has changed.
 
-The `update` method iterates through chunks, and for each entity, it performs `hasChanged()` check before proceeding. If the check passes, it performs calculation and marks the `Position` component as "dirty," allowing other systems to react to the change.
+`update` method iterates through chunks, and for each entity, it performs `hasChanged()` check before proceeding. If the check passes, it performs calculation and marks `Position` component as "dirty," allowing other systems to react to  this change.
 
 ### Working with Enums and Bitmasks
 
-The engine provides native support for defining and working with enumerations and bitmasks directly within component schemas.
+Engine provides native support for defining and working with enumerations and bitmasks directly within component schemas.
 
 When a schema with an `enum` or `bitmask` is compiled, the `ComponentManager` makes the `of` object available as a lookup table via `componentManager.getConstantsFor('ComponentName')`. This allows for readable code without sacrificing performance.
 
@@ -335,11 +335,11 @@ export class CombatSystem {
 				const currentState = weaponStateArrays.state[entityIndex]
 				const currentFlags = statusEffectsArrays.flags[entityIndex]
 
-				// Use the cached lookup objects for readable comparisons.
+				// Use cached lookup objects for readable comparisons.
 				const isStunned = (currentFlags & this.statusEffects.STUNNED) !== 0
 
 				if (currentState === this.weaponState.IDLE && !isStunned) {
-					// Write the new raw integer value for the enum.
+					// Write raw integer value for enum.
 					weaponStateArrays.state[entityIndex] = this.weaponState.ATTACKING
 				}
 			}
@@ -415,9 +415,9 @@ Engine uses **manifest-driven** approach for defining and creating entities. Ins
 
 This design decouples game logic from file system structure, making project easier to maintain, and opens the door for future easy modding and powerful developer console commands (`spawn obsidian_sword`).
 
-#### The Prefab Manifest
+#### Prefab Manifest
 
-Core of this system is the [app/client/Data/prefabs.manifest.json](./app/client/Data/prefabs.manifest.json) file. This file acts as a central registry for all entities in the game. It maps each `prefabName` to its source, which can be either a data file (`.json`) or a programmatic factory (`.js` module and function).
+Core of this system is [app/client/Data/prefabs.manifest.json](./app/client/Data/prefabs.manifest.json) file. This file acts as a central registry for all entities in the game. It maps each `prefabName` to its source, which can be either a data file (`.json`) or a programmatic factory (`.js` module and function).
 
 **Example `prefabs.manifest.json`:**
 
@@ -465,13 +465,13 @@ This architecture keeps game logic clean and focused on _what_ to create (`'play
 
 ### Async Game Loop & System Update Phases
 
-The engine's `GameLoop` is `async` loop built around `requestAnimationFrame`.
+Engine's `GameLoop` is `async` loop built around `requestAnimationFrame`.
 
 #### Async Game Loop
 
-Primary benefit of the `async` loop is the ability to `await system.update(...)`. This ensures that any asynchronous operations within a system (like on-demand asset loading) complete fully before the next system runs.
+Primary benefit of `async` loop is ability to `await system.update(...)`. This ensures that any asynchronous operations within a system (like on-demand asset loading) complete fully before next system runs.
 
-- **Predictable Execution Flow**: By `await`ing every system by default, execution flow is sequential and easy to reason about. A system can rely on the fact that all previous systems in the frame have completed their work.
+- **Predictable Execution Flow**: By `await`ing every system by default, execution flow is sequential and easy to reason about. A system can rely on the fact that all previous systems in frame have completed their work.
 - **"Fire-and-Forget" as an Option**: While `await` is default, this architecture still supports non-blocking, "fire-and-forget" async operations. A system can launch an async task (e.g., a network request) without `await`ing it, allowing game loop to continue immediately.
 - **Prep for Parallelism**: This design provides foundation for integrating Web Workers.
 
@@ -511,7 +511,7 @@ For debugging, testing, and performing one-off actions outside of systems, the e
 
 #### Inspecting Entities
 
-To inspect an entity's state from the developer console, use `ecs.viewEntity(entityID)`. This returns a plain object containing a snapshot of the entity's data.
+To inspect an entity's state from developer console, use `ecs.viewEntity(entityID)`. This returns a plain object containing a snapshot of entity's data.
 
 #### Immediate-Mode Commands
 
@@ -539,38 +539,38 @@ Inspired by ECS engines like Unity DoTS and Bevy.
 
 ## Roadmap and Future Directions
 
-The engine's future development is focused on three interconnected pillars. Many improvements in one area are prerequisites for advancements in others.
+Engine's future development is focused on three interconnected pillars. Many improvements in one area are prerequisites for advancements in others.
 
 ### 1. ECS Core Improvements
 
-This involves strengthening the fundamental architecture of the Entity-Component-System for greater performance, flexibility, and robustness.
+This involves strengthening the fundamental architecture of Entity-Component-System for greater performance, flexibility, and robustness.
 
 - **Relational ECS Patterns:** Explore and implement more advanced ECS patterns, like entity hierarchies (`Parent`/`Children` components) and relational queries.
 - **Serialization:** Develop a system for serializing and deserializing.
-- **Code Quality & Decoupling:** As the foundation stabilizes, refactor the manager-based architecture to reduce tight coupling and improve overall code quality and documentation.
+- **Code Quality & Decoupling:** Make it less shit.
 - **Mutable Queries** - Allow queries to be modified at runtime, enabling dynamic filtering and adaptation to changing game states without re-creating queries.
 
 ### 2. Transpiler & Developer Experience
 
-A build-time transpiler is the cornerstone for achieving both a high-quality developer experience and maximum runtime performance.
+A build-time transpiler is cornerstone for achieving both a high-quality developer experience and maximum runtime performance.
 
-- **Goal: Zero-Cost Abstractions:** The primary goal is to allow developers to write clean, intuitive, object-oriented code using accessors and views, and have the transpiler automatically rewrite it into low-level code (direct `TypedArray` access) at build time.
+- **Goal: Zero-Cost Abstractions:** primary goal is to allow developers to write clean, intuitive, object-oriented code using accessors and views, and have transpiler automatically rewrite it into low-level code (direct `TypedArray` access) at build time.
 - **Hot Module Replacement (HMR):** Implement a custom HMR development server. This will allow for live code changes in systems without requiring a full application restart, speeding up development and debugging.
-- **Improved API Design:** The transpiler unlocks the ability to design a cleaner, less boilerplate-heavy API for systems.
-- **Method Overload:** Single method name can handle different kinds of inputs to perform a similar action. This reduces cognitive load as there is no longer a need to remember multiple function names for slight variations of the same task.
+- **Improved API Design:** Transpiler unlocks ability to design a cleaner, less boilerplate-heavy API for systems.
+- **Method Overload:** Single method name can handle different kinds of inputs to perform a similar action. This reduces cognitive load as there is no longer a need to remember multiple function names for slight variations of same task.
 - **Code Generation, inline function calls** - could be something we can use too, aha.
 
 ### 3. Parallelism & Multi-threading
 
-With a unified data model and a transpiler in place, the engine will be ready for a true multi-threaded job system.
+With a unified data model and a transpiler in place, engine will be ready for a true multi-threaded job system.
 
 - **Job System with Explicit Dependencies:** Systems will declare their data dependencies (read/write access to component types).
 
-- **Dependency Graph & Scheduling:** The engine will build a dependency graph from these declarations each frame. A scheduler will use this graph to find non-conflicting systems and dispatch them to a pool of Web Workers for parallel execution.
-- **Zero-Copy Data Transfer:** All component data will be stored in `SharedArrayBuffer`s, allowing the main thread and worker threads to access the same memory without any copying overhead.
+- **Dependency Graph & Scheduling:** Engine will build a dependency graph from these declarations each frame. A scheduler will use this graph to find non-conflicting systems and dispatch them to a pool of Web Workers for parallel execution.
+- **Zero-Copy Data Transfer:** All component data will be stored in `SharedArrayBuffer`s, allowing main thread and worker threads to access same memory without any copying overhead.
 
-- **Chunk-Based Work Distribution:** Chunk-based iteration model will be the foundation for work distribution. The scheduler will assign different chunks of an archetype to different workers.
+- **Chunk-Based Work Distribution:** Chunk-based iteration model will be foundation for work distribution. Scheduler will assign different chunks of an archetype to different workers.
 
 ### 4. Renderer
 
-- **Resist:** - Resist the urge to mess around with our own renderer engine... at least until the rest of the engine is somewhat built.
+- **Resist:** - Resist urge to mess around with our own renderer engine... at least until rest of engine is somewhat built.
