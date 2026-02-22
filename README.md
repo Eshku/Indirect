@@ -19,9 +19,9 @@ Expect each update to introduce breaking changes, even if they are marked as "pa
 
 Readme might be outdated.
 
-**Current state** - **Experimental** and **very messy** single threaded ECS with basic functionality and lots of bad practices in place.
+**Current state** - **Experimental** partially parallel \ concurrent ECS with basic functionality and lots of bad practices in place.
 
-**Potential future improvements:**:\*\*
+**Potential future improvements:**:
 
 - Introduce dynamic (packed) arrays.
 - Placeholder Entities.
