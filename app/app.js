@@ -1,7 +1,5 @@
 const path = require('path')
 
-// We need to require app and BrowserWindow here to use them in the dev block.
-// They are also required later, but that's fine.
 const { app, BrowserWindow, screen, ipcMain, session } = require('electron')
 
 if (process.env.NODE_ENV === 'development') {
