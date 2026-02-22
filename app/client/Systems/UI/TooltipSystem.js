@@ -1,8 +1,10 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, uiManager } = engine.getManagers()
+const { ItemTooltip } = await import(`${PATH_UI}/ItemTooltip.js`)
+
+const { entityStore } = await import(`${PATH_ECS}/EntityManager/EntityManager.js`)
 
 const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
-const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
 
 const { Easing } = await import(`${PATH_CORE}/utils/easing.js`)
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
@@ -41,8 +43,9 @@ export class TooltipSystem {
 		this.currentPosition = { x: 0, y: 0 }
 		this.targetPosition = { x: 0, y: 0 }
 		this.hotbar = null
-		
-		const { tooltip, parent, displayName, damage, cooldown, range, strength, dexterity, intelligence } = ecs.getTypeIDs()
+
+		const { tooltip, parent, displayName, damage, cooldown, range, strength, dexterity, intelligence } =
+			ecs.getTypeIDs()
 
 		Object.assign(this, { tooltip, parent, displayName, damage, cooldown, range })
 
@@ -57,29 +60,44 @@ export class TooltipSystem {
 	}
 
 	async init() {
-		this.hotbar = uiManager.getElement('Hotbar')
-		this.propertyGroupManager = propertyGroupManager
+		const { gameManager, layerManager } = engine.getManagers()
+		const pixiApp = await gameManager.getApp()
 
-		this.setupHotbarEvents()
+		// Create and register the tooltip view this system manages.
+		this.tooltipView = new ItemTooltip(pixiApp, layerManager.getLayer('ui'))
+		uiManager.register(this.tooltipView, 'ItemTooltip')
+
+		// The Hotbar might not exist if its system is disabled.
+		this.hotbar = uiManager.getElement('Hotbar')
+		if (this.hotbar) {
+			this.setupHotbarEvents()
+		}
 	}
 
 	setupHotbarEvents() {
-		this.hotbar.container.on('pointermove', event => {
-			const pos = event.data.global
-			const slotIndex = this.hotbar.getSlotIndexAt(pos)
-			const newTargetId =
-				slotIndex !== null && this.hotbar.slots[slotIndex].itemId ? this.hotbar.slots[slotIndex].itemId : null
+		// Bind the event handlers to `this` instance so they can be removed correctly in destroy().
+		this.onHotbarPointerMove = this.onHotbarPointerMove.bind(this)
+		this.onHotbarPointerLeave = this.onHotbarPointerLeave.bind(this)
 
-			if (newTargetId) {
-				this.show(newTargetId, pos.x, pos.y)
-			} else {
-				this.startLinger()
-			}
-		})
+		this.hotbar.container.on('pointermove', this.onHotbarPointerMove)
+		this.hotbar.container.on('pointerleave', this.onHotbarPointerLeave)
+	}
 
-		this.hotbar.container.on('pointerleave', () => {
+	onHotbarPointerMove(event) {
+		const pos = event.data.global
+		const slotIndex = this.hotbar.getSlotIndexAt(pos)
+		const newTargetId =
+			slotIndex !== null && this.hotbar.slots[slotIndex].itemId ? this.hotbar.slots[slotIndex].itemId : null
+
+		if (newTargetId) {
+			this.show(newTargetId, pos.x, pos.y)
+		} else {
 			this.startLinger()
-		})
+		}
+	}
+
+	onHotbarPointerLeave() {
+		this.startLinger()
 	}
 
 	show(entityId, x, y) {
@@ -101,7 +119,7 @@ export class TooltipSystem {
 				return
 			}
 
-			const tooltipView = this.activeTooltipView || uiManager.getElement(viewModel.type)
+			const tooltipView = this.activeTooltipView || uiManager.getElement('ItemTooltip')
 			if (!tooltipView) {
 				console.error(`TooltipSystem: Tooltip view "${viewModel.type}" is not registered with the UIManager.`)
 				this.hide()
@@ -178,23 +196,23 @@ export class TooltipSystem {
 		const location = ecs.entityManager.getEntityLocation(itemEntityId)
 		if (!location) return null
 
-		const { chunk, indexInChunk } = location
+		const { chunkId, indexInChunk } = location
 
-		const tooltipArrays = chunk.componentArrays[this.tooltip]
+		const tooltipArrays = entityStore.chunkComponentData[chunkId][this.tooltip]
 		if (!tooltipArrays) return null
 
 		const type = this.stringStorage[tooltipArrays.type[indexInChunk]]
 		const description = this.stringStorage[tooltipArrays.description[indexInChunk]]
 
 		let ownerId = null
-		const parentArrays = chunk.componentArrays[this.parent]
+		const parentArrays = entityStore.chunkComponentData[chunkId][this.parent]
 		if (parentArrays) {
 			ownerId = parentArrays.entityId[indexInChunk]
 		}
 
 		const ownerStats = this.getOwnerStats(ownerId)
 
-		const displayNameArrays = chunk.componentArrays[this.displayName]
+		const displayNameArrays = entityStore.chunkComponentData[chunkId][this.displayName]
 		const titleRef = displayNameArrays?.value[indexInChunk]
 		const title = titleRef ? this.stringStorage[titleRef] : 'Unknown Item'
 
@@ -206,7 +224,7 @@ export class TooltipSystem {
 		}
 
 		const resolutionContext = {
-			chunk,
+			chunkId,
 			indexInChunk,
 			ownerStats,
 		}
@@ -311,11 +329,11 @@ export class TooltipSystem {
 		const location = ecs.entityManager.getEntityLocation(ownerId)
 		if (!location) return stats
 
-		const { chunk, indexInChunk } = location
+		const { chunkId, indexInChunk } = location
 
 		for (const statName of this.statComponentNames) {
 			const statTypeId = this.statComponentTypeIds.get(statName)
-			const statArrays = statTypeId !== undefined ? chunk.componentArrays[statTypeId] : undefined
+			const statArrays = statTypeId !== undefined ? entityStore.chunkComponentData[chunkId][statTypeId] : undefined
 
 			if (statArrays) {
 				stats[statName] = statArrays.value[indexInChunk]
@@ -325,17 +343,17 @@ export class TooltipSystem {
 	}
 
 	resolveStat(statName, context) {
-		const { chunk, indexInChunk } = context
+		const { chunkId, indexInChunk } = context
 
 		switch (statName) {
 			case 'Damage': {
-				const damageArrays = chunk.componentArrays[this.damage]
+				const damageArrays = entityStore.chunkComponentData[chunkId][this.damage]
 				if (!damageArrays) return null
 				const totalDamage = this.calculateDamage(damageArrays, indexInChunk, context.ownerStats)
 				return { label: 'Damage', value: `${Math.round(totalDamage)}` }
 			}
 			case 'Cooldown': {
-				const cooldownArrays = chunk.componentArrays[this.cooldown]
+				const cooldownArrays = entityStore.chunkComponentData[chunkId][this.cooldown]
 				if (!cooldownArrays) return null
 
 				const sharedGroupId = cooldownArrays.sharedGroupId?.[indexInChunk]
@@ -346,7 +364,7 @@ export class TooltipSystem {
 				return { label: 'Cooldown', value: `${duration.toFixed(2)}s` }
 			}
 			case 'Range': {
-				const rangeArrays = chunk.componentArrays[this.range]
+				const rangeArrays = entityStore.chunkComponentData[chunkId][this.range]
 				if (!rangeArrays) return null
 
 				const value = rangeArrays.value[indexInChunk]
@@ -355,6 +373,18 @@ export class TooltipSystem {
 			default:
 				console.warn(`TooltipSystem: Unknown stat type "${statName}" requested.`)
 				return null
+		}
+	}
+
+	destroy() {
+		if (this.hotbar) {
+			this.hotbar.container.off('pointermove', this.onHotbarPointerMove)
+			this.hotbar.container.off('pointerleave', this.onHotbarPointerLeave)
+		}
+		if (this.tooltipView) {
+			uiManager.unregister(this.tooltipView)
+			this.tooltipView.destroy()
+			this.tooltipView = null
 		}
 	}
 }

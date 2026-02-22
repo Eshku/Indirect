@@ -1,3 +1,8 @@
+import { systemRegistry } from './SystemRegistry.js'
+import { Scheduler } from './Scheduler.js'
+
+import { ChunkView } from '../../Managers/QueryManager/ChunkView.js'
+
 /**
  * Manages the core game loop, including fixed and variable timesteps.
  */
@@ -135,10 +140,9 @@ export class GameLoop {
 	 * @param {import('./SystemManager.js').SystemManager} systemManager - The system manager instance.
 	 */
 	constructor() {
-
-
 		this.lastTick = -1
 		this.currentTick = 0
+		this.frameCounter = 0
 
 		this.FIXED_TIMESTEP = 1 / 60
 		this.MAX_ACCUMULATED_TIME = this.FIXED_TIMESTEP * 5
@@ -146,23 +150,37 @@ export class GameLoop {
 		this.accumulator = 0.0
 		this._animationFrameId = null
 		this._lastTime = 0
+		this.isPaused = false
 
 		this.app = null
 		this.renderer = null
+
+		this.scheduler = null
+
+		// A single, reusable context object to pass to systems.
+		// This avoids creating new objects every frame, reducing GC pressure.
+		this.frameContext = {
+			deltaTime: 0,
+			alpha: 0,
+			currentTick: 0,
+			lastTick: 0,
+		}
 	}
 
-	/**
-	 * Initializes the game loop with the PIXI application instance.
-	 */
 	async init(ecs) {
 		this.ecs = ecs
-		//console.log(ecs)
-
+		this.workerManager = ecs.engine.workerManager
 		this.systemManager = ecs.systemManager
 		this.app = this.ecs.systemManager.app
 		this.renderer = this.ecs.systemManager.renderer
 
-		// We no longer hook into PIXI's runners. We drive the loop ourselves.
+		// Initialize the scheduler, which will allocate its own shared memory.
+		this.scheduler = new Scheduler()
+		await this.scheduler.init(ecs)
+
+		// Now that the scheduler has allocated the shared buffers, we can fully
+		// initialize the workers with all the data they need.
+		await this.workerManager.initializeWorkers(ecs)
 	}
 
 	/**
@@ -170,12 +188,34 @@ export class GameLoop {
 	 * This loop manages a fixed timestep for gameplay logic and variable updates for other systems.
 	 */
 	start() {
-		// Stop PIXI's default ticker behavior. Our custom `_loop` function, driven by
-		// `requestAnimationFrame`, will now control all updates and rendering.
 		this.app.stop()
 
 		this._lastTime = performance.now()
 		this._loop()
+	}
+
+	/**
+	 * Pauses the game loop. It will complete the current frame if one is in progress,
+	 * but will not start a new one.
+	 */
+	pause() {
+		this.isPaused = true
+		console.log('[GameLoop] Paused.')
+	}
+
+	/**
+	 * Resumes the game loop if it was paused.
+	 */
+	resume() {
+		if (!this.isPaused) return
+		this.isPaused = false
+		console.log('[GameLoop] Resumed.')
+		// Reset time to avoid a large deltaTime spike after the pause.
+		this._lastTime = performance.now()
+		// Request a new animation frame to restart the loop.
+		if (!this._animationFrameId) {
+			this._loop()
+		}
 	}
 
 	/**
@@ -201,133 +241,138 @@ export class GameLoop {
 	// function on every frame for `requestAnimationFrame`, which is a performance anti-pattern.
 	_loop = async () => {
 		if (!this.systemManager) return // Loop has been destroyed
+		if (this.isPaused) {
+			// If paused, ensure any scheduled frame is cancelled.
+			if (this._animationFrameId) {
+				cancelAnimationFrame(this._animationFrameId)
+				this._animationFrameId = null
+			}
+			return
+		}
 
 		const currentTime = performance.now()
 		const rawDeltaTime = (currentTime - this._lastTime) / 1000.0
 		this._lastTime = currentTime
 
-		// --- Input Systems ---
-		// Manually execute the input group first for low-latency input processing.
-		const inputGroup = this.systemManager.updateGroups.input
-		if (inputGroup.systems.length > 0) {
-			const lastCompletedTick = inputGroup.lastTick
-			await this._executeSystemGroup(inputGroup, rawDeltaTime, lastCompletedTick)
-			inputGroup.lastTick = this.lastTick
+		this.frameCounter++
+		// --- 1. Input Phase (Variable Timestep) ---
+		// Runs once per frame for low-latency input processing.
+		const inputSystems = this.systemManager.updateGroups.input.systems
+
+		if (inputSystems.length > 0) {
+			this.frameContext.deltaTime = rawDeltaTime
+			this.frameContext.currentTick = this.currentTick
+			this.frameContext.lastTick = this.systemManager.updateGroups.input.lastTick
+			this.frameContext.alpha = 0 // Not applicable, but set for consistency
+			await this.scheduler.execute(inputSystems, this.frameContext, this.frameCounter)
+			this.systemManager.updateGroups.input.lastTick = this.currentTick
 		}
 
-		// --- Logic Systems (Fixed Timestep Loop) ---
-		this.accumulator += rawDeltaTime
-		// Prevent a "spiral of death" if the game lags badly by capping accumulated time.
-		if (this.accumulator > this.MAX_ACCUMULATED_TIME) {
-			this.accumulator = this.MAX_ACCUMULATED_TIME
-		}
+		// --- 2. Logic Phase (Fixed Timestep) ---
+		// This loop ensures deterministic updates for gameplay and physics.
+		this.accumulator += Math.min(rawDeltaTime, this.MAX_ACCUMULATED_TIME)
 
-		const logicGroup = this.systemManager.updateGroups.logic
+		// It's important to update the group's lastTick *after* its execution for a given tick.
+		// We capture the last tick value *before* the loop, as this is what reactive systems
+		// in this group will compare against.
+		const lastLogicTickForGroup = this.systemManager.updateGroups.logic.lastTick
+
+		const logicSystems = this.systemManager.updateGroups.logic.systems
 
 		while (this.accumulator >= this.FIXED_TIMESTEP) {
-			// Read the last completed tick *inside* the loop.
-			// This ensures that if the loop runs multiple times in one frame (due to lag),
-			// each iteration uses the correct, updated value from the previous one,
-			// preventing reactive systems from firing multiple times on the same change.
-			const lastCompletedLogicTick = logicGroup.lastTick
+			if (logicSystems.length > 0) {
+				this.frameContext.deltaTime = this.FIXED_TIMESTEP
+				this.frameContext.currentTick = this.currentTick
+				this.frameContext.lastTick = lastLogicTickForGroup
+				this.frameContext.alpha = 0 // Not applicable
+				await this.scheduler.execute(logicSystems, this.frameContext, this.frameCounter)
+			}
 
+			// After logic systems run for a tick, we update the group's last tick and advance the global tick.
 			this.lastTick = this.currentTick
-			await this._executeSystemGroup(logicGroup, this.FIXED_TIMESTEP, lastCompletedLogicTick)
-
-			// Set the group's last tick to the *upcoming* tick.
-			// This ensures that on the *next* frame, the reactivity check `dirtyTick > lastRanAt`
-			// correctly evaluates to false for changes that have already been processed,
-			// preventing a double-trigger on the subsequent frame.
-			logicGroup.lastTick = this.currentTick
-
-			// Process input for the upcoming tick & advance the tick counter
-			await this._executeSystemGroup(inputGroup, this.FIXED_TIMESTEP, inputGroup.lastTick)
-			inputGroup.lastTick = this.currentTick
-
-			this.accumulator -= this.FIXED_TIMESTEP
+			this.systemManager.updateGroups.logic.lastTick = this.currentTick
 			this.currentTick++
+			this.accumulator -= this.FIXED_TIMESTEP
 		}
 
-		// The last tick that any non-fixed-update system should care about is the
-		// one that the fixed update loop just finished processing.
-		const lastCompletedFixedTick = this.lastTick
+		// --- 3. Timed Systems Phase (Variable Timestep) ---
+		// This handles any custom-timed groups (e.g., 10 FPS UI updates).
+		for (const groupName in this.systemManager.updateGroups) {
+			if (groupName === 'input' || groupName === 'logic' || groupName === 'visuals') {
+				continue // Skip the main groups, which are handled separately.
+			}
 
-		// --- Dynamically Timed Update Loops (for UI, infrequent logic) ---
-		for (const group of Object.values(this.systemManager.updateGroups)) {
-			if (group.interval) {
-				await this._executeTimedGroup(group, rawDeltaTime, lastCompletedFixedTick)
+			const group = this.systemManager.updateGroups[groupName]
+			group.accumulator += rawDeltaTime
+
+			if (group.accumulator >= group.interval) {
+				this.frameContext.deltaTime = group.accumulator // Pass the actual elapsed time
+				this.frameContext.currentTick = this.currentTick
+				this.frameContext.lastTick = group.lastTick
+				this.frameContext.alpha = 0 // Not applicable
+				await this.scheduler.execute(group.systems, this.frameContext, this.frameCounter)
+				group.lastTick = this.lastTick // Sync with the last completed logic tick
+				group.accumulator = 0 // Reset accumulator for this group
 			}
 		}
 
-		// --- Visuals Systems (Variable Timestep Loop) ---
-		const alpha = this.accumulator / this.FIXED_TIMESTEP
-		const visualsGroup = this.systemManager.updateGroups.visuals
+		// --- 4. Visuals Phase (Variable Timestep with Interpolation) ---
+		// Runs once per frame for rendering, camera, and UI.
+		const visualsSystems = this.systemManager.updateGroups.visuals.systems
 
-		await this._executeSystemGroup(visualsGroup, rawDeltaTime, visualsGroup.lastTick, alpha)
-		visualsGroup.lastTick = lastCompletedFixedTick
+		if (visualsSystems.length > 0) {
+			const alpha = this.accumulator / this.FIXED_TIMESTEP
+			this.frameContext.deltaTime = rawDeltaTime
+			this.frameContext.alpha = alpha
+			this.frameContext.currentTick = this.currentTick
+			this.frameContext.lastTick = this.systemManager.updateGroups.visuals.lastTick
+
+			// Await the completion of all jobs for this group.
+			await this.scheduler.execute(visualsSystems, this.frameContext, this.frameCounter)
+			this.systemManager.updateGroups.visuals.lastTick = this.lastTick // Sync with the last completed logic tick
+		}
+
+		// --- 5. Post-Execution Frame Finalization ---
 
 		// --- Command Buffer Flush ---
-		const cbFlushStartTime = performance.now();
-		this.systemManager.commandBufferExecutor.execute(this.systemManager.commandBuffer, this.currentTick);
-		const cbFlushEndTime = performance.now();
-		//this.systemManager.systemTimings['CommandBufferExecutor.execute'] = cbFlushEndTime - cbFlushStartTime;
+		// This must happen after all system groups are complete.
+		const cbFlushStartTime = performance.now()
+		this.systemManager.commandBufferExecutor.execute(this.systemManager.commandBuffer, this.currentTick)
+		const cbFlushEndTime = performance.now()
 
-		//! just for performance monitor display for now, change it later
-				this.systemManager.systemTimings['CommandBuffer.flush'] = cbFlushEndTime - cbFlushStartTime
+		// --- Performance Data Recording ---
+		this.systemManager.recordSystemTiming('Command Buffer', 'total', cbFlushEndTime - cbFlushStartTime)
+
+		// The PerformanceMonitor's own `update` job has run. Now we call its special methods
+		// to collect the complete timing data for the frame and update its display.
+		const perfMon = systemRegistry.getSystem('PerformanceMonitor')
+
+		if (perfMon) {
+			perfMon.updateTimings(rawDeltaTime)
+			perfMon.updateDisplay(rawDeltaTime)
+		}
+
+		this.systemManager.clearSystemTimings()
+
+		const { newChunks, destroyedChunks, newArchetypes } = this.ecs.entityManager.getAndClearChunkDeltas()
+
+		if (newChunks || destroyedChunks || newArchetypes) {
+			this.workerManager.broadcastChunkDeltas({ newChunks, destroyedChunks, newArchetypes })
+		}
 
 		// --- Manual Render Call ---
 		const renderStartTime = performance.now()
+
 		this.renderer.render(this.app.stage)
 		const renderEndTime = performance.now()
-		this.systemManager.systemTimings['Renderer.render'] = renderEndTime - renderStartTime
+		this.systemManager.recordSystemTiming('Render', 'total', renderEndTime - renderStartTime)
 
-		// --- Request Next Frame ---
+		// --- Advance Tick ---
+		// The main logic tick is advanced inside the fixed logic loop. This section
+		// is for other bookkeeping.
+
+		// --- 6. Request Next Frame ---
 		this._animationFrameId = requestAnimationFrame(this._loop)
-	}
-
-	/**
-	 * Executes all systems within a given group.
-	 * @param {object} group - The update group to execute.
-	 * @param {number} deltaTime - The time elapsed since the last update for this group.
-	 * @param {number} lastTick - The last tick processed by this group, for change detection.
-	 * @param {number} [alpha=0] - The interpolation factor for rendering between fixed updates.
-	 * @private
-	 */
-	async _executeSystemGroup(group, deltaTime, lastCompletedTick, alpha = 0) {
-		const systems = group.systems
-		if (!systems || systems.length === 0) return
-
-		for (const system of systems) {
-			const systemName = system.constructor.name
-			this.systemManager._primeSystemQueries(system, lastCompletedTick)
-			try {
-				const startTime = performance.now()
-				await system.update(deltaTime, this.currentTick, lastCompletedTick, alpha)
-				const endTime = performance.now()
-				this.systemManager.systemTimings[systemName] = endTime - startTime
-			} catch (error) {
-				// Error is already captured with the systemName
-				console.error(`GameLoop: Error updating system ${systemName}:`, error)
-			}
-		}
-	}
-
-	/**
-	 * Executes a timed group if its update interval has been reached.
-	 * @param {object} group - The timed update group to check and potentially execute.
-	 * @param {number} rawDeltaTime - The raw delta time from the main ticker.
-	 * @param {number} lastCompletedFixedTick - The last tick completed by the main fixed update loop.
-	 * @private
-	 */
-	async _executeTimedGroup(group, rawDeltaTime, lastCompletedFixedTick) {
-		if (!group || group.systems.length === 0) return
-
-		group.accumulator += rawDeltaTime
-		while (group.accumulator >= group.interval) {
-			await this._executeSystemGroup(group, group.interval, group.lastTick)
-			group.lastTick = lastCompletedFixedTick
-			group.accumulator -= group.interval
-		}
 	}
 
 	/**

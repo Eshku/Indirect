@@ -31,11 +31,11 @@ export class PlatformFactorySystem {
 		this.stringStorage = stringInterningTable.storage
 	}
 
-	update(deltaTime, currentTick) {
+	update({deltaTime, currentTick}) {
 		for (const chunk of this.initializationQuery.iter()) {
 			const stringStorage = this.stringStorage
-			const descriptorArrays = chunk.componentArrays[this.shapeDescriptor]
-			const viewableArrays = chunk.componentArrays[this.viewable]
+			const descriptorArrays = chunk.componentData[this.shapeDescriptor]
+			const viewableArrays = chunk.componentData[this.viewable]
 
 			const shapeRefs = descriptorArrays.shape
 			const widths = descriptorArrays.width
@@ -45,7 +45,7 @@ export class PlatformFactorySystem {
 			const spriteRefs = viewableArrays.spriteRef
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (this.initializationQuery.hasChanged(chunk, indexInChunk)) {
+				if (chunk.hasChanged(this.shapeDescriptor, indexInChunk)) {
 					if (spriteRefs[indexInChunk] !== 0) {
 						continue
 						// Already initialized
@@ -97,4 +97,6 @@ export class PlatformFactorySystem {
 
 		graphic.rect(-halfW, -halfH, w, h).fill(color.fill).stroke({ width: 2, color: color.outline })
 	}
+	
+	destroy() {}
 }

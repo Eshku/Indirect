@@ -21,12 +21,14 @@ class PayloadCompiler {
 	constructor() {
 		this.componentManager = null
 		this.prefabManager = null
+		this.sharedDataManager = null
 	}
 
 	init(ecs) {
 		this.componentManager = ecs.componentManager
 		this.entityManager = ecs.entityManager
 		this.prefabManager = ecs.prefabManager
+		this.sharedDataManager = ecs.sharedDataManager
 	}
 
 	/**
@@ -44,7 +46,7 @@ class PayloadCompiler {
 			return this._compileFromObject(source, this._compileSoA.bind(this))
 		} else {
 			throw new TypeError(
-				'PayloadCompiler.compileEntity: First argument must be a prefab name (string) or a component data object.'
+				'PayloadCompiler.compileEntity: First argument must be a prefab name (string) or a component data object.',
 			)
 		}
 	}
@@ -64,12 +66,10 @@ class PayloadCompiler {
 			return this._compileFromObject(source, this._compileAoS.bind(this))
 		} else {
 			throw new TypeError(
-				'PayloadCompiler.compileEntities: First argument must be a prefab name (string) or a component data object.'
+				'PayloadCompiler.compileEntities: First argument must be a prefab name (string) or a component data object.',
 			)
 		}
 	}
-
-
 
 	/**
 	 * Compiles the data for a single component into a binary payload with mutators.
@@ -113,7 +113,6 @@ class PayloadCompiler {
 	compileComponentsForEntities(typeIDs, data = {}) {
 		//!AoS - based way to pre-compile single or multiple components
 		//! to MULTIPLE entities (query based or some batch commands later on)
-
 		//! Gonna need to adapt command buffer and archetype manager
 		//! once done probably can tear apart managers too.
 	}
@@ -126,16 +125,14 @@ class PayloadCompiler {
 	 * @private
 	 */
 	_compileAoS(archetypeId, componentDataMap) {
-		const componentTypeIDs = this.entityManager.archetypeComponentTypeIDs[archetypeId]
-		if (!componentTypeIDs) {
+		const sortedTypeIDs = this.entityManager.getComponentTypeIDsForArchetype(archetypeId)
+		if (!sortedTypeIDs) {
 			throw new Error(`PayloadCompiler: Archetype with ID ${archetypeId} not found.`)
 		}
 
 		// --- 1. Calculate total size and component offsets from the Schema ---
-		// The component type IDs from the archetype are a Set. Convert to an array and sort
-		// to ensure a deterministic layout, identical to how Chunks are created.
+		// The component type IDs from the entity manager are guaranteed to be sorted.
 		// This logic must perfectly mirror the alignment logic in SchemaCompiler.
-		const sortedTypeIDs = [...componentTypeIDs].sort((a, b) => a - b)
 		let totalByteSize = 0
 		const componentOffsets = new Map()
 		for (const typeID of sortedTypeIDs) {
@@ -166,7 +163,6 @@ class PayloadCompiler {
 			// that are flattened into multiple properties. NO, we iterate over final keys.
 			for (const propKey of info.propertyKeys) {
 				// Get the pre-calculated base offset for this component.
-				const componentBaseOffset = componentOffsets.get(typeID)
 				const initialData = componentDataMap.get(typeID) || {}
 
 				// The data in `initialData` is already fully interpreted and flattened by `createIdMapFromData`.
@@ -174,9 +170,17 @@ class PayloadCompiler {
 				const propInfo = info.properties[propKey]
 				if (!propInfo) continue // Skip properties that don't exist in the final schema (like original array names)
 
+				// Align the current offset to meet the requirement of the current property.
+				// This logic must now mirror the SchemaCompiler's internal alignment.
+				const componentBaseOffset = componentOffsets.get(typeID)
+				let writeOffset = componentBaseOffset + propInfo.offset
+				const alignment = propInfo.alignment
+				if (alignment > 0 && writeOffset % alignment !== 0) {
+					writeOffset += alignment - (writeOffset % alignment)
+				}
+
 				const value = initialData[propKey] ?? compiledDefaults[propKey]
 
-				const writeOffset = componentBaseOffset + propInfo.offset // Use pre-calculated, aligned offset
 				this._writeValue(payloadView, writeOffset, value, propInfo.type)
 
 				// Create a mutator for this property.
@@ -193,7 +197,7 @@ class PayloadCompiler {
 						mutators[componentName][rep.lengthProperty] = new info.properties[rep.lengthProperty].arrayConstructor(
 							payloadBuffer,
 							componentBaseOffset + info.properties[rep.lengthProperty].offset,
-							1
+							1,
 						)
 					} else {
 						mutators[componentName][propKey] = new propInfo.arrayConstructor(payloadBuffer, writeOffset, 1)
@@ -221,13 +225,12 @@ class PayloadCompiler {
 	 * @private
 	 */
 	_compileSoA(archetypeId, componentDataMap) {
-		const componentTypeIDs = this.entityManager.archetypeComponentTypeIDs[archetypeId]
-		if (!componentTypeIDs) {
+		const sortedTypeIDs = this.entityManager.getComponentTypeIDsForArchetype(archetypeId)
+		if (!sortedTypeIDs) {
 			throw new Error(`PayloadCompiler: Archetype with ID ${archetypeId} not found.`)
 		}
 
-		const sortedTypeIDs = [...componentTypeIDs].sort((a, b) => a - b)
-		let totalByteSize = 0
+		let totalByteSize = 0 // The rest of the logic remains the same.
 		const componentOffsets = new Map()
 		for (const typeID of sortedTypeIDs) {
 			const info = Schema.componentInfo[typeID]
@@ -256,17 +259,29 @@ class PayloadCompiler {
 				const rep = info.representations[propKey]
 				if (!rep) continue // Skip implicit properties like 'flat_array_count'
 
+				const componentBaseOffset = componentOffsets.get(typeID)
+
 				if (rep.type === 'flat_array') {
 					const itemConstructor = Schema.TYPED_ARRAY_MAP[rep.itemRepresentation.type]
-					const arrayStartOffset = componentOffsets.get(typeID) + info.properties[`${propKey}0`].offset
+					const arrayStartOffset = componentBaseOffset + info.properties[`${propKey}0`].offset
 					mutators[componentName][propKey] = new itemConstructor(payloadBuffer, arrayStartOffset, rep.capacity)
+
+					const lengthPropInfo = info.properties[rep.lengthProperty]
+					const lengthPropOffset = componentBaseOffset + lengthPropInfo.offset
+
 					mutators[componentName][rep.lengthProperty] = new info.properties[rep.lengthProperty].arrayConstructor(
 						payloadBuffer,
-						componentOffsets.get(typeID) + info.properties[rep.lengthProperty].offset,
-						1
+						lengthPropOffset,
+						1,
 					)
 				} else if (propInfo) {
-					const writeOffset = componentOffsets.get(typeID) + propInfo.offset
+					const componentBaseOffset = componentOffsets.get(typeID)
+					let writeOffset = componentBaseOffset + propInfo.offset
+					const alignment = propInfo.alignment
+					if (alignment > 0 && writeOffset % alignment !== 0) {
+						writeOffset += alignment - (writeOffset % alignment)
+					}
+					// console.log(`[PayloadCompiler] Mutator for ${componentName}.${propKey}: base=${componentBaseOffset}, propOffset=${propInfo.offset}, finalOffset=${writeOffset}, align=${alignment}`);
 					mutators[componentName][propKey] = new propInfo.arrayConstructor(payloadBuffer, writeOffset, 1)
 				}
 			}
@@ -276,7 +291,13 @@ class PayloadCompiler {
 				if (!propInfo) continue
 
 				const value = initialData[propKey] ?? compiledDefaults[propKey]
-				const writeOffset = componentOffsets.get(typeID) + propInfo.offset
+				const componentBaseOffset = componentOffsets.get(typeID)
+				let writeOffset = componentBaseOffset + propInfo.offset
+				const alignment = propInfo.alignment
+				if (alignment > 0 && writeOffset % alignment !== 0) {
+					writeOffset += alignment - (writeOffset % alignment)
+				}
+				// console.log(`[PayloadCompiler] Writing ${componentName}.${propKey}: base=${componentBaseOffset}, propOffset=${propInfo.offset}, finalOffset=${writeOffset}, align=${alignment}, value=${value}`);
 				this._writeValue(payloadView, writeOffset, value, propInfo.type)
 			}
 		}
@@ -374,71 +395,56 @@ class PayloadCompiler {
 		}
 	}
 
-	// --- Internal Orchestration Logic ---
-
-	_createIdMapFromData(componentsInput, existingPrefabId = 0) {
+	_createIdMapFromData(componentsInput) {
 		const perEntityDataMap = new Map()
-		const sharedDataPayload = {}
-		let prefabId = existingPrefabId
+		const prototypeData = {}
 
 		if (!componentsInput) return perEntityDataMap
 
 		for (const componentName in componentsInput) {
 			if (!Object.prototype.hasOwnProperty.call(componentsInput, componentName)) continue
 
-			const typeID = Schema.componentNameToTypeID.get(componentName.toLowerCase())
-			if (typeID === undefined) continue
+			const typeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
+			if (typeId === undefined) continue
 
-			const info = Schema.componentInfo[typeID]
+			const info = Schema.componentInfo[typeId]
 			if (!info) continue
 
-			let rawData = interpret(typeID, componentsInput[componentName])
+			let rawData = interpret(typeId, componentsInput[componentName])
 
-			const defaults = Schema.compiledDefaults[typeID]
+			const defaults = Schema.compiledDefaults[typeId]
 			rawData = { ...defaults, ...rawData }
 
 			const perEntityPart = {}
 			const sharedPart = {}
 			let hasSharedPart = false
 
-			for (const propName in rawData) {
-				if (info.representations[propName]?.shared) {
-					sharedPart[propName] = rawData[propName]
+			// Separate shared and per-entity properties
+			for (const propKey in rawData) {
+				if (info.sharedProperties.includes(propKey)) {
+					sharedPart[propKey] = rawData[propKey]
 					hasSharedPart = true
 				} else {
-					perEntityPart[propName] = rawData[propName]
+					perEntityPart[propKey] = rawData[propKey]
 				}
 			}
 
-			if (hasSharedPart) sharedDataPayload[typeID] = sharedPart
-			perEntityDataMap.set(typeID, perEntityPart)
-		}
-
-		const prefabComponentTypeId = Schema.componentNameToTypeID.get('prefab')
-		if (prefabId === 0) {
-			const prefabSharedData = sharedDataPayload[prefabComponentTypeId]
-			if (prefabSharedData?.id !== undefined) {
-				const idOrName = prefabSharedData.id
-				// The ID could be a string name from a prefab `extends` property.
-				// We must resolve it to a numeric ID.
-				prefabId =
-					typeof idOrName === 'string' ? this.prefabManager.getPrefabId(idOrName) : Number(idOrName & 0xffffffffn)
+			if (hasSharedPart) {
+				const sharedDataIndex = this.sharedDataManager.getOrCreateSharedDataIndex(typeId, sharedPart)
+				prototypeData[typeId] = sharedDataIndex
 			}
+			perEntityDataMap.set(typeId, perEntityPart)
 		}
 
-		if (prefabId > 0 && Object.keys(sharedDataPayload).length > 0) {
-			const sharedGroupId =
-				existingPrefabId > 0
-					? this.componentManager.propertyGroupManager.addSharedDataToGroup(prefabId, sharedDataPayload)
-					: this.componentManager.propertyGroupManager.getOrCreateSharedGroup(prefabId, sharedDataPayload)
+		// Get a single prototypeId for the entire collection of shared data.
+		const prototypeId = this.sharedDataManager.getOrCreatePrototype(prototypeData)
 
-			for (const typeIDStr in sharedDataPayload) {
-				const componentTypeId = Number(typeIDStr)
-				if (Schema.componentInfo[componentTypeId].sharedProperties.length > 0) {
-					perEntityDataMap.get(componentTypeId).sharedGroupId = sharedGroupId
-				}
-			}
+		// Inject the prototypeId into every component that has shared properties.
+		for (const typeIdStr in prototypeData) {
+			const componentTypeId = Number(typeIdStr)
+			perEntityDataMap.get(componentTypeId).prototypeId = prototypeId
 		}
+
 		return perEntityDataMap
 	}
 }

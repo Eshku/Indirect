@@ -121,6 +121,7 @@ export class CursorSystem {
 		this.isSettled = false
 		this.lastTrailPoint = { x: -1, y: -1 }
 		this.minTrailPointDistanceSq = 4 // pixels squared (2*2)
+
 	}
 
 	/**
@@ -155,13 +156,15 @@ export class CursorSystem {
 		this.cursor.updateVisuals(this.currentVisuals, 1.0)
 		this.cursor.setScreenPosition(this.visualPosition.x, this.visualPosition.y)
 		this.cursor.show()
+
 	}
 
 	/**
 	 * Runs every frame to check for interactions with UI elements and update the cursor state.
-	 * @param {number} deltaTime - Time since the last frame.
+	 * @param {object} context - The frame context object.
 	 */
-	update(deltaTime) {
+	update({ deltaTime }) {
+
 		// 1. Update hardware position from input
 		const pointer = this.renderer.events.pointer
 		this.hardwarePosition.x = pointer.global.x
@@ -262,6 +265,7 @@ export class CursorSystem {
 	updatePosition(deltaTime) {
 		if (this.isSettled) {
 			// Snap to the final position to avoid infinitesimal lerping.
+
 			this.visualPosition.x = this.hardwarePosition.x
 			this.visualPosition.y = this.hardwarePosition.y
 		} else {

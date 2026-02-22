@@ -1,5 +1,5 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
-const { ecs, testManager} = engine.getManagers()
+const { ecs, testManager } = engine.getManagers()
 
 const { entityManager, queryManager, prefabManager, systemManager } = ecs
 
@@ -54,11 +54,13 @@ export class CommandBufferTestSystem {
 	}
 
 	async init() {
+
+		
 		// Preload the specific prefab needed for the instantiate test.
 		await prefabManager.preload(['test_prefab'])
 
 		const flush = () => {
-			this.systemManager.commandBufferExecutor.execute(this.commands)
+			this.systemManager.commandBufferExecutor.execute(this.commands, this.systemManager.currentTick)
 		}
 
 		describe('Command Buffer API', () => {
@@ -66,7 +68,7 @@ export class CommandBufferTestSystem {
 			if (testConfig.runCreateEntityTest) {
 				it('should create an entity with components via createEntity', () => {
 					const { payload } = payloadCompiler.compileEntity({
-						position: { x: 10, y: 20},
+						position: { x: 10, y: 20 },
 						testEntityTag: {},
 					})
 					this.commands.createEntity(payload)
@@ -81,7 +83,7 @@ export class CommandBufferTestSystem {
 					expect(createdEntity).not.toBe(undefined)
 
 					const pos = ECS.getComponent(createdEntity, 'position')
-					expect(pos).toEqual({ x: 10, y: 20})
+					expect(pos).toEqual({ x: 10, y: 20 })
 
 					this.commands.destroyEntity(createdEntity)
 					flush()
@@ -308,6 +310,10 @@ export class CommandBufferTestSystem {
 		})
 
 		// Run all the defined tests.
-		testManager.runAllTests()
+		await testManager.runAllTests()
+	}
+
+	destroy() {
+		testManager.clear()
 	}
 }

@@ -74,7 +74,7 @@
  */
 const { loadAllComponents } = await import(`${PATH_ECS}/ComponentManager/componentLoader.js`)
 const { schemaCompiler } = await import('./SchemaCompiler.js')
-const { componentDataReconstructor } = await import('./ComponentDataReconstructor.js')
+const { reconstruct } = await import('./ComponentInterpreter.js')
 const {toCamelCase} = await import(`${PATH_CORE}/utils/stringUtils.js`)
 
 import * as Schema from './ComponentSchema.js'
@@ -100,11 +100,8 @@ export class ComponentManager {
 
 		this.entityManager = ecs.entityManager
 
-		this.propertyGroupManager = (await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)).propertyGroupManager
+		// The old propertyGroupManager is no longer needed.
 		await this.registerComponents(componentModules)
-		componentDataReconstructor.init({
-			entityManager: this.entityManager,
-		})
 	}
 
 	async registerComponents(componentModules) {
@@ -166,31 +163,7 @@ export class ComponentManager {
 		Schema.componentConstants[typeID] = constants
 		Schema.compiledDefaults[typeID] = Object.freeze(compiledDefaults)
 	}
-
-	/**
-	 * Reconstructs a "designer-friendly" component data object from the raw,
-	 * engine-friendly data stored in a chunk. This is the "read" path replacement
-	 * for the old ComponentInterpreter.
-	 * @param {number} entityId The ID of the entity to read from.
-	 * @param {number} typeID The component's type ID.
-	 * @returns {object | undefined} The reconstructed component data, or undefined if not found.
-	 */
-	reconstructComponentData(entityId, typeID) {
-		return componentDataReconstructor.reconstruct(entityId, typeID)
-	}
-
-	/**
-	 * Reconstructs a "designer-friendly" shared data object from its raw,
-	 * engine-friendly format. This is used when retrieving component data that
-	 * includes shared properties.
-	 * @param {number} typeID The component's type ID.
-	 * @param {object} rawSharedData The raw shared data object (e.g., `{ value: 13 }`).
-	 * @returns {object} The reconstructed shared data (e.g., `{ value: 'common' }`).
-	 */
-	reconstructSharedData(typeID, rawSharedData) {
-		return componentDataReconstructor.reconstructShared(typeID, rawSharedData)
-	}
-
+	
 	/**
 	 * Gets the component's string name for a given ID.
 	 * This is useful for debugging and logging.
@@ -305,12 +278,12 @@ export class ComponentManager {
 	 * @returns {string[]} An array of component names.
 	 */
 	getComponentNamesForArchetype(archetypeId) {
-		const typeIDs = this.entityManager.archetypeComponentTypeIDs[archetypeId]
+		const typeIDs = this.entityManager.getComponentTypeIDsForArchetype(archetypeId)
 		if (!typeIDs) {
 			console.warn(`ComponentManager: Could not find type IDs for archetype ${archetypeId}.`)
 			return []
 		}
-		return [...typeIDs].map(id => Schema.componentNames[id])
+		return Array.from(typeIDs).map(id => Schema.componentNames[id])
 	}
 
 	/**
@@ -318,14 +291,12 @@ export class ComponentManager {
 	 * This is the fastest possible check, intended for use within system loops where
 	 * the archetype ID is already known. It checks the archetype's structure.
 	 * @param {number} archetypeId - The internal ID of the archetype to check.
-	 * @param {number} archetype - The internal ID of the archetype to check.
+	 * @param {number} componentTypeID - The component type ID to check for.
 	 * @returns {boolean} True if the archetype contains the component type, false otherwise.
 	 */
-	hasComponent(archetype, componentTypeID) {
-		if (archetype === undefined) {
-			return false
-		}
-		return this.entityManager.hasComponentType(archetype, componentTypeID)
+	hasComponent(archetypeId, componentTypeID) {
+		// Delegate directly to the EntityManager, which is the source of truth for archetype data.
+		return this.entityManager.hasComponentType(archetypeId, componentTypeID)
 	}
 }
 

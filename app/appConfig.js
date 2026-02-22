@@ -9,6 +9,10 @@ function initAppConfig() {
 	app.commandLine.appendSwitch('disable-renderer-backgrounding')
 	app.commandLine.appendSwitch('force_high_performance_gpu')
 
+	// Expose garbage collector to the renderer process for manual triggering.
+	// This adds a `window.gc()` function. Use with caution.
+	app.commandLine.appendSwitch('js-flags', '--expose-gc')
+
 	process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = false
 }
 

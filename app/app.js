@@ -1,24 +1,14 @@
 const path = require('path')
 
+// We need to require app and BrowserWindow here to use them in the dev block.
+// They are also required later, but that's fine.
+const { app, BrowserWindow, screen, ipcMain, session } = require('electron')
+
 if (process.env.NODE_ENV === 'development') {
-	const reloader = require('./scripts/reloader')
-	const path = require('path')
-
-	const app = __filename
-	const appConfig = path.join(__dirname, 'appConfig.js')
-	const electronFolder = path.join(__dirname, 'electron')
-	const scriptsFolder = path.join(__dirname, 'scripts')
-
-	const clientFolder = path.join(__dirname, 'client')
-
-	const mainPaths = [app, appConfig, electronFolder, scriptsFolder]
-	const clientPaths = [clientFolder]
-
-	reloader.hard(mainPaths).soft(clientPaths)
+	const clientWatcher = require('./hmr/client-watcher.js')
+	clientWatcher.init(BrowserWindow)
 }
 
-const { app, BrowserWindow, screen, ipcMain, session } = require('electron')
-// Import all API handlers from the barrel file
 const {
 	initPaths,
 	initAppInfo,
@@ -63,7 +53,7 @@ function createMainWindow() {
 			contextIsolation: true,
 			preload: path.join(__dirname, 'electron', 'preload.js'),
 			nodeIntegration: false,
-			enableRemoteModule: false,
+			backgroundThrottling: false,
 		},
 		frame: false,
 		autoHideMenuBar: true,
@@ -86,7 +76,7 @@ function createMainWindow() {
 }
 
 app.whenReady().then(() => {
-	// This is the correct way to enable SharedArrayBuffer support.
+	// Enable SharedArrayBuffer support.
 	// It must be done before the window is created.
 	session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
 		callback({

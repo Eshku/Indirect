@@ -21,18 +21,8 @@ export class UiManager {
 	}
 
 	async init() {
-		const { Hotbar } = await import(`${PATH_UI}/Hotbar.js`)
-		const { ItemTooltip } = await import(`${PATH_UI}/ItemTooltip.js`)
-
-		const { gameManager, layerManager } = engine.getManagers()
-
-		const pixiApp = await gameManager.getApp()
-
-		const hotbar = new Hotbar(pixiApp, layerManager.getLayer('ui'))
-		this.register(hotbar)
-
-		const itemTooltip = new ItemTooltip(pixiApp, layerManager.getLayer('ui'))
-		this.register(itemTooltip, 'ItemTooltip')
+		// UI elements are created and
+		// registered by their respective controlling systems.
 	}
 	/**
 	 * Registers a UI element to be tracked by the manager.

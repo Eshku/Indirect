@@ -1,6 +1,7 @@
 import { OpCodes } from './CommandOpcodes.js'
 import { CommandBufferReader } from './CommandBufferReader.js'
 import * as Schema from '../ComponentManager/ComponentSchema.js'
+import { entityStore } from '../EntityManager/EntityManager.js'
 
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 /**
@@ -49,6 +50,7 @@ export class CommandBufferExecutor {
 			set: new Map(), // Map<componentTypeID, { entityIds: number[], soaIndices: number[] }>
 		}
 		const deletions = new Set()
+		const chunkDeletions = new Set()
 
 		for (let i = 0; i < sortedOffsets.length; i++) {
 			reader.seek(sortedOffsets[i])
@@ -59,6 +61,11 @@ export class CommandBufferExecutor {
 				case OpCodes.DESTROY_ENTITY: {
 					const entityId = reader.readU64()
 					deletions.add(entityId)
+					break
+				}
+				case OpCodes.DESTROY_ENTITIES_IN_CHUNK: {
+					const chunkId = reader.readU16()
+					chunkDeletions.add(chunkId)
 					break
 				}
 
@@ -101,6 +108,9 @@ export class CommandBufferExecutor {
 					setBatch.entityIds.push(entityId)
 					setBatch.dataOffsets.push(dataOffset)
 					setBatch.dataLengths.push(dataLength)
+
+
+
 					break
 				}
 
@@ -131,6 +141,10 @@ export class CommandBufferExecutor {
 
 		// --- Deletion ---
 		this.entityManager.destroyEntitiesInBatch(deletions)
+
+		for (const chunkId of chunkDeletions) {
+			this.entityManager.destroyAllEntitiesInChunk(chunkId)
+		}
 
 		// --- Modification ---
 		this._buildAndExecuteMoveBatches(modifications, reader, currentTick)
@@ -175,14 +189,14 @@ export class CommandBufferExecutor {
 				const location = this.entityManager.getEntityLocation(entityId)
 				if (!location || this.entityManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
 
-				const sourceChunk = location.chunk
+				const sourceChunkId = location.chunkId
 				const targetArchetypeId = this.entityManager.getArchetypeByMask(
-					this.entityManager.archetypeMasks[sourceArchetypeId] | Schema.componentBitFlags[componentTypeID]
+					entityStore.archetypeMasks[sourceArchetypeId] | Schema.componentBitFlags[componentTypeID]
 				)
 
 				// --- Gather into the new batch structure ---
-				if (!movesByChunk.has(sourceChunk)) movesByChunk.set(sourceChunk, new Map())
-				const chunkMoves = movesByChunk.get(sourceChunk)
+				if (!movesByChunk.has(sourceChunkId)) movesByChunk.set(sourceChunkId, new Map())
+				const chunkMoves = movesByChunk.get(sourceChunkId)
 
 				if (!chunkMoves.has(targetArchetypeId)) {
 					chunkMoves.set(targetArchetypeId, {
@@ -213,14 +227,14 @@ export class CommandBufferExecutor {
 				const location = this.entityManager.getEntityLocation(entityId)
 				if (!location || !this.entityManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
 
-				const sourceChunk = location.chunk
+				const sourceChunkId = location.chunkId
 				const targetArchetypeId = this.entityManager.getArchetypeByMask(
-					this.entityManager.archetypeMasks[sourceArchetypeId] & ~Schema.componentBitFlags[componentTypeID]
+					entityStore.archetypeMasks[sourceArchetypeId] & ~Schema.componentBitFlags[componentTypeID]
 				)
 
 				// --- Gather into the new batch structure ---
-				if (!movesByChunk.has(sourceChunk)) movesByChunk.set(sourceChunk, new Map()) // ew
-				const chunkMoves = movesByChunk.get(sourceChunk)
+				if (!movesByChunk.has(sourceChunkId)) movesByChunk.set(sourceChunkId, new Map())
+				const chunkMoves = movesByChunk.get(sourceChunkId)
 
 				if (!chunkMoves.has(targetArchetypeId)) {
 					chunkMoves.set(targetArchetypeId, { entityIds: [], sourceIndices: [], componentsToAssign: new Map() }) // ew
@@ -233,21 +247,22 @@ export class CommandBufferExecutor {
 
 		// --- Blit Pass ---
 		// Now execute batches.
-		for (const [sourceChunk, targets] of movesByChunk.entries()) {
+		for (const [sourceChunkId, targets] of movesByChunk.entries()) {
 			for (const [targetArchetypeId, moveBatch] of targets.entries()) {
 				const { entityIds, sourceIndices, componentsToAssign } = moveBatch
-				const sourceLocations = sourceIndices.map(indexInChunk => ({ chunk: sourceChunk, indexInChunk }))
+				const sourceLocations = sourceIndices.map(indexInChunk => ({ chunkId: sourceChunkId, indexInChunk }))
+				const sourceArchetypeId = entityStore.chunkArchetypeIds[sourceChunkId]
 
 				this.entityManager._addEntitiesByCopyingBatch(
 					targetArchetypeId,
-					sourceChunk.archetype,
+					sourceArchetypeId,
 					sourceLocations,
 					entityIds,
 					componentsToAssign,
 					reader,
 					currentTick
 				)
-				this.entityManager._removeEntitiesBatch(sourceChunk.archetype, entityIds)
+				this.entityManager._removeEntitiesBatch(sourceArchetypeId, entityIds)
 			}
 		}
 	}
@@ -259,28 +274,28 @@ export class CommandBufferExecutor {
 
 			// --- 1. Gather Pass ---
 			// First, group all modifications by their destination chunk.
-			const setsByChunk = new Map() // Map<Chunk, { destIndices: number[], dataOffsets: number[], dataLengths: number[] }>
+			const setsByChunk = new Map() // Map<chunkId, { destIndices: number[], dataOffsets: number[], dataLengths: number[] }>
 			const { entityIds, dataOffsets, dataLengths } = sets
 			for (let i = 0; i < entityIds.length; i++) {
 				const entityId = entityIds[i]
 				const location = this.entityManager.getEntityLocation(entityId)
 				if (!location) continue
 
-				//Developer is responsible for ensuring the entity has the component.
-
-				if (!setsByChunk.has(location.chunk)) {
-					setsByChunk.set(location.chunk, { destIndices: [], dataOffsets: [], dataLengths: [] })
+				// Developer is responsible for ensuring the entity has the component.
+				const chunkId = location.chunkId
+				if (!setsByChunk.has(chunkId)) {
+					setsByChunk.set(chunkId, { destIndices: [], dataOffsets: [], dataLengths: [] })
 				}
-				const batch = setsByChunk.get(location.chunk)
+				const batch = setsByChunk.get(chunkId)
 				batch.destIndices.push(location.indexInChunk)
 				batch.dataOffsets.push(dataOffsets[i])
 				batch.dataLengths.push(dataLengths[i])
 			}
 
 			// --- 2. Blit Pass ---
-			for (const [chunk, batch] of setsByChunk.entries()) {
+			for (const [chunkId, batch] of setsByChunk.entries()) {
 				this.entityManager._blitComponentDataFromBinary(
-					chunk,
+					chunkId,
 					componentTypeID,
 					batch.destIndices,
 					batch.dataOffsets,

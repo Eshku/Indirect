@@ -1,0 +1,4 @@
+{
+  "type": "module",
+  "description": "TEMPORARY: This file forces Node.js to treat the scripts in this directory as ES Modules. This can be removed once the entire Electron project is migrated to ESM."
+}

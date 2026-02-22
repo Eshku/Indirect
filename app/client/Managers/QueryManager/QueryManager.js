@@ -1,40 +1,5 @@
 const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`)
-
-
-/**
- * Manages creation and lifecycle of queries for ECS.
- * This manager implements a robust caching and reference-counting system for queries.
- * When a query is requested, a canonical key is generated from its configuration.
- * If a query with same key already exists, cached instance is returned and its
- * reference count is incremented. This is a major performance optimization that avoids
- * redundant query objects and archetype matching. A query is only truly destroyed when
- * its reference count drops to zero.
- *
- * Systems can opt-out of caching by passing `mutable: true` in query options,
- * which guarantees a unique, non-shared query instance.
- *
- * ---
- * ### Developer Note: Mutable Queries and Parallelism
- *
- * `mutable: true` flag provides powerful flexibility but introduces challenges for a
- * future parallel job scheduler. A scheduler relies on static analysis of a system's data
- * dependencies (read/write access) to safely run systems in parallel. A query that can
- * that can change its component filters at runtime makes this static analysis difficult.
- *
- * #### "Quarantine" Approach (Simple & Safe)
- * A simple scheduler would need to "quarantine" such systems, running them serially
- * on main thread to prevent race conditions. This is safest initial approach.
- *
- * #### "Dynamic Re-Analysis" Approach (Advanced & Powerful)
- * A more advanced scheduler could handle mutable queries without permanent quarantining.
- * When a mutable query's filters change, it could notify scheduler. scheduler
- * would then, for next frame, re-analyze only that system's dependencies and attempt
- * to re-insert it into parallel job graph. While significantly more complex to
- * implement, this approach unlocks maximum performance by allowing even dynamic systems
- * to be parallelized when their dependencies don't conflict. This is long-term vision
- * for handling mutable queries.
- */
-
+import { entityStore } from '../../ECS/EntityManager/EntityManager.js'
 
 //! Query mutability going to be decided later on.
 export class QueryManager {
@@ -42,6 +7,20 @@ export class QueryManager {
 		this.queryCache = new Map()
 		this.queriesById = []
 		this.nextQueryId = 0
+
+		// A new, simple cache to store the generated string keys themselves.
+		// This avoids re-calculating the key string on every single getQuery call.
+		this.keyCache = new Map()
+
+		// --- Indices for the "pull" model of archetype registration ---
+		this.queriesWith = new Map() // Map<typeId, Set<Query>>
+		this.queriesWithout = new Map() // Map<typeId, Set<Query>>
+		this.queriesAny = new Map() // Map<typeId, Set<Query>>
+		// Index for queries that only have `without` clauses (no `with`, `any`, or `react`).
+		this.queriesWithOnlyExclusions = new Set()
+
+		// --- Index for the "pull" model for chunk/archetype events ---
+		this.queriesByArchetype = new Map() // Map<archetypeId, Set<Query>>
 	}
 
 	async init(ecs) {
@@ -50,30 +29,55 @@ export class QueryManager {
 		this.entityManager = ecs.entityManager
 	}
 
+	/**
+	 * Gets a canonical, cached string key for a query configuration.
+	 * This is core optimization. Instead of generating a new string on every call,
+	 * it uses a simple nested map to find or create key ONCE. All subsequent
+	 * calls for same configuration will be near-instant cache hits with zero allocation.
+	 * @param {object} options query options.
+	 * @returns {string} cached, canonical string key.
+	 * @private
+	 */
+	_getCachedQueryKey(options) {
+		// Simple two-level cache. First level is raw options object.
+		// This works for vast majority of cases where systems pass exact same
+		// literal object from their constructor every time.
+		if (this.keyCache.has(options)) {
+			return this.keyCache.get(options)
+		}
+
+		// If object reference is different, we fall back to generating key.
+		// This is "slow path" that will now be hit very rarely.
+		const key = this._generateQueryKey(options)
+
+		// We can try to cache it against a "deeper" key for subsequent lookups,
+		// though primary benefit comes from caching object reference.
+		// For now, we'll just cache the key against options object itself.
+		this.keyCache.set(options, key)
+
+		return key
+	}
+
 	_generateQueryKey(options) {
 		const {
 			with: withComponents = [],
 			without: withoutComponents = [],
 			any: anyComponents = [],
 			react: reactComponents = [],
-			read: readComponents = [],
-			write: writeComponents = [],
 			constants: constantsDef = {},
 		} = options
-		
+
 		// Sort component IDs to ensure the key is canonical.
 		const withIdsString = [...withComponents].sort((a, b) => a - b).join(',')
 		const withoutIdsString = [...withoutComponents].sort((a, b) => a - b).join(',')
 		const anyIdsString = [...anyComponents].sort((a, b) => a - b).join(',')
 		const reactIdsString = [...reactComponents].sort((a, b) => a - b).join(',')
-		const readIdsString = [...readComponents].sort((a, b) => a - b).join(',')
-		const writeIdsString = [...writeComponents].sort((a, b) => a - b).join(',')
 
 		// Sort constant keys for canonical key generation.
 		const constantKeys = Object.keys(constantsDef).sort()
 		const constantsString = constantKeys.map(propName => `${propName}:${constantsDef[propName]}`).join(',')
 
-		return `w:${withIdsString}|wo:${withoutIdsString}|a:${anyIdsString}|r:${reactIdsString}|rd:${readIdsString}|wr:${writeIdsString}|c:${constantsString}`
+		return `w:${withIdsString}|wo:${withoutIdsString}|a:${anyIdsString}|r:${reactIdsString}|c:${constantsString}`
 	}
 
 	/**
@@ -83,9 +87,6 @@ export class QueryManager {
 	 * @param {number[]} [options.without=[]] - Component type IDs that must NOT be present.
 	 * @param {number[]} [options.any=[]] - Component type IDs where at least one must be present.
 	 * @param {number[]} [options.react=[]] - Component type IDs that, if changed, will make entity match query.
-	 * @param {number[]} [options.read=[]] - Component type IDs that system reads from for dependency tracking.
-	 * @param {number[]} [options.write=[]] - Component type IDs that system writes to.
-	 * @param {boolean} [options.mutable=false] - If true, guarantees a unique, non-cached query instance.
 	 *
 	 * @example
 	 * // In a system's constructor or init method:
@@ -100,20 +101,10 @@ export class QueryManager {
 	 * });
 	 * @returns {Query} A new or cached Query instance.
 	 */
-	getQuery({
-		with: withComponents = [],
-		without = [],
-		any = [],
-		react = [],
-		read = [],
-		write = [],
-		constants = {},
-		mutable = false,
-	}) {
+	getQuery(options) {
 		try {
-			const options = { with: withComponents, without, any, react, read, write, constants, mutable };
-
-			const queryKey = mutable ? `mutable:${this.nextQueryId}` : this._generateQueryKey(options)
+			// Use the cached key generation to avoid per-frame string allocation.
+			const queryKey = this._getCachedQueryKey(options)
 
 			const cachedQuery = this.queryCache.get(queryKey)
 			if (cachedQuery) {
@@ -121,29 +112,28 @@ export class QueryManager {
 				return cachedQuery
 			}
 
-			const queryId = this.nextQueryId++;
+			const queryId = this.nextQueryId++
 
 			const constantsRequest = this._parseConstants(options.constants)
 
 			const newQuery = new Query(
 				queryId,
 				this,
-				this.entityManager, 
-				options.with, 
+				options.with,
 				options.without,
 				options.any,
 				options.react,
-				options.read,
-				options.write,
-				constantsRequest
+				constantsRequest,
 			)
 
 			newQuery.refCount = 1
-			newQuery.cacheKey = queryKey;
+			newQuery.cacheKey = queryKey
 			this.queryCache.set(queryKey, newQuery)
-			this.queriesById[queryId] = newQuery;
+			this.queriesById[queryId] = newQuery
 
-			for (const archetypeId of this.entityManager.archetypeLookup.values()) {
+			this._registerQueryInIndices(newQuery)
+
+			for (const archetypeId of entityStore.archetypeLookup.values()) {
 				newQuery.registerArchetype(archetypeId)
 			}
 
@@ -155,7 +145,7 @@ export class QueryManager {
 	}
 
 	getQueryById(id) {
-		return this.queriesById[id];
+		return this.queriesById[id]
 	}
 
 	/**
@@ -177,26 +167,160 @@ export class QueryManager {
 		return parsedRequest
 	}
 
+	_registerQueryInIndices(query) {
+		const register = (map, typeId) => {
+			if (!map.has(typeId)) {
+				map.set(typeId, new Set())
+			}
+			map.get(typeId).add(query)
+		}
+
+		// Reactive components are also 'with' components for matching purposes
+		const allPositiveRequirements = [...query.with, ...query.react]
+
+		for (const typeId of allPositiveRequirements) {
+			register(this.queriesWith, typeId)
+		}
+		for (const typeId of query.without) {
+			register(this.queriesWithout, typeId)
+		}
+		for (const typeId of query.any) {
+			register(this.queriesAny, typeId)
+		}
+
+		if (allPositiveRequirements.length === 0 && query.any.size === 0) {
+			this.queriesWithOnlyExclusions.add(query)
+		}
+	}
+
+	_unregisterQueryFromIndices(query) {
+		const unregister = (map, typeId) => {
+			if (map.has(typeId)) {
+				map.get(typeId).delete(query)
+				if (map.get(typeId).size === 0) {
+					map.delete(typeId)
+				}
+			}
+		}
+
+		const allPositiveRequirements = [...query.with, ...query.react]
+
+		for (const typeId of allPositiveRequirements) {
+			unregister(this.queriesWith, typeId)
+		}
+		for (const typeId of query.without) {
+			unregister(this.queriesWithout, typeId)
+		}
+		for (const typeId of query.any) {
+			unregister(this.queriesAny, typeId)
+		}
+
+		if (allPositiveRequirements.length === 0 && query.any.size === 0) {
+			this.queriesWithOnlyExclusions.delete(query)
+		}
+	}
+
+	_addQueryToArchetypeIndex(query, archetypeId) {
+		if (!this.queriesByArchetype.has(archetypeId)) {
+			this.queriesByArchetype.set(archetypeId, new Set())
+		}
+		this.queriesByArchetype.get(archetypeId).add(query)
+	}
+
+	_removeQueryFromArchetypeIndex(query, archetypeId) {
+		const queries = this.queriesByArchetype.get(archetypeId)
+		if (queries) {
+			queries.delete(query)
+			if (queries.size === 0) {
+				this.queriesByArchetype.delete(archetypeId)
+			}
+		}
+	}
+
 	registerArchetype(newArchetypeId) {
-		for (const query of this.queryCache.values()) {
+		const candidateQueries = new Set()
+		const archetypeComponentIDs = this.entityManager.getComponentTypeIDsForArchetype(newArchetypeId)
+
+		if (!archetypeComponentIDs) return
+
+		// 1. Gather candidates that have a `with` or `any` requirement matching a component in the new archetype.
+		for (const typeId of archetypeComponentIDs) {
+			this.queriesWith.get(typeId)?.forEach(q => candidateQueries.add(q))
+			this.queriesAny.get(typeId)?.forEach(q => candidateQueries.add(q))
+		}
+
+		// 2. Add all queries that only have `without` clauses, as they could match any new archetype.
+		this.queriesWithOnlyExclusions.forEach(q => candidateQueries.add(q))
+
+		// 3. Run the final, precise `archetypeMatches` check on the much smaller candidate set.
+		for (const query of candidateQueries) {
 			query.registerArchetype(newArchetypeId)
 		}
 	}
 
-	unregisterArchetype(deletedArchetypeId) {
-		for (const query of this.queryCache.values()) {
-			query.unregisterArchetype(deletedArchetypeId)
+	/**
+	 * Notifies all relevant queries that a new chunk has been added to an existing archetype.
+	 * @param {number} archetypeId The ID of the archetype that received a new chunk.
+	 * @param {number} newChunkId The ID of the newly created chunk.
+	 */
+	registerChunk(archetypeId, newChunkId) {
+		const matchingQueries = this.queriesByArchetype.get(archetypeId)
+		if (matchingQueries) {
+			for (const query of matchingQueries) {
+				query.registerChunk(archetypeId, newChunkId)
+			}
 		}
 	}
 
-	releaseQuery(queryToRelease) {
+	/**
+	 * Notifies all relevant queries that a chunk has been removed from an archetype.
+	 * @param {number} archetypeId The archetype ID.
+	 * @param {number} chunkId The ID of the chunk that was removed/recycled.
+	 */
+	unregisterChunk(archetypeId, chunkId) {
+		const matchingQueries = this.queriesByArchetype.get(archetypeId)
+		if (matchingQueries) {
+			for (const query of matchingQueries) {
+				query.unregisterChunk(archetypeId, chunkId)
+			}
+		}
+	}
+
+	unregisterArchetype(deletedArchetypeId) {
+		const matchingQueries = this.queriesByArchetype.get(deletedArchetypeId)
+		if (matchingQueries) {
+			// We must clone the set before iterating, because `query.unregisterArchetype`
+			// will call `_removeQueryFromArchetypeIndex`, which modifies the set we are iterating over.
+			for (const query of [...matchingQueries]) {
+				query.unregisterArchetype(deletedArchetypeId)
+			}
+		}
+	}
+
+	/**
+	 * Clears all matching archetype data from every cached query.
+	 * This is called by the EntityManager during a full world reset.
+	 */
+	unregisterAllArchetypes() {
+		this.queriesByArchetype.clear()
+		for (const query of this.queryCache.values()) {
+			query.clearArchetypes()
+		}
+	}
+
+	destroyQuery(queryToRelease) {
 		if (!queryToRelease) return
 
 		queryToRelease.refCount--
 
 		if (queryToRelease.refCount <= 0) {
 			this.queryCache.delete(queryToRelease.cacheKey)
-			this.queriesById[queryToRelease.id] = undefined;
+			this.queriesById[queryToRelease.id] = undefined
+			this._unregisterQueryFromIndices(queryToRelease)
+			// Also remove it from the archetype-based index.
+			for (const archetypeId of queryToRelease.matchingArchetypeIds) {
+				this._removeQueryFromArchetypeIndex(queryToRelease, archetypeId)
+			}
 		}
 	}
 }

@@ -15,22 +15,26 @@ export class GravitySystem {
 	}
 	init() {}
 
-	update(deltaTime, currentTick) {
+	update({deltaTime, currentTick, lastTick}) {
 		for (const chunk of this.query.iter()) {
-			const velocityMarker = chunk.getDirtyMarker(this.velocity, currentTick)
-
-			const isGroundedArrays = chunk.componentArrays[this.isGrounded]
-			const velocityArrays = chunk.componentArrays[this.velocity]
+			const isGroundedArrays = chunk.componentData[this.isGrounded]
+			const velocityArrays = chunk.componentData[this.velocity]
+			const velocityDirtyTicks = chunk.dirtyTicks[this.velocity]
 
 			const isGroundedArr = isGroundedArrays.isGrounded
 			const velY = velocityArrays.y
 
+			let wasModified = false
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				if (!isGroundedArr[indexInChunk]) {
 					velY[indexInChunk] -= this.gravity * deltaTime
-					velocityMarker.mark(indexInChunk)
+					velocityDirtyTicks[indexInChunk] = currentTick
+					wasModified = true
 				}
 			}
+			if (wasModified) chunk.markChunkDirty(this.velocity, currentTick)
 		}
 	}
+
+	destroy() {}
 }

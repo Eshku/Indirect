@@ -14,7 +14,7 @@ const SOA_BUFFER_INITIAL_CAPACITY = 1024
  * It combines a RawCommandBuffer for data and a SortableCommandBuffer for execution order.
  */
 export class CommandBuffer {
-	constructor() { // No longer needs prefabManager or archetypeManager
+	constructor() {
 		this.rawBuffer = new RawCommandBuffer()
 		this.sortableBuffer = new SortableCommandBuffer()
 	}
@@ -108,6 +108,25 @@ export class CommandBuffer {
 	}
 
 	/**
+	 * Records a highly-efficient command to destroy all entities within a specific chunk.
+	 * This is significantly faster than iterating and calling `destroyEntity` on each one.
+	 * @param {import('../../Managers/QueryManager/ChunkView.js').ChunkView} chunk - A reference to the target chunk, typically from a query iterator.
+	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
+	 */
+	destroyEntitiesInChunk(chunk, layer = 0) {
+		const offset = this.rawBuffer.offset
+		const startOffset = offset
+
+		this.rawBuffer.writeU8(OpCodes.DESTROY_ENTITIES_IN_CHUNK)
+		this.rawBuffer.writeU16(chunk.chunkId) // Use U16 for chunkId as it's the max
+
+		const length = this.rawBuffer.offset - startOffset
+		// The primary sort key is the chunkId itself to group deletions.
+		const key = SortableCommandBuffer.encodeKey(SortPhase.DESTROY, layer, chunk.chunkId, 0)
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
 	 * Records a command to create a new entity from a pre-compiled SoA payload.
 	 * This is the primary, high-performance "fast path" for single entity creation,
 	 * as it bypasses all runtime data processing.
@@ -138,6 +157,7 @@ export class CommandBuffer {
 	 */
 	instantiate(payload, layer = 0) {
 		// Instantiate is just an alias for creating a single entity from a pre-compiled payload.
+		// DEV-NOTE: Recursive children instantiation will be deprecated once placeholder entities are implemented.
 		this.createEntity(payload, layer)
 		//! Recursive children instantiation will be deprecated once we have placeholder entities implemented.
 	}
@@ -154,7 +174,7 @@ export class CommandBuffer {
 		//! will call createEntities after resolving all the crap on low-level
 		//! Gonna use AoS too.
 	}
-	
+
 	/**
 	 * [PLACEHOLDER] Records a command to add a component to all entities in a specific chunk.
 	 * @param {object} chunk - A reference to the target chunk.
@@ -164,15 +184,6 @@ export class CommandBuffer {
 	addComponentToChunk(chunk, payload, layer = 0) {
 		// TODO: Implement chunk-based command. This will write the chunk's unique ID
 		// and the payload to the raw buffer.
-	}
-
-	// TODO: Add removeComponentFromChunk, setComponentDataOnChunk, and destroyEntitiesInChunk
-
-	/**
-	 * @private
-	 */
-	_resizeSoA(typeID) {
-		// This method is no longer needed as the internal SoA buffer is removed.
 	}
 
 	/**
@@ -204,6 +215,4 @@ export class CommandBuffer {
 			sortedLengths: this.sortableBuffer.getSortedLengths(),
 		}
 	}
-
-
 }

@@ -244,7 +244,7 @@ export class PrefabManager {
 
 		// Automatically add the Prefab component to the root entity's data.
 		// This ensures every instantiated entity knows its numeric prefab ID.
-		mergedComponents.Prefab = { id: BigInt(id) }
+		mergedComponents.Prefab = { id: id }
 
 		// The preprocessedIdMaps cache is now obsolete and can be removed.
 

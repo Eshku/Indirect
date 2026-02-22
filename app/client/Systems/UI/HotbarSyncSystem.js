@@ -1,13 +1,11 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, uiManager } = engine.getManagers()
-const { queryManager } = ecs
-
+const { queryManager, sharedDataManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
-const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
 
 const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 
-const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
+const { Hotbar, HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
 
 /**
  * Synchronizes the state of the player's hotbar with the Hotbar UI.
@@ -37,7 +35,6 @@ export class HotbarSyncSystem {
 		this.playerInitQuery = queryManager.getQuery({ with: [playerTag] })
 
 		this.stringStorage = stringInterningTable.storage
-		this.propertyGroupManager = propertyGroupManager
 		this.prefabManager = ecs.prefabManager
 		this.playerId = null
 		this.cachedSlotEntityIds = Array(HOTBAR_SLOT_COUNT).fill(0)
@@ -46,32 +43,39 @@ export class HotbarSyncSystem {
 		// Pre-compile payload for ActiveSet component updates.
 		this.activeSetPayload = payloadCompiler.compileComponent(this.activeSet, { slots: [] })
 
+		// Use the new, unified shared data manager.
+		this.sharedDataManager = sharedDataManager
+
 		this.playerCooldowns = new Map() // Map<prefabId, remainingTime>
 		this.hotbar = null
 	}
 
-	init() {
-		this.hotbar = uiManager.getElement('Hotbar')
+	async init() {
+		const { gameManager, layerManager } = engine.getManagers()
+		const pixiApp = await gameManager.getApp()
+
+		this.hotbar = new Hotbar(pixiApp, layerManager.getLayer('ui'))
+		uiManager.register(this.hotbar)
 
 		for (const chunk of this.playerInitQuery.iter()) {
 			this.playerId = chunk.entities[0]
 			break
 		}
 		if (!this.playerId) console.error('HotbarSyncSystem: Could not find player entity!')
-
+		// Initial sync to render the hotbar correctly on first frame.
 		this.update(0)
 	}
 
-	update(deltaTime) {
+	update({deltaTime}) {
 		const desiredState = Array(HOTBAR_SLOT_COUNT).fill(null)
 		const desiredSlotEntityIds = Array(HOTBAR_SLOT_COUNT).fill(0)
 		const stringStorage = this.stringStorage
 
 		for (const chunk of this.hotbarItemsQuery.iter()) {
-			const ownerArrays = chunk.componentArrays[this.owner]
-			const inActiveSetArrays = chunk.componentArrays[this.inActiveSet]
-			const prefabIdArrays = chunk.componentArrays[this.prefab]
-			const iconArrays = chunk.componentArrays[this.icon]
+			const ownerArrays = chunk.componentData[this.owner]
+			const inActiveSetArrays = chunk.componentData[this.inActiveSet]
+			const prefabIdArrays = chunk.componentData[this.prefab]
+			const iconArrays = chunk.componentData[this.icon]
 
 			const ownerEntityIds = ownerArrays.entityId
 			const slots = inActiveSetArrays.slot
@@ -85,27 +89,26 @@ export class HotbarSyncSystem {
 				const slot = slots[indexInChunk]
 
 				if (slot < HOTBAR_SLOT_COUNT) {
-					// Prefab component now has a sharedGroupId property on the chunk.
-					const sharedGroupId = prefabIdArrays.sharedGroupId[indexInChunk]
+					// --- NEW DATA ACCESS PATTERN ---
+					// 1. Get the prototypeId from the entity's component data.
+					const prototypeId = prefabIdArrays.prototypeId[indexInChunk]
+					// 2. Get the prototype object from the prototypeStore.
+					const prototype = this.sharedDataManager.prototypeStore[prototypeId]
+					if (!prototype) continue
 
-					// Get shared data block for this item.
-					const sharedGroup = this.propertyGroupManager.sharedGroups[sharedGroupId]
+					// 3. Get the sharedDataIndex for each component from the prototype.
+					const prefabDataIndex = prototype[this.prefab]
+					const iconDataIndex = prototype[this.icon]
+					const cooldownDataIndex = prototype[this.cooldown]
 
-					// Get prefabId from shared group.
-					const sharedPrefabData = sharedGroup?.[this.prefab]
-					const prefabId = sharedPrefabData?.id
+					// 4. Get the actual values from the valueStores or per-entity data.
+					const prefabId = this.sharedDataManager.valueStores[this.prefab].id[prefabDataIndex]
 
-					// Icon's assetName is a per-entity property (though string is interned).
+					let iconAssetNameRef = iconArrays.assetName[indexInChunk]
 
-					//! share asset name?
-
-					// We read its numeric reference directly from chunk.
-					const iconAssetNameRef = iconArrays.assetName[indexInChunk]
 					const iconAssetStr = stringStorage[iconAssetNameRef]
 
-					// Cooldown.duration is shared property.
-					const sharedCooldownData = sharedGroup[this.cooldown]
-					const totalDuration = sharedCooldownData?.duration ?? 0
+					let totalDuration = this.sharedDataManager.valueStores[this.cooldown].duration[cooldownDataIndex]
 
 					desiredState[slot] = {
 						itemId: entityId,
@@ -154,10 +157,12 @@ export class HotbarSyncSystem {
 
 		// --- Active Slot Highlight Sync ---
 		let newActiveSlot = 0
+
 		for (const chunk of this.playerUpdateQuery.iter()) {
 			// Because the query is reactive, we only check entities that have changed.
-			if (this.playerUpdateQuery.hasChanged(chunk, 0)) {
-				const playerActiveSetArrays = chunk.componentArrays[this.activeSet]
+			if (chunk.hasChanged(this.activeSet, 0)) {
+				// The player is a singleton, so we can check index 0.
+				const playerActiveSetArrays = chunk.componentData[this.activeSet]
 				newActiveSlot = playerActiveSetArrays.activeSlotIndex[0]
 
 				if (newActiveSlot !== this.cachedActiveSlot) {
@@ -175,10 +180,10 @@ export class HotbarSyncSystem {
 		// This loop now only runs if cooldowns have changed, and only iterates
 		// over the chunks containing those changed cooldowns.
 		for (const chunk of this.cooldownsQuery.iter()) {
-			const cooldowns = chunk.componentArrays[this.activeCooldown]
+			const cooldowns = chunk.componentData[this.activeCooldown]
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				// Check if this specific entity's cooldown component has changed.
-				if (this.cooldownsQuery.hasChanged(chunk, indexInChunk)) {
+				if (chunk.hasChanged(this.activeCooldown, indexInChunk)) {
 					// We only care about cooldowns owned by our player.
 					if (cooldowns.ownerId[indexInChunk] === this.playerId) {
 						const prefabId = cooldowns.prefabId[indexInChunk]
@@ -204,6 +209,14 @@ export class HotbarSyncSystem {
 			} else {
 				this.hotbar.updateCooldown(i, null)
 			}
+		}
+	}
+
+	destroy() {
+		if (this.hotbar) {
+			uiManager.unregister(this.hotbar)
+			this.hotbar.destroy()
+			this.hotbar = null
 		}
 	}
 }

@@ -3,6 +3,7 @@
 
 #build
 /exe
+/dist
 
 #asset sources
 /app/client/assets/icons/skills/source

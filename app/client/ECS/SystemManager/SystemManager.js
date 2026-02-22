@@ -1,16 +1,20 @@
 const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
+const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
 
+import { GameLoop } from './GameLoop.js'
 import { loadAllSystems } from './systemLoader.js'
 import { systemRegistry } from './SystemRegistry.js'
 
+import { releaseSystemQueries } from './systemUtils.js'
+
 import { systemSchedule } from './systemConfig.js'
+import { importFromString } from '../../Core/utils/blob.js'
 import { CommandBuffer } from './CommandBuffer.js'
 import { CommandBufferExecutor } from './CommandBufferExecutor.js'
 import { payloadCompiler } from './PayloadCompiler.js'
 
 const { Sequence } = await import(`${PATH_CORE}/DataStructures/Sequence.js`)
 const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`)
-const { topologicalSort } = await import(`${PATH_CORE}/Algorithms/TopologicalSort.js`)
 
 /**
  * Manages the lifecycle and execution of all game systems.
@@ -24,7 +28,6 @@ const { topologicalSort } = await import(`${PATH_CORE}/Algorithms/TopologicalSor
  */
 export class SystemManager {
 	constructor() {
-
 		this.app = null
 		this.ticker = null
 		this.renderer = null
@@ -39,24 +42,31 @@ export class SystemManager {
 
 		this.systemTimings = {}
 
-		this._executionOrder = new Sequence()
-
-		this._executionOrderMap = new Map() // A cache mapping system names to their index
-		this._dependencyGraph = new Map()
-		this._executionStages = []
+		// A flat list of all system names to be managed, derived from systemConfig.js.
+		this._systemList = new Sequence()
 
 		// This will store the configuration for each system's update rate.
 		// Map<SystemClass, { frequency: number | 'fixed' | 'update', groupName: string }>
 		this._systemConfig = new Map()
 
+		// Caches pre-analyzed static metadata for each system class.
+		this.systemMetadataCache = new Map()
+
+		// --- Persistent System ID Mapping ---
+		this.systemIdCounter = 0
+		this.systemNameToId = new Map()
+		this.idToSystemName = new Map()
+
+		this.hmrListenerId = null
+
 		// Holds the system instances, categorized by their update group.
 		this.updateGroups = {
 			// Runs first for low-latency user input.
-			input: { name: 'input', systems: [], hasChangedSystem: false, lastTick: -1 },
+			input: { name: 'input', systems: [], lastTick: -1 },
 			// Runs on a fixed, deterministic timer for core gameplay logic and physics.
-			logic: { name: 'logic', systems: [], hasChangedSystem: false, lastTick: -1 },
+			logic: { name: 'logic', systems: [], lastTick: -1 },
 			// Runs once per visual frame for rendering, interpolation, and UI.
-			visuals: { name: 'visuals', systems: [], hasChangedSystem: false, lastTick: -1 },
+			visuals: { name: 'visuals', systems: [], lastTick: -1 },
 		}
 	}
 
@@ -83,11 +93,7 @@ export class SystemManager {
 	 * 3. Configures system execution order and frequencies.
 	 */
 	async init(ecs) {
-		const {GameLoop} = await import(`${PATH_ECS}/SystemManager/GameLoop.js`)
-
-
 		this.gameLoop = new GameLoop()
-
 
 		// Get our manager dependencies from the ECS instance.
 		this.entityManager = ecs.entityManager
@@ -95,10 +101,15 @@ export class SystemManager {
 		this.componentManager = ecs.componentManager
 		this.queryManager = ecs.queryManager
 		this.prefabManager = ecs.prefabManager
+		this.workerManager = ecs.engine.workerManager
 
+		// --- HMR Listener Fix ---
+		// Ensure we only ever have one listener attached, even if init() is called multiple times.
+		if (!this.hmrListenerId) {
+			this.hmrListenerId = eventEmitter.on('hmr:system-update', data => this.hotSwapModule(data.path, data.code))
+		}
 
 		const systemModules = await loadAllSystems()
-
 
 		this.app = gameManager.getApp()
 		this.renderer = this.app.renderer
@@ -110,13 +121,15 @@ export class SystemManager {
 
 		systemRegistry.registerSystemClasses(systemModules)
 
+		// --- Analysis Step ---
+		this._analyzeAndCacheSystems()
+
 		// --- Configuration Step ---
-		// Get the single, flattened execution order from the new group-based config.
-		this._defineSystemOrders()
+		// Get the single, flattened list of systems from the new group-based config.
+		this._defineSystemList()
 		this._configureSystemFrequencies()
-		this._rebuildExecutionOrderMap() // --- Configuration Validation Step ---
+
 		this._validateSystemConfiguration()
-		// Initialize the game loop, which will handle its own prerender hook.
 		await this.gameLoop.init(ecs)
 	}
 
@@ -127,7 +140,7 @@ export class SystemManager {
 	 */
 	async initAll() {
 		// Instantiate and initialize systems based on the execution order.
-		for (const systemName of this._executionOrderMap.keys()) {
+		for (const systemName of this._systemList) {
 			const systemInstance = systemRegistry.instantiateSystem(systemName)
 			if (systemInstance) {
 				systemInstance.commands = this.commandBuffer
@@ -139,117 +152,24 @@ export class SystemManager {
 		}
 
 		// Now that all systems are instantiated and initialized, queue them for execution.
-		this.queAll(this._executionOrderMap.keys())
+		this.queAll(this._systemList)
 
-		// Build and sort the dependency graph to determine execution stages.
-		this._buildDependencyGraph()
-		const { stages, hasCycle, cycleNodes } = topologicalSort(this._dependencyGraph)
+		// Sort all groups to enforce the canonical execution order.
+		this._sortAllGroups()
 
-		if (hasCycle) {
-			console.error(
-				`SystemManager: Circular dependency detected! The following systems depend on each other in a loop: [${cycleNodes.join(
-					', '
-				)}]`
-			)
-			console.warn('SystemManager: Falling back to manual execution order. Parallelism will be disabled.')
-
-			// Create a serial execution plan based on the manual order from systemConfig.js.
-			// Each system gets its own stage, forcing them to run one after another.
-			this._executionStages = this._executionOrder.map(systemName => [systemName])
-		} else {
-			this._executionStages = stages
-		}
+		// Send the initial, static context data for all parallel systems to the workers.
+		this.workerManager.broadcastInitialSystemContexts()
 	}
 
 	/**
-	 * Builds a dependency graph between all registered systems based on their query declarations.
-	 * This method implements the logic outlined in `ParallelismPlan.md`.
-	 * @private
+	 * Clears the system timings object. Called by the GameLoop once per frame.
 	 */
-	_buildDependencyGraph() {
-		const systemDependencies = new Map() // Map<string, { reads: Set<number>, writes: Set<number> }>
-		const systemNames = Array.from(systemRegistry.systemInstances.keys())
-
-		// 1. Gather all read/write dependencies for each system.
-		for (const systemName of systemNames) {
-			const system = systemRegistry.getSystem(systemName)
-			systemDependencies.set(systemName, this._getSystemDependencies(system))
-		}
-
-		// 2. Build the graph. An edge from A to B means A must run before B.
-		const graph = new Map()
-		for (const name of systemNames) {
-			graph.set(name, new Set())
-		}
-
-		// Use the manual execution order to resolve Write-Write conflicts deterministically.
-		// This map provides O(1) lookup for a system's manual execution index.
-		const executionOrderIndex = new Map()
-		this._executionOrder.forEach((name, index) => executionOrderIndex.set(name, index))
-
-		for (let i = 0; i < systemNames.length; i++) {
-			for (let j = i + 1; j < systemNames.length; j++) {
-				const nameA = systemNames[i]
-				const nameB = systemNames[j]
-				const depsA = systemDependencies.get(nameA)
-				const depsB = systemDependencies.get(nameB)
-
-				// --- Conflict Detection (A vs B) ---
-				const writesA = depsA.writes
-				const readsA = depsA.reads
-				const writesB = depsB.writes
-				const readsB = depsB.reads
-
-				//?
-				// Read-After-Write (RAW): B reads a component that A writes. B must run after A.
-				const B_reads_what_A_writes = [...writesA].some(c => readsB.has(c))
-
-				// Write-After-Read (WAR): B writes a component that A reads. A must run before B.
-				const B_writes_what_A_reads = [...writesB].some(c => readsA.has(c))
-
-				// Write-After-Write (WAW): A and B both write to the same component.
-				const A_and_B_write_same = [...writesA].some(c => writesB.has(c))
-
-				// --- Dependency Creation ---
-				// A RAW (Read-After-Write) or WAR (Write-After-Read) dependency exists.
-				// In both cases, to ensure data correctness, A must execute before B.
-				// RAW: B needs data A just wrote.
-				// WAR: A needs to read data before B overwrites it.
-				if (B_reads_what_A_writes || B_writes_what_A_reads) {
-					graph.get(nameA).add(nameB) // Enforce A -> B
-				}
-				// WW: If both write to same component, use manual execution order as a tie-breaker
-
-				if (A_and_B_write_same) {
-					if (executionOrderIndex.get(nameA) < executionOrderIndex.get(nameB)) {
-						graph.get(nameA).add(nameB)
-					} else {
-						graph.get(nameB).add(nameA)
-					}
-				}
-
-				// --- Note on Internal System Conflicts ---
-				// This algorithm intentionally does not check for conflicts *within* a single system
-				// (e.g., a system reading from and writing to same component via different queries).
-				// This is because a system's `update` method is a single, serial execution block.
-				// Developer is responsible for ordering their internal logic (e.g., iterating query1
-				// before query2) to handle these internal data flows correctly. Sheduler only
-				// cares about preventing data races *between* different systems that might run in parallel.
-
-				//! Gonna come back to it once figure out how and what we are going to run in parallel.
-				//! Currently we have some blockers limiting us to Coarse-Grained \ system level parrallelism
-				//! even pre-processing cannot be transfered, it has to be compiled per-thread
-				//! idk, gonna figure it out later.
-				
-				//! task scheduler, work-stealing, dependency graph
-			}
-		}
-
-		this._dependencyGraph = graph
+	clearSystemTimings() {
+		this.systemTimings = {}
 	}
 
-	queAll(executionOrder) {
-		for (const systemName of executionOrder) {
+	queAll(systemList) {
+		for (const systemName of systemList) {
 			if (systemRegistry.getSystem(systemName)) {
 				this.queSystem(systemName)
 			}
@@ -257,30 +177,208 @@ export class SystemManager {
 	}
 
 	/**
-	 * Defines the final, flattened execution order for all game systems from the
+	 * Defines the final, flattened list of systems to run from the
 	 * `systemSchedule` configuration. This is the single source of truth for both
-	 * initialization and per-frame execution order tie-breaking. This populates
-	 * the internal `_executionOrder` sequence.
+	 * initialization and for determining which systems are active. This populates
+	 * the internal `_systemList` sequence.
 	 * @private
 	 */
-	_defineSystemOrders() {
-		this._executionOrder.clear()
-		const added = new Set()
+	_defineSystemList() {
+		this._systemList.clear()
+		const allSystemNames = new Set()
 
 		for (const groupName of Object.keys(systemSchedule)) {
 			const systemList = systemSchedule[groupName]
-
 			if (Array.isArray(systemList)) {
 				for (const systemConfig of systemList) {
-					const systemName = systemConfig.name
-					if (!added.has(systemName)) {
-						this._executionOrder.insert(systemName)
-						added.add(systemName)
-					}
+					allSystemNames.add(systemConfig.name)
 				}
-			} else {
-				console.warn(`System group "${groupName}" is not a valid array in systemConfig.`)
 			}
+		}
+
+		// Create a canonically sorted list of all active systems by their ID.
+		// This list becomes the single source of truth for execution order,
+		// decoupling it from the layout of `systemConfig.js`.
+		const sortedNames = Array.from(allSystemNames).sort((a, b) => {
+			return this.systemNameToId.get(a) - this.systemNameToId.get(b)
+		})
+		for (const name of sortedNames) {
+			this._systemList.insert(name)
+		}
+	}
+
+	/**
+	 * Analyzes all registered system classes for their static metadata (`runsAfter`,
+	 * `dependencies`, methods) and caches it for fast access by the Scheduler.
+	 * This is a one-time operation performed at initialization.
+	 * @private
+	 */
+	_analyzeAndCacheSystems() {
+		this.systemMetadataCache.clear()
+		this._assignAllSystemIds()
+		this._buildInitialMetadata()
+		this._resolveAndValidateControlFlow()
+	}
+
+	/**
+	 * First analysis pass: Assigns a persistent, unique integer ID to every registered system class.
+	 * @private
+	 */
+	_assignAllSystemIds() {
+		// Re-populate the maps from the canonical registry.
+		this.systemIdCounter = 0
+		this.systemNameToId.clear()
+		this.idToSystemName.clear()
+		for (const systemName of systemRegistry.systemClasses.keys()) {
+			this._assignSystemId(systemName)
+		}
+	}
+
+	/**
+	 * Second analysis pass: Builds the initial metadata for each system.
+	 * It extracts data dependencies and stores raw control-flow dependency names for a later pass.
+	 * @private
+	 */
+	_buildInitialMetadata() {
+		const typeIDs = this.componentManager.getTypeIDs() // Hoisted out of the loop for efficiency.
+		for (const [systemName, SystemClass] of systemRegistry.systemClasses.entries()) {
+			const metadata = {
+				id: this.systemNameToId.get(systemName),
+				name: systemName,
+				hasUpdate: !!SystemClass.prototype.update,
+				hasSchedule: !!SystemClass.prototype.schedule,
+				hasProcess: !!SystemClass.prototype.process,
+				dependencies: this._extractAndTranslateDataDependencies(SystemClass, systemName, typeIDs),
+				// Store raw names for the resolution pass.
+				_runsAfterRaw: SystemClass.runsAfter || [],
+				_runsBeforeRaw: SystemClass.runsBefore || [],
+				// Final ID arrays will be populated in the next pass.
+				runsAfter: [],
+			}
+			this.systemMetadataCache.set(systemName, metadata)
+		}
+	}
+
+	/**
+	 * Extracts and translates `reads`/`writes` component dependencies from a system class into type IDs.
+	 * This is a helper method for the analysis pass.
+	 * @param {Function} SystemClass - The system class to analyze.
+	 * @param {string} systemName - The name of the system for logging.
+	 * @param {Object<string, number>} typeIDs - The map of component names to type IDs.
+	 * @returns {object} The structured dependency object with sets of component IDs.
+	 * @private
+	 */
+	_extractAndTranslateDataDependencies(SystemClass, systemName, typeIDs) {
+		const systemDependencies = {
+			update: { reads: new Set(), writes: new Set() },
+			schedule: { reads: new Set(), writes: new Set() },
+			process: { reads: new Set(), writes: new Set() },
+		}
+
+		const dependencies = SystemClass.dependencies
+		if (dependencies) {
+			for (const method of ['update', 'schedule', 'process']) {
+				const methodDeps = dependencies[method]
+				if (!methodDeps) continue
+
+				methodDeps.reads?.forEach(name => {
+					const id = typeIDs[name]
+					if (Number.isInteger(id)) {
+						systemDependencies[method].reads.add(id)
+					} else {
+						console.warn(
+							`[SystemManager] System "${systemName}" has a read dependency in method "${method}" on an unknown component "${name}".`,
+						)
+					}
+				})
+				methodDeps.writes?.forEach(name => {
+					const id = typeIDs[name]
+					if (Number.isInteger(id)) {
+						systemDependencies[method].writes.add(id)
+					} else {
+						console.warn(
+							`[SystemManager] System "${systemName}" has a write dependency in method "${method}" on an unknown component "${name}".`,
+						)
+					}
+				})
+			}
+		}
+		return systemDependencies
+	}
+
+	/**
+	 * Third and final analysis pass: Resolves all control-flow dependencies.
+	 * It translates `runsAfter` and `runsBefore` names to IDs, merges `runsBefore`
+	 * into the `runsAfter` lists of target systems, and validates against conflicts.
+	 * @private
+	 */
+	_resolveAndValidateControlFlow() {
+		// First, translate all raw string names to IDs for easier processing.
+		for (const [sourceSystemName, sourceMetadata] of this.systemMetadataCache.entries()) {
+			// Translate runsAfter
+			sourceMetadata.runsAfter = sourceMetadata._runsAfterRaw
+				.map(name => this.systemNameToId.get(name))
+				.filter(id => id !== undefined)
+
+			// Translate runsBefore and store temporarily
+			sourceMetadata._runsBeforeIds = sourceMetadata._runsBeforeRaw
+				.map(name => this.systemNameToId.get(name))
+				.filter(id => id !== undefined)
+		}
+
+		// Now, process `runsBefore` and check for conflicts.
+		for (const [sourceSystemName, sourceMetadata] of this.systemMetadataCache.entries()) {
+			if (sourceMetadata._runsBeforeIds.length === 0) continue
+
+			for (const targetSystemId of sourceMetadata._runsBeforeIds) {
+				const targetSystemName = this.idToSystemName.get(targetSystemId)
+				const targetMetadata = this.systemMetadataCache.get(targetSystemName)
+
+				if (targetMetadata) {
+					// CONFLICT CHECK 1: A runsBefore B, but also A runsAfter B.
+					if (sourceMetadata.runsAfter.includes(targetSystemId)) {
+						throw new Error(
+							`[SystemManager] Conflicting dependencies on "${sourceSystemName}": it is declared to run both BEFORE and AFTER "${targetSystemName}".`,
+						)
+					}
+
+					// CONFLICT CHECK 2: A runsBefore B, but also B runsBefore A.
+					if (targetMetadata._runsBeforeIds.includes(sourceMetadata.id)) {
+						throw new Error(
+							`[SystemManager] Circular dependency detected: "${sourceSystemName}" runs BEFORE "${targetSystemName}", and "${targetSystemName}" runs BEFORE "${sourceSystemName}".`,
+						)
+					}
+
+					// Add the inverse dependency: `target` runs after `source`.
+					if (!targetMetadata.runsAfter.includes(sourceMetadata.id)) {
+						targetMetadata.runsAfter.push(sourceMetadata.id)
+					}
+				} else {
+					console.warn(
+						`[SystemManager] System "${sourceSystemName}" has a 'runsBefore' dependency on an unknown system "${targetSystemName}".`,
+					)
+				}
+			}
+		}
+
+		// Final cleanup of temporary properties.
+		for (const metadata of this.systemMetadataCache.values()) {
+			delete metadata._runsAfterRaw
+			delete metadata._runsBeforeRaw
+			delete metadata._runsBeforeIds
+		}
+	}
+
+	/**
+	 * Assigns a persistent, unique integer ID to a system name if it doesn't have one.
+	 * @param {string} systemName - The name of the system.
+	 * @private
+	 */
+	_assignSystemId(systemName) {
+		if (!this.systemNameToId.has(systemName)) {
+			const id = this.systemIdCounter++
+			this.systemNameToId.set(systemName, id)
+			this.idToSystemName.set(id, systemName)
 		}
 	}
 
@@ -326,7 +424,7 @@ export class SystemManager {
 		const group = groupName ? this.updateGroups[groupName] : this._getSystemGroupFor(systemInstance)
 		if (!group) {
 			console.warn(
-				`SystemManager: Cannot que system "${systemInstance.constructor.name}". No valid group found or specified.`
+				`SystemManager: Cannot que system "${systemInstance.constructor.name}". No valid group found or specified.`,
 			)
 			return false
 		}
@@ -339,21 +437,8 @@ export class SystemManager {
 		this._primeSystem(systemInstance)
 		group.systems.push(systemInstance)
 
-		if (systemInstance.reactive) {
-			group.hasChangedSystem = true
-		}
-
-		this._sortGroup(group)
-
 		return true
 	}
-
-	//! todo pause and unque is different
-	/* * ### Parallel Execution Note for pause
-	 * In a future parallel architecture, this would simply signal the main-thread scheduler to stop
-	 * creating and dispatching jobs for this system. The system instances on the worker threads
-	 * would become idle but would not be destroyed, allowing for efficient re-queuing.
-	 *                               the group is inferred. */
 
 	/**
 	 * Deques a system from execution.
@@ -369,7 +454,7 @@ export class SystemManager {
 		const group = groupName ? this.updateGroups[groupName] : this._getSystemGroupFor(systemInstance)
 		if (!group) {
 			console.warn(
-				`SystemManager: Cannot deque system "${systemInstance.constructor.name}". No valid group found or specified.`
+				`SystemManager: Cannot deque system "${systemInstance.constructor.name}". No valid group found or specified.`,
 			)
 			return false
 		}
@@ -377,8 +462,6 @@ export class SystemManager {
 		const index = group.systems.indexOf(systemInstance)
 		if (index > -1) {
 			group.systems.splice(index, 1)
-			this._updateGroupReactivity(group)
-
 			return true
 		}
 
@@ -427,7 +510,6 @@ export class SystemManager {
 			const newGroup = {
 				name: groupName,
 				systems: [],
-				hasChangedSystem: false,
 				interval: 1 / fps,
 				accumulator: 0,
 				lastTick: -1,
@@ -437,9 +519,13 @@ export class SystemManager {
 	}
 
 	/**
-	 * Dynamically adds a new system to the engine at runtime.
+	 * Dynamically adds a new system to the engine at runtime. This is a complex operation
+	 * that involves pausing the game loop, re-analyzing system dependencies, and updating
+	 * execution orders.
 	 * @param {Function} SystemClass - The class of the system to add.
-	 * @param {object} options - Configuration for the new system. * @param {'logic'|'visuals'|'input'|number} options.frequency - The update frequency. * @param {string} [options.before] - The name of an existing system to insert this one before.
+	 * @param {object} options - Configuration for the new system.
+	 * @param {'logic'|'visuals'|'input'|number} options.frequency - The update frequency.
+	 * @param {string} [options.before] - The name of an existing system to insert this one before.
 	 * @param {string} [options.after] - The name of an existing system to insert this one after.
 	 */
 	async addSystem(SystemClass, options = {}) {
@@ -447,53 +533,73 @@ export class SystemManager {
 		const systemName = SystemClass.name
 
 		if (!frequency) {
-			console.error(`SystemManager.addSystem: Frequency is required to add system "${systemName}".`)
+			console.error(`[SystemManager] addSystem: Frequency is required to add system "${systemName}".`)
 			return
 		}
 
-		// 1. Register, instantiate, and initialize the system
+		// --- Synchronization: Pause the world to safely add the system ---
+		this.gameLoop.pause()
+
+		// 1. Register the new class and re-run analysis to generate metadata for the scheduler.
 		if (!systemRegistry.getSystemClass(systemName)) {
 			systemRegistry.systemClasses.set(systemName, SystemClass)
 		}
+		this._analyzeAndCacheSystems() // This is crucial for the scheduler.
+
+		// 2. Instantiate and initialize the system.
 		const systemInstance = systemRegistry.instantiateSystem(systemName)
 		if (!systemInstance) {
-			console.error(`Failed to instantiate and add system ${systemName}`)
+			console.error(`[SystemManager] Failed to instantiate and add system ${systemName}.`)
+			this.gameLoop.resume() // Resume on failure.
 			return
 		}
 		systemInstance.commands = this.commandBuffer
 		await systemInstance.init?.()
 
-		// 2. Configure its update frequency
+		// 3. Configure its update frequency.
 		this.setUpdateFrequency(systemName, frequency)
 
-		// 3. Insert it into the execution order using the Sequence
+		// 4. Insert it into the global execution order list.
+		// NOTE: Assumes _systemList is an array-like object that supports splice/findIndex.
 		let inserted = false
 		if (before) {
-			const index = this._executionOrder.findIndex(s => s === before)
+			const index = this._systemList.findIndex(s => s === before)
 			if (index !== -1) {
-				this._executionOrder.insertBefore(systemName, index)
+				this._systemList.splice(index, 0, systemName)
 				inserted = true
 			} else {
-				console.error(`Could not find system "${before}" to insert "${systemName}" before. Appending to end.`)
+				console.error(
+					`[SystemManager] Could not find system "${before}" to insert "${systemName}" before. Appending to end.`,
+				)
 			}
 		} else if (after) {
-			const index = this._executionOrder.findIndex(s => s === after)
+			const index = this._systemList.findIndex(s => s === after)
 			if (index !== -1) {
-				this._executionOrder.insertAfter(systemName, index)
+				this._systemList.splice(index + 1, 0, systemName)
 				inserted = true
 			} else {
-				console.error(`Could not find system "${after}" to insert "${systemName}" after. Appending to end.`)
+				console.error(
+					`[SystemManager] Could not find system "${after}" to insert "${systemName}" after. Appending to end.`,
+				)
 			}
 		}
 
 		if (!inserted) {
-			this._executionOrder.insert(systemName) // Add to the end by default
+			this._systemList.insert(systemName) // Add to the end by default
 		}
 
-		// 4. Update caches, queue the system, and re-sort all groups
-		this._rebuildExecutionOrderMap()
+		// 5. Queue the system into its correct update group.
 		this.queSystem(systemName) // This adds it to the correct update group
-		this._sortAllGroups() // Re-sort all groups as the global order has changed
+
+		// 6. Re-sort all groups to respect the new global order.
+		this._sortAllGroups()
+
+		// 7. Let workers know about the new system's context if it's parallel.
+		this.workerManager.broadcastInitialSystemContexts() // This re-broadcasts all contexts, which is safe.
+
+		console.log(`[SystemManager] Dynamically added system: ${systemName}`)
+
+		this.gameLoop.resume()
 	}
 
 	/**
@@ -503,100 +609,44 @@ export class SystemManager {
 	 * @private
 	 */
 	_validateSystemConfiguration() {
-		const executionOrderSet = new Set(this._executionOrder)
+		const systemListSet = new Set(this._systemList)
 
 		// 1. Check if all systems in the execution order have a frequency configured.
-		for (const systemName of this._executionOrder) {
+		for (const systemName of this._systemList) {
 			const SystemClass = systemRegistry.getSystemClass(systemName)
 			if (SystemClass && !this._systemConfig.has(SystemClass)) {
 				console.warn(
 					`SystemManager Validation: System "${systemName}" is in the execution order but has no frequency configured in systemConfig.js. ` +
-						`It will default to the 'visuals' update group.`
+						`It will default to the 'visuals' update group.`,
 				)
 			}
 		}
 
 		// 2. Check if all configured systems are actually in the execution order.
 		for (const SystemClass of this._systemConfig.keys()) {
-			if (!executionOrderSet.has(SystemClass.name)) {
+			if (!systemListSet.has(SystemClass.name)) {
 				// This check is less critical now as config is unified, but kept for robustness.
 				console.error(
 					`SystemManager Validation: System "${SystemClass.name}" has a frequency configured but is NOT listed in the 'systemSchedule' execution order in systemConfig.js. ` +
-						`This system will not be queued and will NOT run.`
+						`This system will not be queued and will NOT run.`,
 				)
 			}
 		}
 	}
 
 	/**
-	 * Rebuilds the execution order map from the sequence.
-	 * This is a performance cache to make sorting fast.
-	 * @private
-	 */
-	_rebuildExecutionOrderMap() {
-		this._executionOrderMap.clear()
-		this._executionOrder.forEach((name, index) => this._executionOrderMap.set(name, index))
-	}
-
-	_getSystemQueries(system, out = []) {
-		for (const key in system) {
-			const prop = system[key]
-			if (prop instanceof Query) {
-				out.push(prop)
-			}
-		}
-		return out
-	}
-
-	/**
-	 * Gathers all unique component dependencies for a given system instance.
-	 * @param {object} system The system instance.
-	 * @returns {{reads: Set<number>, writes: Set<number>}}
-	 * @private
-	 */
-	_getSystemDependencies(system) {
-		const queries = this._getSystemQueries(system)
-		const reads = new Set()
-		const writes = new Set()
-
-		for (const query of queries) {
-			query.read.forEach(id => reads.add(id))
-			query.with.forEach(id => reads.add(id))
-			query.any.forEach(id => reads.add(id))
-			query.react.forEach(id => reads.add(id))
-
-			query.write.forEach(id => writes.add(id))
-		}
-		return { reads, writes }
-	}
-
-	_getReactiveQueries(system, out = []) {
-		for (const key in system) {
-			const prop = system[key]
-			if (prop instanceof Query && prop.isReactiveQuery) {
-				out.push(prop)
-			}
-		}
-		return out
-	}
-
-	/**
 	 * "Primes" a system's reactive queries with the correct last tick.
-	 * This is a performance-critical helper called just before a system's update.
+	 * This is a performance-critical helper called just before a system's job is executed.
 	 * @param {object} system The system to prime.
 	 * @param {number} lastTick The last tick of the system's group.
-	 * @private
 	 */
-	_primeSystemQueries(system, lastTick) {
-		// This check is extremely fast as `reactive` is a pre-cached boolean.
+	primeSystemQueries(system, lastTick) {
 		if (system.reactive) {
-			// This loop is also fast as `reactiveQueries` is a pre-cached array.
 			for (const query of system.reactiveQueries) {
 				query.iterationLastTick = lastTick
 			}
 		}
 	}
-
 	/**
 	 * Unregisters a system instance from the manager.
 	 * The system must be de-queued from all update groups before it can be unregistered.
@@ -614,13 +664,16 @@ export class SystemManager {
 		for (const group of Object.values(this.updateGroups)) {
 			if (group.systems.includes(systemInstance)) {
 				console.warn(
-					`SystemManager: Cannot unregister system "${systemName}". It is still queued for execution. Call dequeSystem() first.`
+					`SystemManager: Cannot unregister system "${systemName}". It is still queued for execution. Call dequeSystem() first.`,
 				)
 				return false
 			}
 		}
 
 		// This is crucial for cleaning up resources like mutable queries.
+		// First, perform the automatic query cleanup.
+		releaseSystemQueries(systemInstance)
+		// Then, call the system's own optional destroy method for any custom cleanup.
 		systemInstance.destroy?.()
 
 		// Delegate unregistration to the central registry
@@ -680,7 +733,14 @@ export class SystemManager {
 	_primeSystem(systemInstance) {
 		if (systemInstance.reactive === undefined) {
 			// Check if not already primed
-			const reactiveQueries = this._getReactiveQueries(systemInstance)
+			const reactiveQueries = []
+			for (const key in systemInstance) {
+				const prop = systemInstance[key]
+				if (prop instanceof Query && prop.isReactiveQuery) {
+					reactiveQueries.push(prop)
+				}
+			}
+
 			if (reactiveQueries.length > 0) {
 				systemInstance.reactiveQueries = reactiveQueries
 				systemInstance.reactive = true
@@ -691,46 +751,180 @@ export class SystemManager {
 	}
 
 	/**
-	 * Updates a group's `hasChangedSystem` flag based on the reactivity of its current systems.
-	 * @param {object} group - The update group to check.
-	 * @private
-	 */
-	_updateGroupReactivity(group) {
-		group.hasChangedSystem = group.systems.some(s => s.reactive)
-	}
-
-	/**
-	 * Sorts the systems within a single group based on the execution order map.
-	 * ### Implementation Choice: `Array.prototype.sort()` vs. Insertion Sort for a bit more safety.
-	 * @param {object} group - The update group to sort.
-	 * @private
-	 */
-	_sortGroup(group) {
-		group.systems.sort((a, b) => {
-			const nameA = a.constructor.name
-			const nameB = b.constructor.name
-			const indexA = this._executionOrderMap.get(nameA) ?? Infinity
-			const indexB = this._executionOrderMap.get(nameB) ?? Infinity
-
-			return indexA - indexB
-		})
-	}
-
-	/**
-	 * Sorts all update groups. Necessary when the global execution order changes.
+	 * Sorts all update groups based on the global execution order in _systemList.
+	 * This is necessary after the global order changes, e.g., after adding a system.
 	 * @private
 	 */
 	_sortAllGroups() {
+		// Create a map for O(1) lookup of a system's global order.
+		const systemOrderMap = new Map(this._systemList.map((name, index) => [name, index]))
 		for (const group of Object.values(this.updateGroups)) {
-			this._sortGroup(group)
+			group.systems.sort((a, b) => {
+				const orderA = systemOrderMap.get(a.constructor.name)
+				const orderB = systemOrderMap.get(b.constructor.name)
+				// Handle cases where a system might not be in the map (shouldn't happen in normal flow).
+				if (orderA === undefined || orderB === undefined) return 0
+				return orderA - orderB
+			})
 		}
+	}
+
+	/**
+	 * Implements Hot Module Replacement for a single system.
+	 * This method gracefully destroys the old system instance and injects a new one
+	 * created from the provided code string, without requiring a page reload.
+	 *
+	 * @param {string} systemPath - The relative path of the system file (e.g., 'Test/MySystem.js').
+	 * @param {string} newCode - The transpiled JavaScript code for the new system module.
+	 */
+	async hotSwapModule(systemPath, newCode) {
+		// --- HMR Synchronization: Stop the World ---
+		this.gameLoop.pause()
+
+		const systemName = systemPath.split('/').pop().replace('.js', '')
+
+		// --- HMR Resilience ---
+		// Check if the system is supposed to be running, even if it's not currently instantiated
+		// due to a previous HMR error. We check against the original system list.
+		const isKnownSystem = this._systemList.includes(systemName)
+
+		const oldInstance = systemRegistry.getSystem(systemName)
+		if (!oldInstance && !isKnownSystem) {
+			console.error(`[HMR] Cannot hot-swap: System "${systemName}" is not a known or running system.`)
+			// Resume the loop if we abort early.
+			this.gameLoop.resume()
+			return
+		}
+
+		if (oldInstance) {
+			// 1. De-queue the old system, but only if it's actually in an update group.
+			// Systems with frequency 'none' are not in any group.
+			const config = this._systemConfig.get(oldInstance.constructor)
+			if (config?.frequency !== 'none') {
+				this.dequeSystem(systemName)
+			}
+
+			// 2. Unregister the old system, which calls its destroy() method to clean up queries.
+			// This will now succeed because the system has either been de-queued or was never in a group.
+			this.unregisterSystem(systemName)
+		}
+
+		// 3. Load the new code string as a JavaScript module using our HMR utility.
+		let NewSystemClass
+		let newModule
+
+		try {
+			newModule = await importFromString(newCode)
+			NewSystemClass = newModule[systemName]
+
+			if (!NewSystemClass) {
+				throw new Error(`Module did not export a class named "${systemName}".`)
+			}
+		} catch (error) {
+			console.error(`[HMR] Failed to import new module for ${systemName}:`, error)
+			// The system is now de-queued and unregistered. The next successful HMR
+			// for this file will correctly re-add it because of the `isKnownSystem` check.
+			// Resume the loop on failure.
+			this.gameLoop.resume()
+			return
+		}
+
+		// 4. Register the new class, create a new instance, and initialize it.
+		// We also need to re-analyze and cache its metadata.
+		systemRegistry.systemClasses.set(systemName, NewSystemClass)
+		this._analyzeAndCacheSystems() // Re-run analysis to include the new class.
+
+		systemRegistry.systemClasses.set(systemName, NewSystemClass)
+		const newInstance = systemRegistry.instantiateSystem(systemName)
+		if (!newInstance) {
+			console.error(`[HMR] Failed to instantiate new version of ${systemName}.`)
+			// Resume the loop on failure.
+			this.gameLoop.resume()
+			return
+		}
+		newInstance.commands = this.commandBuffer
+		await newInstance.init?.()
+
+		// Broadcast the new context to workers to handle changes in constructor-defined properties.
+		this.workerManager.hotSwapSystemContext(systemName, newInstance)
+
+		// 5. Re-queue the new system instance into its correct update group.
+		// The frequency is still stored in _systemConfig from the initial load.
+		this.queSystem(newInstance)
+		console.log(`[HMR] Successfully hot-swapped system: ${systemName}`)
+
+		// Re-sort all groups to ensure the new system is in the correct canonical order.
+		this._sortAllGroups()
+
+		// --- HMR Synchronization: Resume the World ---
+		this.gameLoop.resume()
+	}
+
+	/**
+	 * Retrieves a system instance by its class name.
+	 * This is a convenience method that delegates to the systemRegistry.
+	 * @param {string} systemName - The class name of the system.
+	 * @returns {object | undefined} The system instance, or undefined if not found.
+	 */
+	getSystem(systemName) {
+		return systemRegistry.getSystem(systemName)
+	}
+
+	/**
+	 * Retrieves the persistent integer ID for a given system name.
+	 * @param {string} systemName - The class name of the system.
+	 * @returns {number | undefined} The system's ID.
+	 */
+	getSystemId(systemName) {
+		return this.systemNameToId.get(systemName)
+	}
+
+	/**
+	 * Retrieves the system name for a given persistent integer ID.
+	 * @param {number} systemId - The ID of the system.
+	 * @returns {string | undefined} The system's class name.
+	 */
+	getSystemNameById(systemId) {
+		return this.idToSystemName.get(systemId)
+	}
+
+	/**
+	 * Retrieves a system instance by its persistent integer ID.
+	 * @param {number} systemId - The ID of the system.
+	 * @returns {object | undefined} The system instance.
+	 */
+	getSystemById(systemId) {
+		const systemName = this.idToSystemName.get(systemId)
+		return systemName ? systemRegistry.getSystem(systemName) : undefined
+	}
+	/**
+	 * Records the execution time for a specific part of a system's logic.
+	 * This is called by the Scheduler after a job completes.
+	 * @param {string} systemName - The name of the system.
+	 * @param {number|'total'} jobType - The type of job, from the JOB_TYPE enum or 'total'.
+	 * @param {number} duration - The execution time in milliseconds.
+	 */
+	recordSystemTiming(systemName, jobType, duration) {
+		const timings = this.systemTimings[systemName] || { update: 0, schedule: 0, process: 0, total: 0 }
+
+		// If jobType is a number from the JOB_TYPE enum, record it in the specific phase.
+		if (typeof jobType === 'number') {
+			const JOB_TYPE_NAMES = ['update', 'schedule', 'process']
+			const jobTypeName = JOB_TYPE_NAMES[jobType]
+			if (jobTypeName) {
+				timings[jobTypeName] += duration
+			}
+		}
+		// All durations contribute to the system's total time for the frame.
+		timings.total += duration
+		this.systemTimings[systemName] = timings
 	}
 
 	/**
 	 * Destroys the SystemManager and cleans up its resources.
 	 */
 	destroy() {
-		this.gameLoop.destroy() // First, destroy all managed systems to allow them to clean up their resources.
+		// First, destroy all managed systems to allow them to clean up their resources.
 		for (const systemInstance of systemRegistry.systemInstances.values()) {
 			try {
 				systemInstance.destroy?.()
@@ -738,8 +932,14 @@ export class SystemManager {
 				console.error(`Error destroying system ${systemInstance.constructor.name}:`, error)
 			}
 		}
+		// Then destroy the game loop.
+		this.gameLoop.destroy()
+
 		systemRegistry.clear()
 		this.updateGroups = {}
 		this._systemConfig.clear()
+
+		// Clean up the HMR event listener.
+		eventEmitter.off(this.hmrListenerId, 'hmr:system-update')
 	}
 }

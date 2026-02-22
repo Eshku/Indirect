@@ -23,7 +23,7 @@ export class InputContextSystem {
 		this.pointer = gameManager.getApp().renderer.events.pointer
 	}
 
-	update() {
+	update({deltaTime, currentTick, lastTick}) {
 		const currentlyOverUI = uiManager.isPointerOverUI(this.pointer.clientX, this.pointer.clientY)
         //probably an overkill, that is not cheap
         //just to ensure we never do hotbar actions \ attacks when hovering over UI
@@ -37,4 +37,6 @@ export class InputContextSystem {
 			this.isPointerOverUI = currentlyOverUI
 		}
 	}
+
+	destroy() {}
 }

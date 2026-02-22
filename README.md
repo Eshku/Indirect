@@ -21,15 +21,18 @@ Readme might be outdated.
 
 **Current state** - **Experimental** and **very messy** single threaded ECS with basic functionality and lots of bad practices in place.
 
-**Next significant steps:**
+**Potential future improvements:**:\*\*
 
-- Introduce dynamic (packed) arrays, stored on chunk (?).
+- Introduce dynamic (packed) arrays.
 - Placeholder Entities.
-- Relational Queries (?)
-- Parrallelism.
-- Custom HMR, or in simple terms - hot reload.
+- Relational Queries
+- HMR.
+- Make proper readme / documentation.
+- Parallel command buffer
+- Thread-safe sharad component data.
+- Priority Queue (Min-Heap?) to manage time-based events, as alternative to reducing timers per entity in systems.
 - Serialization \ Deserialization.
-- React on component addition \ changes \ removal as separate things (?)
+- React on component addition \ changes \ removal.
 
 ## Tech Stack
 
@@ -190,35 +193,29 @@ Every property in a schema must be an object containing a `type` and an optional
 **Schema Types:**
 
 - **Primitive Types:** For simple numeric properties. These are most common types, directly mapping to `TypedArray`s.
-
   - **Definition:** `{ type: 'f64' }`
   - **Supported Types:** `f64`, `f32`, `i32`, `u32`, `i16`, `u16`, `i8`, `u8`, `boolean`, `u64`, `entity`.
 
 - **`string`:** For string data. Engine stores a single copy of each unique string and uses an integer reference (`u32`) to it.
-
   - **Definition:** `{ type: 'string' }`
   - All strings are **interned**. This means that each unique string (e.g., "Magic Missile", "Player_Character_Name") is stored only once in a global table, and component itself stores a lightweight numeric ID (a `u32` reference) pointing to that string.
 
 - **`enum`:** For properties that can only be one of a set of mutually exclusive values.
-
   - **Definition:** `{ type: 'enum', of: { STATE_A: 0, STATE_B: 1 } }`
   - `of` property must be an object where keys are string names and values are their explicit numeric representations.
   - Storage type (`u8`, `u16`, `u32`) is automatically inferred.
 
 - **`bitmask`:** For properties that can have multiple states simultaneously.
-
   - **Definition:** `{ type: 'bitmask', of: { FLAG_A: 1 << 0, FLAG_B: 1 << 1 }, default: 1 << 0 }`
   - `of` property must be an object where keys are flag names and values are their explicit integer bit values.
-  -  Storage type (`u8`, `u16`, `u32`) is automatically inferred.
+  - Storage type (`u8`, `u16`, `u32`) is automatically inferred.
   - `default` value must be a number, typically a bitwise combination of the values from the `of` object (e.g., `(1 << 0) | (1 << 1)`).
   - A static lookup object is generated for readable bitwise operations in systems.
 
 - **`rpn`:** For storing Reverse-Polish Notation (RPN) formulas as a stream of tokens. Used for complex, data-driven calculations.
-
   - **Definition:** `{ type: 'rpn', streamCapacity: 128, instanceCapacity: 5 }`
 
 - **`flat_array`**: For fixed-size collections of simple data.
-
   - **Definition:** `{ type: 'flat_array', of: 'u32', capacity: 10 }`.
   - Flattens the array into individual properties (e.g., `myArray0`, `myArray1`, ...) within the component's `TypedArray`s. An implicit `_count` property is also created.
 
@@ -244,65 +241,123 @@ Primary way to iterate over entities is `query.iter()`, which yields `Chunk` obj
 - **Normal Iteration**: Yields all `Chunk`s from archetypes that structurally match the query.
 - **Reactive Iteration**: If `react` is used, `query.iter()` only yields `Chunk`s where a `react` component has been modified. Inside the loop, `query.hasChanged(chunk, indexInChunk)` can check if a specific entity's reactive components have changed.
 
-### System Loop
+### Parallel System Execution & Phased Updates
 
-Systems are classes that encapsulate game logic. They operate on entities that possess a specific set of components, processing their data each frame. Core logic of a system resides within its `update` method.
+The engine features a parallel job scheduler that allows system logic to be executed across multiple CPU cores. To support this, systems are written using a **phased execution model**. System can have up to three distinct phases: `update`, `schedule`, and `process`.
 
-A system's constructor is the ideal place to get references to managers, set up queries, and cache component Type IDs for use in hot path.
+#### System Lifecycle & Method Signatures
 
-`Update` method receives `deltaTime` (time elapsed since last frame) and `currentTick`. Within this method, systems typically iterate over entities that match their defined queries.
+System's lifecycle is composed of several methods, each with a specific purpose and signature.
 
-_Example `ApplyVelocity.js` system:_
+1.  **`constructor()`**: Called once when the system class is first instantiated. Ideal for setting up queries and caching component Type IDs.
+2.  **`async init()`**: An optional method for one-time setup that requires `await`.
+3.  **`update(context)`**: An optional method that runs on the **main thread** once per frame, before any parallel work for this system begins. The `context` object contains per-frame data like `deltaTime` and `currentTick`. This phase has access to `this.commands`.
+4.  **`schedule(chunk, context)`**: An optional method that runs in **parallel on worker threads**. The scheduler creates a separate `schedule` job for each `Chunk` in the system's `scheduleQuery`. This is where all heavy, parallelizable computation should go.
+5.  **`process(context)`**: An optional method that runs on the **main thread** after all `schedule` jobs for this system have completed. Ideal for collecting results, aggregation, or finalization. This phase has access to `this.commands`.
+6.  **`async destroy()`**: An optional method called when a system is removed (e.g., during Hot Module Replacement). Use this to clean up any resources, listeners, or intervals.
+
+#### Execution Order: `runsAfter` & `runsBefore`
+
+`static` properties enforce sequence between systems. These declarations have the highest authority in the scheduler.
+
+- **`static runsAfter = ['OtherSystem']`**: Guarantees this system will only start after all jobs from `OtherSystem` have finished.
+- **`static runsBefore = ['AnotherSystem']`**: The inverse of `runsAfter`. This is automatically translated into a `runsAfter` dependency on `AnotherSystem`.
+
+The engine will detect and throw an error if you create a conflicting or circular dependency (e.g., System A runs after B, but B runs after A).
+
+#### The `context` Object
+
+All phased update methods (`update`, `schedule`, `process`) receive a `context` object. This object is the primary way to access per-frame data and system-specific properties. You can access its properties in two ways:
+
+1.  **Destructuring (Recommended):** `const { deltaTime, gravity } = context;`
+2.  **Direct Access:** `const dt = context.deltaTime;`
+
+The `context` object contains the following properties:
+
+- `deltaTime`: The time elapsed since the last update for this system's group. For the `'logic'` group, this is a **fixed** value (e.g., `1/60`). For `'visuals'` and `'input'` groups, this is a **variable** value corresponding to the real frame time.
+- `alpha`: An interpolation factor (a value between `0.0` and `1.0`). This is only meaningful for systems in the `'visuals'`.
+- `currentTick`: The current fixed-step logic tick number of the game loop.
+- `lastTick`: The last tick number when this system's group was previously executed.
+- **System-Specific Properties (for `schedule` only):** For the parallel `schedule` method, `context` object is augmented with any properties from the system's instance (`this`) that were declared in the `static dependencies.schedule.context` array.
+  - **IMPORTANT:** These properties sent to workers **once** during initialization (or during a hot-swap). They are treated as **immutable** during runtime. If you change a primitive property (e.g., `this.gravity = -10;`) in the `update` method, the workers will **not** see the new value.
+  - To pass mutable data between `update` and `schedule` within the same frame, you must use a `SharedArrayBuffer`-backed `TypedArray`. The reference to the buffer is passed once, but its contents can be safely modified and read by both the main thread and workers using `Atomics`.
+
+#### Declaring Dependencies for Parallelism
+
+To manage parallel execution safely, each system must declare its data access patterns and any properties it needs in the parallel context. This is done in a `static dependencies` block.
+
+- **`reads`/`writes`**: An array of component names. This tells the scheduler how to avoid data races between systems.
+- **`context`**: An array of property names from the system's instance (`this`) that need to be available in the parallel `schedule` method.
+
+#### `schedule` Method:
+
+- **Signature:** `schedule(chunk, context)`
+  - `chunk`: A `ChunkView` object providing access to the component data for this specific job.
+  - `context`: An object containing per-frame data (`deltaTime`, `currentTick`) and any system properties you declared in `static dependencies.schedule.context`.
+- **Limitations:**
+  - **`this` Context is Transpiled (bit of magic):** You can and should write code like `this.speed` inside your `schedule` method. The engine's build-time transpiler will automatically convert this to `context.speed` and ensure the value is passed to the worker. **This is a critical concept.** Because the `schedule` method runs in a different thread with a different scope, it cannot directly access the system instance or module-level variables from the main thread. The transpiler bridges this gap by making `this` properties available on the `context` object. Trying to use a module-scoped variable for a dependency (e.g., `const gravity = -9.81;`) will fail in `schedule`, as that variable only exists on the main thread.
+  - **Context Property Restrictions:** Only primitive values (numbers, strings, booleans, bigints) and `SharedArrayBuffer`-backed `TypedArray`s can be passed as context properties. No objects.
+  - **No `this.commands`:** Structural changes (creating/destroying entities, adding/removing components) are strictly forbidden inside `schedule`. All such operations must be deferred to the `update` or `process` methods, which run on the main thread and have access to `this.commands`.
+
+#### System Example
 
 ```javascript
-export class ApplyVelocity {
-	constructor() {
-		// Get all component Type IDs at once for efficiency.
-		const { Position, Velocity } = componentManager.getTypeIDs()
+const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { ecs } = engine.getManagers()
+const { queryManager } = ecs
 
-		// Define a query for entities that have both Position and Velocity.
-		// `react` property makes this a reactive query.
-		this.query = queryManager.getQuery({
-			with: [Position, Velocity],
-			react: [Velocity], // Only process entities whose Velocity has changed.
-		})
+export class GravitySystem {
+	// 1. Control-Flow Dependencies
+	// This system must run after MovementSystem to apply gravity to the new positions.
+	static runsAfter = ['MovementSystem']
 
-		// Cache IDs on `this` for fast access in update loop.
-		this.positionTypeID = Position
-		this.velocityTypeID = Velocity
+	// 2. Data-Flow & Context Dependencies
+	// Declare what the system reads/writes and what properties it needs in parallel.
+	static dependencies = {
+		schedule: {
+			reads: ['position'],
+			writes: ['velocity'],
+		},
 	}
 
-	update(deltaTime, currentTick) {
-		// Iterate over all Chunks that contain entities matching query.
-		for (const chunk of this.query.iter()) {
-			// Get a marker to flag which entities we change.
-			const positionMarker = chunk.getDirtyMarker(this.positionTypeID, currentTick)
+	constructor() {
+		// Assign components to "this" context by name.
+		ecs.assignComponents(this, ['position', 'velocity'])
+		// Access by this.position, this.velocity, etc.
 
-			// Get direct references to raw TypedArrays for components.
-			const posArrays = chunk.componentArrays[this.positionTypeID]
-			const velArrays = chunk.componentArrays[this.velocityTypeID]
+		// if you only need component type ID - there is a method for that too.
+		// const { position, velocity } = ecs.getTypeIDs()
 
-			// Loop through each entity in chunk.
-			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				// Because this is a reactive query, check if specific entity's
-				// Velocity component has changed before doing any work.
-				if (this.query.hasChanged(chunk, indexInChunk)) {
-					// Apply velocity to position.
-					posArrays.x[indexInChunk] += velArrays.x[indexInChunk] * deltaTime
-					posArrays.y[indexInChunk] += velArrays.y[indexInChunk] * deltaTime
+		// This query will be used to create parallel `schedule` jobs.
+		// Quary name has to be exactly "scheduleQuery".
+		this.scheduleQuery = queryManager.getQuery({ with: [this.position, this.velocity] })
 
-					// Mark Position component as dirty so other reactive systems can see this change.
-					positionMarker.mark(indexInChunk)
-				}
-			}
+		// This property is used in `schedule`, so its value will be transpiled and sent to workers
+		// once during initialization or after HMR.
+		this.gravity = -9.81
+	}
+
+	update(context) {
+		// const dt = context.deltaTime;
+		// ... main-thread logic ...
+	}
+
+	// This runs on worker threads for each chunk matching the scheduleQuery.
+	schedule(chunk, context) {
+		const velocities = chunk.componentData[this.velocity]
+
+		const { deltaTime, gravity } = context
+
+		for (let i = 0; i < chunk.size; i++) {
+			velocities.y[i] += gravity * deltaTime
 		}
+	}
+
+	process(context) {
+		//optional method, runs after schedule.
 	}
 }
 ```
-
-In example above, `ApplyVelocity` first retrieves component Type IDs it needs using `componentManager.getTypeIDs()`. It then uses these IDs to define a **reactive query** that will only yield entities whose `Velocity` component has changed.
-
-`update` method iterates through chunks, and for each entity, it performs `hasChanged()` check before proceeding. If the check passes, it performs calculation and marks `Position` component as "dirty," allowing other systems to react to  this change.
 
 ### Working with Enums and Bitmasks
 
@@ -348,7 +403,9 @@ export class CombatSystem {
 }
 ```
 
-### Command Buffer: Safe and Efficient Structural Changes
+### Command Buffer: Safe Structural Changes
+
+**Important:** The `commands` object is only available in the `update` and `process` methods of a system, which run on the main thread. The parallel `schedule` method **does not** have access to the command buffer to ensure thread safety.
 
 Command Buffer is a mechanism for managing structural changes (adding/removing components, creating/destroying entities). It solves concurrency and data consistency issues by recording all change requests and executing them in a safe, sorted, and consolidated manner at the end of the frame.
 
@@ -362,12 +419,13 @@ Workflow is:
 
 ```javascript
 // In a system's constructor:
-// 1. Compile payload once.
+// Compile payload once.
 const { payload, mutators } = payloadCompiler.compileEntity({
 	Position: { x: 0, y: 0 },
 	Velocity: { x: 0, y: 0 },
 	Sprite: { texture: 'projectile_sprite' },
 })
+
 this.projectilePayload = payload
 this.projectileMutators = mutators
 
@@ -389,6 +447,7 @@ Same pattern applies to adding or setting component data.
 ```javascript
 // In a system's constructor:
 const { payload, mutators } = payloadCompiler.compileComponent(positionTypeID, { x: 0, y: 0 })
+
 this.positionPayload = payload
 this.positionMutators = mutators
 
@@ -482,28 +541,24 @@ System scheduling is defined by `frequency` property of each system in [app/clie
 - **`'none'`**: For systems that only need to be initialized. Their constructor and `init()` method are called, but they are never added to any update loop. Ideal for purely event-driven systems (e.g., setting up listeners for external libraries).
 
 - **`Input`:**
-
   - **When:** Runs first in the frame, once per `requestAnimationFrame` call.
   - **Use For:** Lowest-latency input processing. Ideal for systems that need to react to user actions before any other logic, such as updating a custom mouse cursor's position.
 
 - **`Logic`:**
-
   - **When:** Runs on a deterministic, fixed timestep (e.g., 60 times per second), independent of rendering frame rate. Loop may run multiple times per frame to catch up, or zero times if frame is too fast.
   - **Use For:** Physics, core gameplay logic, and anything requiring deterministic, reproducible behavior. This ensures game simulation is consistent across different machines and frame rates. This entire phase is a candidate for future parallel execution on a Web Worker.
 
 - **`Timed Groups`:**
-
   - **When:** Runs on a timer at specified updates-per-second, after `Logic` phase but before `Visuals` phase.
   - **Use For:** Infrequent logic that doesn't need to run every frame, such as certain UI updates, AI decision-making, or performance monitoring.
 
 - **`Visuals`:**
-
   - **When:** Runs once per visual frame, after all `Logic` and timed updates for that frame are complete. `DeltaTime` can vary.
   - **Use For:** Rendering, visual effects, interpolation between fixed updates (`alpha`), UI updates, and camera movement. This is for logic that needs to be as smooth as display's refresh rate allows.
 
   **Update Group names are subject to change.**
 
-### Debugging & Immediate-Mode API: [ECS](app/client/Core/ECS/ECS.js) Object
+### Debugging & Immediate-Mode API: [ECS](/app/client/ECS/EntityManager/ECS.js) Object
 
 For debugging, testing, and performing one-off actions outside of systems, the engine exposes a global `ECS` object. This object provides a high-level, immediate-mode API for interacting with the world.
 
@@ -515,7 +570,7 @@ To inspect an entity's state from developer console, use `ecs.viewEntity(entityI
 
 #### Immediate-Mode Commands
 
-[ECS](app/client/Core/ECS/ECS.js) object also provides methods to modify the world state immediately.
+[ECS](/app/client/ECS/EntityManager/ECS.js) object also provides methods to modify the world state immediately.
 
 ```javascript
 // Create a new entity with components
@@ -536,41 +591,3 @@ const sword = ecs.instantiate('obsidian_sword')
 ## Acknowledgements
 
 Inspired by ECS engines like Unity DoTS and Bevy.
-
-## Roadmap and Future Directions
-
-Engine's future development is focused on three interconnected pillars. Many improvements in one area are prerequisites for advancements in others.
-
-### 1. ECS Core Improvements
-
-This involves strengthening the fundamental architecture of Entity-Component-System for greater performance, flexibility, and robustness.
-
-- **Relational ECS Patterns:** Explore and implement more advanced ECS patterns, like entity hierarchies (`Parent`/`Children` components) and relational queries.
-- **Serialization:** Develop a system for serializing and deserializing.
-- **Code Quality & Decoupling:** Make it less shit.
-- **Mutable Queries** - Allow queries to be modified at runtime, enabling dynamic filtering and adaptation to changing game states without re-creating queries.
-
-### 2. Transpiler & Developer Experience
-
-A build-time transpiler is cornerstone for achieving both a high-quality developer experience and maximum runtime performance.
-
-- **Goal: Zero-Cost Abstractions:** primary goal is to allow developers to write clean, intuitive, object-oriented code using accessors and views, and have transpiler automatically rewrite it into low-level code (direct `TypedArray` access) at build time.
-- **Hot Module Replacement (HMR):** Implement a custom HMR development server. This will allow for live code changes in systems without requiring a full application restart, speeding up development and debugging.
-- **Improved API Design:** Transpiler unlocks ability to design a cleaner, less boilerplate-heavy API for systems.
-- **Method Overload:** Single method name can handle different kinds of inputs to perform a similar action. This reduces cognitive load as there is no longer a need to remember multiple function names for slight variations of same task.
-- **Code Generation, inline function calls** - could be something we can use too, aha.
-
-### 3. Parallelism & Multi-threading
-
-With a unified data model and a transpiler in place, engine will be ready for a true multi-threaded job system.
-
-- **Job System with Explicit Dependencies:** Systems will declare their data dependencies (read/write access to component types).
-
-- **Dependency Graph & Scheduling:** Engine will build a dependency graph from these declarations each frame. A scheduler will use this graph to find non-conflicting systems and dispatch them to a pool of Web Workers for parallel execution.
-- **Zero-Copy Data Transfer:** All component data will be stored in `SharedArrayBuffer`s, allowing main thread and worker threads to access same memory without any copying overhead.
-
-- **Chunk-Based Work Distribution:** Chunk-based iteration model will be foundation for work distribution. Scheduler will assign different chunks of an archetype to different workers.
-
-### 4. Renderer
-
-- **Resist:** - Resist urge to mess around with our own renderer engine... at least until rest of engine is somewhat built.

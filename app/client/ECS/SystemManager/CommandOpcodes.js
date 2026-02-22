@@ -7,6 +7,7 @@ export const OpCodes = Object.freeze({
 	// Entity Lifecycle
 	CREATE_ENTITY: 1,
 	DESTROY_ENTITY: 2,
+	DESTROY_ENTITIES_IN_CHUNK: 3,
 
 	// Component Modifications
 	ADD_COMPONENT: 10,

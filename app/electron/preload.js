@@ -23,4 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
 	// Dev Tools 
 	toggleDevTools: () => ipcRenderer.send('toggle-dev-tools'),
+
+	// HMR (Hot Module Replacement)
+	onHmrUpdate: (callback) => ipcRenderer.on('hmr-update', (event, data) => callback(data)),
 })

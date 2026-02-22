@@ -1,0 +1,564 @@
+const entityStore = {}
+
+class WorkerEntry {
+	constructor() {
+		// --- Layout Constants (will be populated in init) ---
+		this.FRAME_STATE_TOTAL_JOBS_OFFSET = 0
+		this.FRAME_STATE_COMPLETED_JOBS_OFFSET = 0
+		this.FRAME_STATE_IDLE_THREADS_OFFSET = 0
+		this.FRAME_STATE_BARRIER_COUNTER_OFFSET = 0
+		this.FRAME_STATE_BARRIER_GENERATION_OFFSET = 0
+		this.FRAME_STATE_SLEEP_GENERATION_OFFSET = 0
+		this.FRAME_STATE_FRAME_GENERATION_OFFSET = 0
+		this.FRAME_CONTEXT_FRAME_ID_OFFSET = 0
+		this.FRAME_CONTEXT_CURRENT_TICK_OFFSET = 0
+		this.FRAME_CONTEXT_LAST_TICK_OFFSET = 0
+		this.FRAME_CONTEXT_DELTA_TIME_OFFSET = 0
+		this.FRAME_CONTEXT_ALPHA_OFFSET = 0
+		this.JOB_AFFINITY_OFFSET = 0
+		this.JOB_PAYLOAD_OFFSET = 0
+		this.JOB_DEP_LIST_START_OFFSET = 0
+		this.JOB_DEP_LIST_COUNT_OFFSET = 0
+		this.JOB_SYSTEM_ID_OFFSET = 0
+		this.JOB_DEP_COUNTER_OFFSET = 0
+		this.JOB_TYPE = {}
+		this.JOB_AFFINITY = {}
+		this.NO_JOB_AVAILABLE = -1
+		this.JOB_STRIDE_IN_U32 = 0
+
+		// --- Worker State ---
+		this.isInitialized = false
+		this.logicRegistry = {}
+		this.ChunkView = null
+		this.localDeque = null
+		this.mainThreadInbox = null
+		this.allDeques = []
+		this.chunkViewInstance = null
+		this.importFromString = null
+
+		// --- Reusable Arrays to Reduce GC Pressure ---
+		// These are used in hot paths to avoid allocating new arrays on every job.
+		this.reusableUnlockedMTOJobs = []
+		this.reusableUnlockedAnyJobs = []
+		this.reusableStealBuffer = []
+
+		this.jobs = null
+		this.dependents = null
+		this.frameState = null
+
+		// --- Reusable TypedArray Views to Reduce GC Pressure ---
+		this.jobsView = null
+		this.dependentsView = null
+		this.frameContextI64View = null
+		this.frameContextF64View = null
+
+		this.idToSystemName = {}
+		this.totalThreads = 0
+		this.maxDequeCapacity = 0
+
+		this.currentFrameId = -1
+		this.currentTick = -1
+
+		this.perFrameContext = null
+		this.systemContexts = {} // Static, system-specific contexts.
+		this.perFrameSystemContexts = {} // Pre-merged contexts to avoid per-job allocation.
+
+		self.onmessage = this.handleMessage.bind(this)
+	}
+
+	async init(payload) {
+		if (this.isInitialized) {
+			console.error('[Worker] Worker is already initialized.')
+		}
+
+		const {
+			workerId,
+			baseUrl,
+			jobsSAB,
+			dependentsSAB,
+			frameStateSAB,
+			frameContextSAB,
+			mainThreadInbox,
+			dequeBuffers,
+			sharedData,
+			prebuiltLogics,
+			initialChunks,
+			systemIdMap,
+			totalThreads,
+		} = payload
+		this.totalThreads = totalThreads
+
+		self.id = payload.workerId
+
+		// These are the raw, empty container arrays. They will be populated by syncChunks.
+		entityStore.chunkComponentData = new Array(sharedData.MAX_CHUNKS)
+		entityStore.chunkDirtyTicks = new Array(sharedData.MAX_CHUNKS)
+		entityStore.chunkArchetypeDirtyTicks = sharedData.chunkArchetypeDirtyTicks
+		entityStore.chunkArchetypeIds = new Uint16Array(sharedData.chunkArchetypeIds) 
+		entityStore.chunkSizes = new Uint16Array(sharedData.chunkSizes) 
+		entityStore.chunkCapacities = new Uint16Array(sharedData.chunkCapacities) 
+
+		entityStore.archetypeComponentTypeIDArrays = sharedData.archetypeComponentTypeIDArrays
+
+		this.syncChunkDeltas({ newChunks: initialChunks })
+
+		// Store the raw buffers.
+		this.jobs = jobsSAB
+		this.dependents = dependentsSAB
+		// Create reusable views to avoid allocating new TypedArray objects in hot loops.
+		this.jobsView = new Int32Array(this.jobs)
+		this.dependentsView = new Uint32Array(this.dependents)
+		this.frameState = new BigInt64Array(frameStateSAB)
+		this.frameContextI64View = new BigInt64Array(frameContextSAB)
+		this.frameContextF64View = new Float64Array(frameContextSAB)
+
+		for (const name in systemIdMap) {
+			const id = systemIdMap[name]
+			this.idToSystemName[id] = name
+		}
+
+		const jobLayoutModuleUrl = new URL('../../ECS/SystemManager/JobLayout.js', baseUrl)
+		const frameStateLayoutModuleUrl = new URL('../../ECS/SystemManager/FrameStateLayout.js', baseUrl)
+
+		try {
+			const chunkViewModuleUrl = new URL('../../Managers/QueryManager/ChunkView.js', baseUrl)
+			const blobUtilModuleUrl = new URL('../../Core/utils/blob.js', baseUrl)
+			const mpscQueueModuleUrl = new URL('../../Core/Algorithms/MPSCQueue.js', baseUrl)
+			const dequeModuleUrl = new URL('../../Core/Algorithms/WorkStealingDeque.js', baseUrl)
+
+			const [chunkViewModule, blobUtilModule, mpscQueueModule, dequeModule, jobLayoutModule, frameStateLayoutModule] =
+				await Promise.all([
+					import(chunkViewModuleUrl.href),
+					import(blobUtilModuleUrl.href),
+					import(mpscQueueModuleUrl.href),
+					import(dequeModuleUrl.href),
+					import(jobLayoutModuleUrl.href),
+					import(frameStateLayoutModuleUrl.href),
+				])
+
+			// Assign all the imported constants to the worker instance for easy access.
+			Object.assign(this, jobLayoutModule)
+			Object.assign(this, frameStateLayoutModule)
+
+			// Quick verification
+			if (this.JOB_TYPE.SCHEDULE === undefined) {
+				throw new Error('Failed to load JobLayout constants.')
+			}
+			if (this.FRAME_STATE_TOTAL_JOBS_OFFSET === undefined) {
+				// This is checking for a number, which can be 0, so `undefined` is the right check.
+				throw new Error('Failed to load FrameStateLayout constants.')
+			}
+
+			const { ChunkView } = chunkViewModule
+			const { importFromString } = blobUtilModule
+			const { MPSCQueue } = mpscQueueModule
+			const { WorkStealingDeque, NO_JOB_AVAILABLE } = dequeModule
+			// Assign the imported classes and functions to the worker instance.
+			this.ChunkView = ChunkView
+			this.importFromString = importFromString
+
+			// Also assign constants from modules that aren't fully assigned.
+			this.NO_JOB_AVAILABLE = NO_JOB_AVAILABLE
+
+			// Now that imports are confirmed, proceed with initialization.
+			for (const systemName in prebuiltLogics) {
+				await this.loadScheduleLogic({ systemName, ...prebuiltLogics[systemName] })
+			}
+
+			this.chunkViewInstance = new this.ChunkView(entityStore)
+
+			// All workers get a handle to the same MPSC queue to send jobs to the main thread.
+			this.mainThreadInbox = new MPSCQueue(mainThreadInbox)
+
+			// Pre-create and cache deque instances for all threads.
+			this.allDeques = []
+			for (let i = 0; i < this.totalThreads; i++) {
+				this.allDeques.push(new WorkStealingDeque(dequeBuffers[i]))
+			}
+			// The worker's own deque is at its ID index in the allDeques array.
+			this.localDeque = this.allDeques[self.id]
+		} catch (e) {
+			console.error(`[Worker ${self.id}] Failed during dynamic module import or initialization:`, e)
+			throw e
+		}
+		this.isInitialized = true
+		self.postMessage({ type: 'ready' })
+	}
+
+	async mainLoop() {
+		let frameGeneration = Atomics.load(this.frameState, this.FRAME_STATE_FRAME_GENERATION_OFFSET)
+
+		while (true) {
+			// Asynchronously wait for the main thread to signal a new frame.
+			// This does not block the worker's event loop, so it can still
+			// process other messages like HMR updates or chunk syncs.
+			await Atomics.waitAsync(this.frameState, this.FRAME_STATE_FRAME_GENERATION_OFFSET, frameGeneration).value
+
+			// Woke up, a new frame is ready. Update our generation counter.
+			frameGeneration = Atomics.load(this.frameState, this.FRAME_STATE_FRAME_GENERATION_OFFSET)
+
+			// Read the new context data from the shared buffer.
+			this._readSharedFrameContext()
+
+			// Pre-build the per-system contexts for this frame.
+			this._buildPerFrameSystemContexts()
+
+			// Process all jobs for this frame.
+			await this.processFrame()
+		}
+	}
+
+	_readSharedFrameContext() {
+		this.currentFrameId = Number(this.frameContextI64View[this.FRAME_CONTEXT_FRAME_ID_OFFSET])
+
+		// Re-create the perFrameContext object for this frame from the shared buffer.
+		// This is cheap and ensures immutability between frames.
+		this.perFrameContext = {
+			currentTick: Number(this.frameContextI64View[this.FRAME_CONTEXT_CURRENT_TICK_OFFSET]),
+			lastTick: Number(this.frameContextI64View[this.FRAME_CONTEXT_LAST_TICK_OFFSET]),
+			deltaTime: this.frameContextF64View[this.FRAME_CONTEXT_DELTA_TIME_OFFSET],
+			alpha: this.frameContextF64View[this.FRAME_CONTEXT_ALPHA_OFFSET],
+		}
+
+		this.currentTick = this.perFrameContext.currentTick
+	}
+
+	_buildPerFrameSystemContexts() {
+		const sContexts = this.systemContexts || {}
+		const context = this.perFrameContext
+
+		// Update or create contexts for the current frame.
+		for (const systemName in sContexts) {
+			const mergedContext = Object.assign({}, context, sContexts[systemName])
+			Object.freeze(mergedContext)
+			this.perFrameSystemContexts[systemName] = mergedContext
+		}
+		// Clean up contexts for systems that are no longer running.
+		for (const systemName in this.perFrameSystemContexts) {
+			if (!sContexts[systemName]) delete this.perFrameSystemContexts[systemName]
+		}
+	}
+
+	async handleMessage(event) {
+		const { type, ...payload } = event.data
+
+		try {
+			if (!this.isInitialized && type !== 'init') {
+				throw new Error(`[Worker] Received job type '${type}' before initialization.`)
+			}
+
+			switch (type) {
+				case 'init':
+					await this.init(payload)
+					// Now that init is done, start the main loop.
+					// We don't await it because it's an infinite loop, but it will
+					// yield to the event loop via `await Atomics.waitAsync`.
+					this.mainLoop()
+					return
+				case 'init-contexts':
+					// This message contains the initial static context for all parallel systems.
+					this.systemContexts = payload.systemContexts || {}
+					return
+				case 'hmr-schedule-update':
+					await this.loadScheduleLogic(payload)
+					return
+				case 'hmr-context-update':
+					// A single system's static context has been updated via HMR.
+					this.systemContexts[payload.systemName] = payload.context
+					// If a frame is active, we need to update the merged per-frame context as well.
+					if (this.perFrameContext && this.perFrameSystemContexts[payload.systemName]) {
+						const finalContext = Object.assign({}, this.perFrameContext, payload.context)
+						Object.freeze(finalContext)
+						this.perFrameSystemContexts[payload.systemName] = finalContext
+					}
+					return
+				case 'sync-chunk-deltas':
+					this.syncChunkDeltas(payload)
+					return
+				default:
+					throw new Error(`[Worker] Unknown job type: ${type}`)
+			}
+		} catch (e) {
+			console.error(`[Worker ${self.id}] Error processing message type '${type}':`, e)
+			self.postMessage({
+				type: 'job_error',
+				error: e.message,
+			})
+		}
+	}
+
+	async processFrame() {
+		let totalJobs = Atomics.load(this.frameState, this.FRAME_STATE_TOTAL_JOBS_OFFSET)
+		let completedJobs = Atomics.load(this.frameState, this.FRAME_STATE_COMPLETED_JOBS_OFFSET)
+		const frameId = this.currentFrameId
+
+		while (completedJobs < totalJobs) {
+			const jobId = this.findJob(self.id)
+
+			if (jobId !== this.NO_JOB_AVAILABLE) {
+				await this.executeJob(jobId, self.id, frameId)
+			} else {
+				// No job found. Go to sleep until woken up.
+				await this.goToSleep(frameId)
+			}
+			// Re-check job counts after potentially doing work or yielding.
+			totalJobs = Atomics.load(this.frameState, this.FRAME_STATE_TOTAL_JOBS_OFFSET)
+			completedJobs = Atomics.load(this.frameState, this.FRAME_STATE_COMPLETED_JOBS_OFFSET)
+		}
+
+		// --- End-of-Frame Barrier ---
+		// All jobs are done. This worker must now wait for all other threads to finish.
+		const counterOffset = this.FRAME_STATE_BARRIER_COUNTER_OFFSET
+		const generationOffset = this.FRAME_STATE_BARRIER_GENERATION_OFFSET
+
+		// 1. Capture the current barrier generation.
+		const myGeneration = Atomics.load(this.frameState, generationOffset)
+
+		// 2. Atomically increment the counter of threads at the barrier.
+		const count = Atomics.add(this.frameState, counterOffset, 1n) + 1n
+
+		if (count === BigInt(this.totalThreads)) {
+			// 3a. I am the LAST thread. Reset the counter for the next frame.
+			Atomics.store(this.frameState, counterOffset, 0n)
+			// 3b. Increment the generation to release the waiting threads.
+			Atomics.add(this.frameState, generationOffset, 1n)
+			// 3c. Notify all waiting threads that the generation has changed.
+			Atomics.notify(this.frameState, generationOffset, this.totalThreads - 1)
+		} else {
+			// 4. I am NOT the last thread. Wait for the generation to change.
+			// The wait is in a loop to handle spurious wakeups.
+			while (Atomics.load(this.frameState, generationOffset) === myGeneration) {
+				Atomics.wait(this.frameState, generationOffset, myGeneration)
+			}
+		}
+	}
+
+	async goToSleep(frameId) {
+		const idleOffset = this.FRAME_STATE_IDLE_THREADS_OFFSET
+		const generationOffset = this.FRAME_STATE_SLEEP_GENERATION_OFFSET
+
+		// Capture the sleep generation *before* the final check for work.
+		// This is critical to closing a race condition where a wakeup signal could be
+		// missed between the final check and the call to Atomics.wait.
+		const myGeneration = Atomics.load(this.frameState, generationOffset)
+
+		// Increment the idle counter to signal our intent to sleep.
+		Atomics.add(this.frameState, idleOffset, 1n)
+
+		// --- Last check for work OR completion before sleeping ---
+
+		// Check 1: Is the frame already done?
+		const totalJobs = Atomics.load(this.frameState, this.FRAME_STATE_TOTAL_JOBS_OFFSET)
+		const completedJobs = Atomics.load(this.frameState, this.FRAME_STATE_COMPLETED_JOBS_OFFSET)
+		if (completedJobs >= totalJobs) {
+			// The frame finished while we were preparing to sleep. Abort sleep.
+			Atomics.sub(this.frameState, idleOffset, 1n)
+			return // Exit, main loop will terminate and go to barrier.
+		}
+
+		// Check 2: Did a new job appear?
+		const finalCheckJobId = this.findJob(self.id)
+		if (finalCheckJobId !== this.NO_JOB_AVAILABLE) {
+			// A job appeared! Decrement the idle counter and execute the job instead of sleeping.
+			// This is a normal race-avoidance path, so no log is needed.
+			// We are no longer idle, so decrement the counter and execute the job.
+			Atomics.sub(this.frameState, idleOffset, 1n)
+			await this.executeJob(finalCheckJobId, self.id, frameId)
+			return
+		}
+
+		// Go to sleep, waiting for the generation to change.
+		// The loop handles spurious wakeups.
+		while (Atomics.load(this.frameState, generationOffset) === myGeneration) {
+			Atomics.wait(this.frameState, generationOffset, myGeneration)
+		}
+		// We have woken up and are no longer idle. Decrement the counter.
+		Atomics.sub(this.frameState, idleOffset, 1n)
+	}
+
+	/**
+	 * Wakes up a specified number of sleeping threads (main or worker).
+	 * This is called when new work becomes available that an idle thread could potentially pick up.
+	 */
+	wakeIdleThreads() {
+		const idleOffset = this.FRAME_STATE_IDLE_THREADS_OFFSET
+		const generationOffset = this.FRAME_STATE_SLEEP_GENERATION_OFFSET
+
+		// Optimization: Only notify if there are actually threads waiting.
+		const idleCount = Atomics.load(this.frameState, idleOffset)
+		if (idleCount > 0n) {
+			// Increment the generation to signal a wakeup event.
+			Atomics.add(this.frameState, generationOffset, 1n)
+			// Notify ALL threads waiting on the generation counter to avoid lost wakeups
+			// where a worker consumes a notification intended for another thread.
+			Atomics.notify(this.frameState, generationOffset, Infinity)
+		}
+	}
+
+	/**
+	 * Finds a job for this worker to execute.
+	 * It first tries to pop from its own deque, then attempts to steal.
+	 * @param {number} threadId - The ID of this worker thread.
+	 * @returns {number} The ID of the found job, or -1 if no job is available.
+	 */
+	findJob(threadId) {
+		// Always check the local queue first. This is the most common and fastest path.
+		// This also solves a race condition where a job is pushed right before we go to sleep.
+		const localJob = this.localDeque.pop()
+		if (localJob !== this.NO_JOB_AVAILABLE) {
+			return localJob
+		}
+
+		// If the local queue is empty, try to steal from other threads.
+		if (this.totalThreads <= 1) return this.NO_JOB_AVAILABLE
+
+		// --- Ring Neighbor-First Stealing Strategy ---
+		// Worker `i` attempts to steal from `(i+1)%N`, then `(i+2)%N`, etc.
+		for (let i = 1; i < this.totalThreads; i++) {
+			const victimId = (self.id + i) % this.totalThreads
+			const victimDeque = this.allDeques[victimId]
+
+			this.reusableStealBuffer.length = 0
+			if (victimDeque.stealHalf(this.localDeque, this.reusableStealBuffer)) {
+				// Steal was successful. Jobs are now in our local deque.
+				// Pop one to execute immediately.
+				const job = this.localDeque.pop()
+				if (job !== this.NO_JOB_AVAILABLE) {
+					return job
+				}
+				// If pop fails (highly unlikely race), just continue to next victim.
+			}
+		}
+
+		return this.NO_JOB_AVAILABLE
+	}
+
+	async executeJob(jobId, threadId, frameId) {
+		if (jobId === undefined || jobId === null || jobId < 0) {
+			return
+		}
+
+		const jobsView = this.jobsView
+		const jobOffset = jobId * this.JOB_STRIDE_IN_U32
+		const systemId = jobsView[jobOffset + this.JOB_SYSTEM_ID_OFFSET]
+		const jobPayload = jobsView[jobOffset + this.JOB_PAYLOAD_OFFSET]
+		const jobType = jobPayload >> 24
+		const chunkId = jobPayload & 0x00ffffff
+
+		const systemName = this.idToSystemName[systemId]
+		const scheduleLogic = this.logicRegistry[systemName]?.logic
+
+		if (jobType === this.JOB_TYPE.SCHEDULE && scheduleLogic) {
+			try {
+				this.chunkViewInstance.setChunk(chunkId)
+				// Use the pre-built context object to avoid per-job allocation.
+				const context = this.perFrameSystemContexts[systemName] || this.perFrameContext
+				await scheduleLogic(this.chunkViewInstance, context)
+			} catch (error) {
+				console.error(`[Worker ${self.id}] Error in schedule job for ${systemName}:`, error)
+			}
+		}
+
+		this.processDependents(jobId, threadId, frameId)
+
+		const newCompletedJobs = Atomics.add(this.frameState, this.FRAME_STATE_COMPLETED_JOBS_OFFSET, 1n) + 1n
+		const totalJobs = Atomics.load(this.frameState, this.FRAME_STATE_TOTAL_JOBS_OFFSET)
+
+		if (newCompletedJobs >= totalJobs) {
+			// This thread just completed the last job. It is responsible for waking up any
+			// other threads that may have gone to sleep before realizing the frame was finished.
+			// This prevents the "completion race" deadlock.
+			this.wakeIdleThreads()
+		}
+	}
+
+	processDependents(completedJobId, currentThreadId, frameId) {
+		const jobsView = this.jobsView
+		const dependentsView = this.dependentsView
+		const jobOffset = completedJobId * this.JOB_STRIDE_IN_U32
+		const depListStart = jobsView[jobOffset + this.JOB_DEP_LIST_START_OFFSET]
+		const depListCount = jobsView[jobOffset + this.JOB_DEP_LIST_COUNT_OFFSET]
+
+		// Reuse pre-allocated arrays to avoid GC pressure in this hot path.
+		// This is a key optimization to prevent per-job allocations in a hot path.
+		this.reusableUnlockedMTOJobs.length = 0
+		this.reusableUnlockedAnyJobs.length = 0
+		const unlockedMTOJobs = this.reusableUnlockedMTOJobs
+		const unlockedAnyJobs = this.reusableUnlockedAnyJobs
+
+		for (let i = 0; i < depListCount; i++) {
+			const dependentJobId = dependentsView[depListStart + i]
+			const dependentJobOffset = dependentJobId * this.JOB_STRIDE_IN_U32
+
+			// Atomically decrement the counter and check if it reached zero.
+			if (Atomics.sub(jobsView, dependentJobOffset + this.JOB_DEP_COUNTER_OFFSET, 1) === 1) {
+				// The counter was 1 before we subtracted, so it's now 0.
+				// This job is now ready to run. Read its routing info to decide where it goes.
+				const affinity = jobsView[dependentJobOffset + this.JOB_AFFINITY_OFFSET]
+
+				if (affinity === this.JOB_AFFINITY.MAIN_THREAD) {
+					// This is a Main-Thread-Only job. Push it to the MPSC inbox.
+					unlockedMTOJobs.push(dependentJobId)
+				} else {
+					// This is a parallel (ANY_WORKER) job. Push it to our own local deque.
+					// This is the fast path, as we are the owner/producer.
+					unlockedAnyJobs.push(dependentJobId)
+				}
+			}
+		}
+
+		for (const jobId of unlockedMTOJobs) {
+			this.mainThreadInbox.push(jobId)
+		}
+		if (unlockedAnyJobs.length > 0) {
+			this.localDeque.pushBatch(unlockedAnyJobs)
+		}
+
+		// If we unlocked any job, of any affinity, we should wake a thread.
+		// This is crucial to wake the main thread if it's sleeping and we just gave it an MTO job.
+		if (unlockedMTOJobs.length > 0 || unlockedAnyJobs.length > 0) {
+			this.wakeIdleThreads()
+		}
+	}
+	async loadScheduleLogic(hmrData) {
+		const { systemName, dependencies, code } = hmrData
+		try {
+			const newModule = await this.importFromString(code)
+			if (!newModule.schedule) {
+				throw new Error(`Transpiled module for "${systemName}" did not export a "schedule" function.`)
+			}
+			this.logicRegistry[systemName] = {
+				logic: newModule.schedule,
+				dependencies: dependencies,
+			}
+		} catch (error) {
+			console.error(`[Worker] Failed to load schedule logic for ${systemName}:`, error)
+			throw error
+		}
+	}
+
+	syncChunkDeltas({ newChunks, destroyedChunks, newArchetypes }) {
+		if (destroyedChunks) {
+			for (const chunkId of destroyedChunks) {
+				entityStore.chunkComponentData[chunkId] = undefined
+				entityStore.chunkDirtyTicks[chunkId] = undefined
+				entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined
+			}
+		}
+		if (newChunks) {
+			for (const chunkId in newChunks) {
+				const chunkSyncData = newChunks[chunkId]
+				entityStore.chunkComponentData[chunkId] = chunkSyncData.data
+				entityStore.chunkDirtyTicks[chunkId] = chunkSyncData.ticks
+				entityStore.chunkArchetypeDirtyTicks[chunkId] = chunkSyncData.archetypeTicks
+			}
+		}
+		if (newArchetypes) {
+			for (const archetype of newArchetypes) {
+				entityStore.archetypeComponentTypeIDArrays[archetype.id] = archetype.componentIdArray
+			}
+		}
+	}
+}
+
+new WorkerEntry()

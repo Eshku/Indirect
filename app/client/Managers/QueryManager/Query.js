@@ -30,9 +30,8 @@ to a race condition.
  *
  * --- ARCHITECTURAL NOTE on Query Design (Unity IJobChunk-Style) ---
  *
- * Design of our query system is inspired by robust and explicit model used in
- * Unity's Data-Oriented Technology Stack (DOTS). This approach prioritizes API consistency,
- * explicitness, and performance by iterating over chunks of data rather than individual entities.
+ * Design of our query system is inspired model used in
+ * Unity's Data-Oriented Technology Stack (DOTS). 
  *
  * 1.  **A Single, Consistent API**: `query.iter()` method is single entry point
  *     for all iteration. It yields each **Chunk** of entities that match query's
@@ -46,6 +45,10 @@ to a race condition.
  */
 
 import * as Schema from '../../ECS/ComponentManager/ComponentSchema.js'
+import { ChunkView } from './ChunkView.js'
+import { entityStore } from '../../ECS/EntityManager/EntityManager.js'
+
+const INITIAL_CHUNK_CAPACITY = 256
 
 export class Query {
 	static _createSimpleMask(componentTypeIDs, categoryName) {
@@ -65,6 +68,7 @@ export class Query {
 
 	static _createComponentTypeIDSet(componentTypeIDs, categoryName) {
 		const typeIDs = new Set()
+
 		for (const typeID of componentTypeIDs) {
 			if (typeof typeID !== 'number') {
 				throw new Error(`Query: ${categoryName} component identifier must be a numeric typeID. Received: ${typeID}`)
@@ -74,20 +78,9 @@ export class Query {
 		return Object.freeze(typeIDs)
 	}
 
-	constructor(
-		id,
-		queryManager,
-		entityManager,
-		withComponents,
-		withoutComponents = [],
-		anyComponents = [],
-		reactComponents = [],
-		readComponents = [], 
-		writeComponents = [] 
-	) {
+	constructor(id, queryManager, withComponents = [], withoutComponents = [], anyComponents = [], reactComponents = []) {
 		this.id = id
 		this.queryManager = queryManager
-		this.entityManager = entityManager
 		this.iterationLastTick = null
 
 		this.with = Query._createComponentTypeIDSet(withComponents, 'With')
@@ -103,14 +96,14 @@ export class Query {
 		this._anyOfMask = Query._createSimpleMask(anyComponents, 'AnyOf')
 		this._reactiveMask = reactMask
 
-		this.read = Query._createComponentTypeIDSet(readComponents, 'Read')
-		this.write = Query._createComponentTypeIDSet(writeComponents, 'Write')
-
 		this.isReactiveQuery = this._reactiveMask > 0n
-		this.matchingArchetypeIds = []
+
+		this.matchingChunkIds = []
+		this._chunkView = new ChunkView(entityStore)
+		this.matchingArchetypeIds = new Set()
 
 		if (this.isReactiveQuery) {
-			this._reactiveTypeIDsByArchetype = []
+			this._reactiveIndicesByArchetype = []
 		}
 
 		if (this.isReactiveQuery) {
@@ -124,50 +117,125 @@ export class Query {
 		throw new Error('Query iterator not initialized.')
 	}
 
-	//! Switch to non-allocating for or even while loop
-	//! After parrallelism implemented.
-
 	*_iterAllArchetypes() {
-		for (const archetype of this.matchingArchetypeIds) {
-			const chunks = this.entityManager.archetypeChunks[archetype]
-			for (const chunk of chunks) {
-				if (chunk.size > 0) {
-					yield chunk
-				}
+		for (let i = 0; i < this.matchingChunkIds.length; i++) {
+			const chunkId = this.matchingChunkIds[i]
+			if (entityStore.chunkSizes[chunkId] > 0) {
+				this._chunkView.setChunk(chunkId)
+				yield this._chunkView
 			}
 		}
 	}
 
 	*_iterChangedArchetypes() {
-		for (const archetype of this.matchingArchetypeIds) {
-			const chunks = this.entityManager.archetypeChunks[archetype]
-			for (const chunk of chunks) {
-				// yield only changed chunks
-				if (chunk.lastDirtyTick > this.iterationLastTick && chunk.size > 0) {
-					yield chunk
+		const lastTick = this.iterationLastTick
+
+		this._chunkView._setLastTick(lastTick)
+
+		for (let i = 0; i < this.matchingChunkIds.length; i++) {
+			const chunkId = this.matchingChunkIds[i]
+			if (entityStore.chunkSizes[chunkId] > 0) {
+				const archetypeId = entityStore.chunkArchetypeIds[chunkId]
+				const reactiveIndices = this._reactiveIndicesByArchetype[archetypeId]
+				const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[chunkId]
+
+				if (!reactiveIndices || !archetypeDirtyTicks) continue
+
+				let isDirtyForQuery = false
+				// This is the core optimization: we only check the few component types this query cares about.
+				for (const index of reactiveIndices) {
+					if (Atomics.load(archetypeDirtyTicks, index) > lastTick) {
+						isDirtyForQuery = true
+						break
+					}
+				}
+
+				if (isDirtyForQuery) {
+					this._chunkView.setChunk(chunkId)
+					yield this._chunkView
 				}
 			}
 		}
 	}
 
-	hasChanged(chunk, indexInChunk) {
-		const tickToProcess = this.iterationLastTick
-		const relevantTypeIDs = this._reactiveTypeIDsByArchetype[chunk.archetype]
+	/**
+	 * Gets the total number of entities matching this query.
+	 * @returns {number}
+	 */
+	get count() {
+		let total = 0
+		for (const chunkId of this.matchingChunkIds) {
+			total += entityStore.chunkSizes[chunkId]
+		}
+		return total
+	}
 
-		if (!relevantTypeIDs) return false
+	registerArchetype(archetype) {
+		if (this.archetypeMatches(archetype)) {
+			// Ensure we don't add archetypes we already know about.
+			if (!this.matchingArchetypeIds.has(archetype)) {
+				const chunks = entityStore.archetypeChunks[archetype]
+				for (const chunkId of chunks) {
+					this.matchingChunkIds.push(chunkId)
+				}
+				this.matchingArchetypeIds.add(archetype)
 
-		for (const typeID of relevantTypeIDs) {
-			const dirtyTick = chunk.dirtyTicksArrays[typeID][indexInChunk]
-			if (dirtyTick > tickToProcess) {
-				return true
+				// Notify the QueryManager so it can add this query to its archetype-based index.
+				this.queryManager._addQueryToArchetypeIndex(this, archetype)
+
+				if (this.isReactiveQuery) {
+					// Pre-compute the indices into the chunkArchetypeDirtyTicks array for this archetype.
+					const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetype]
+					const count = componentIdArray[0]
+					const indices = []
+
+					for (const typeId of this.react) {
+						// Perform a binary search to find the index of the component in the archetype's sorted list.
+						let low = 1
+						let high = count
+						while (low <= high) {
+							const mid = (low + high) >>> 1
+							const midVal = componentIdArray[mid]
+							if (midVal === typeId) {
+								indices.push(mid - 1) // The index in the dirty tick array is 0-based.
+								break
+							} else if (midVal < typeId) {
+								low = mid + 1
+							} else {
+								high = mid - 1
+							}
+						}
+					}
+					this._reactiveIndicesByArchetype[archetype] = indices
+				}
 			}
 		}
+	}
 
-		return false
+	/**
+	 * Registers a new chunk for an archetype that this query is already tracking.
+	 * @param {number} archetypeId The archetype ID.
+	 * @param {number} newChunkId The new chunk ID.
+	 */
+	registerChunk(archetypeId, newChunkId) {
+		if (this.matchingArchetypeIds.has(archetypeId)) {
+			this.matchingChunkIds.push(newChunkId)
+		}
+	}
+
+	/**
+	 * Unregisters a chunk that is being recycled.
+	 * @param {number} archetypeId The archetype ID the chunk belonged to.
+	 * @param {number} chunkId The chunk ID to remove.
+	 */
+	unregisterChunk(archetypeId, chunkId) {
+		if (this.matchingArchetypeIds.has(archetypeId)) {
+			this._removeChunkId(chunkId)
+		}
 	}
 
 	archetypeMatches(archetype) {
-		const archetypeMask = this.entityManager.archetypeMasks[archetype]
+		const archetypeMask = entityStore.archetypeMasks[archetype]
 
 		if ((archetypeMask & this._requiredMask) !== this._requiredMask) {
 			return false
@@ -184,28 +252,40 @@ export class Query {
 		return true
 	}
 
-	registerArchetype(archetype) {
-		if (this.archetypeMatches(archetype)) {
+	unregisterArchetype(deletedArchetype) {
+		if (this.matchingArchetypeIds.has(deletedArchetype)) {
+			// Remove the chunks associated with the deleted archetype
+			const chunksToRemove = new Set(entityStore.archetypeChunks[deletedArchetype] || [])
+			this.matchingChunkIds = this.matchingChunkIds.filter(chunkId => !chunksToRemove.has(chunkId))
+
+			this.matchingArchetypeIds.delete(deletedArchetype)
+			// Notify the QueryManager so it can remove this query from its archetype-based index.
+			this.queryManager._removeQueryFromArchetypeIndex(this, deletedArchetype)
+
 			if (this.isReactiveQuery) {
-				const relevantTypeIDs = []
-				for (const typeID of this.react) {
-					if (this.entityManager.archetypeComponentTypeIDs[archetype]?.has(typeID)) {
-						relevantTypeIDs.push(typeID)
-					}
-				}
-				this._reactiveTypeIDsByArchetype[archetype] = relevantTypeIDs
+				this._reactiveIndicesByArchetype[deletedArchetype] = undefined
 			}
-			this.matchingArchetypeIds.push(archetype)
 		}
 	}
 
-	unregisterArchetype(deletedArchetype) {
-		const index = this.matchingArchetypeIds.indexOf(deletedArchetype)
+	/**
+	 * Clears all archetype-related data from this query.
+	 * Called when the world is reset.
+	 */
+	clearArchetypes() {
+		this.matchingChunkIds.length = 0
+		this.matchingArchetypeIds.clear()
+		if (this.isReactiveQuery) {
+			this._reactiveIndicesByArchetype.length = 0
+		}
+	}
+
+	_removeChunkId(chunkId) {
+		const index = this.matchingChunkIds.indexOf(chunkId)
 		if (index > -1) {
-			this.matchingArchetypeIds.splice(index, 1)
-			if (this.isReactiveQuery) {
-				this._reactiveTypeIDsByArchetype[deletedArchetype] = undefined
-			}
+			// Fast removal by swapping with the last element.
+			this.matchingChunkIds[index] = this.matchingChunkIds[this.matchingChunkIds.length - 1]
+			this.matchingChunkIds.pop()
 		}
 	}
 

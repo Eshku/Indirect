@@ -25,7 +25,7 @@ export class CameraSystem {
 
 	async init() {
 		findPlayer: for (const chunk of this.playerQuery.iter()) {
-			const positionArrays = chunk.componentArrays[this.position]
+			const positionArrays = chunk.componentData[this.position]
 			const posX = positionArrays.x
 			const posY = positionArrays.y
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
@@ -57,7 +57,7 @@ export class CameraSystem {
 		return false
 	}
 
-	update(deltaTime, currentTick) {
+	update({deltaTime, currentTick}) {
 		this.screenWidth = gameManager.getApp().screen.width
 		this.screenHeight = gameManager.getApp().screen.height
 
@@ -66,7 +66,7 @@ export class CameraSystem {
 		// By iterating the query, we follow the standard, efficient system pattern.
 		// For a singleton entity like the player, this loop will only run once.
 		for (const chunk of this.playerQuery.iter()) {
-			const positionArrays = chunk.componentArrays[this.position]
+			const positionArrays = chunk.componentData[this.position]
 
 			// We can assume the first entity in the first chunk is our player.
 			const indexInChunk = 0

@@ -3,10 +3,13 @@ const { ecs } = engine.getManagers()
 const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
-/**
- * system for stress-testing the core ECS data processing logic.
- */
 export class RWMBenchmark {
+	static dependencies = {
+		update: {
+			reads: ['velocity'],
+			writes: ['position'],
+		},
+	}
 	constructor() {
 		const { position, velocity, rwmTag } = ecs.getTypeIDs()
 		Object.assign(this, { position, velocity, rwmTag })
@@ -15,14 +18,15 @@ export class RWMBenchmark {
 			with: [position, velocity, rwmTag],
 		})
 
-		//1.2m stable
-		this.entityCount = 1_200_000
+		//1.5m stable
+		this.entityCount = 1_500_000
 
-		const { payload } = payloadCompiler.compileEntities({
+		const { payload } = payloadCompiler.compileEntity({
 			position: { x: 0, y: 0 },
 			velocity: { x: 10, y: 10 },
 			rwmTag: {},
 		})
+
 		this.creationPayload = payload
 	}
 
@@ -30,23 +34,18 @@ export class RWMBenchmark {
 		this.spawnEntities()
 	}
 
-	update(deltaTime, currentTick) {
-		for (const chunk of this.query.iter()) {
-			const positionMarker = chunk.getDirtyMarker(this.position, currentTick)
+	update({deltaTime, currentTick}) {
+		for (const chunkView of this.query.iter()) {
+			const positions = chunkView.componentData[this.position]
+			const velocities = chunkView.componentData[this.velocity]
 
-			const positions = chunk.componentArrays[this.position]
-			const velocities = chunk.componentArrays[this.velocity]
-
-			const posX = positions.x
-			const posY = positions.y
-			const velX = velocities.x
-			const velY = velocities.y
-
-			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				posX[indexInChunk] += velX[indexInChunk] * deltaTime
-				posY[indexInChunk] += velY[indexInChunk] * deltaTime
-				positionMarker.mark(indexInChunk)
+			for (let indexInChunk = 0; indexInChunk < chunkView.size; indexInChunk++) {
+				positions.x[indexInChunk] += velocities.x[indexInChunk] * deltaTime
+				positions.y[indexInChunk] += velocities.y[indexInChunk] * deltaTime
 			}
+
+			// Since we modify every entity, mark the whole component type as dirty.
+			chunkView.markAllDirty(this.position, currentTick)
 		}
 	}
 
@@ -54,5 +53,12 @@ export class RWMBenchmark {
 		console.log(`RWMBenchmark (SoA): Spawning ${this.entityCount} entities...`)
 		this.commands.createEntities(this.creationPayload, this.entityCount)
 		console.log(`RWMBenchmark (SoA): Finished queueing ${this.entityCount} entities for creation.`)
+	}
+
+	destroy() {
+		console.log(`[RWMBenchmark] Cleaning up ${this.entityCount} entities...`)
+		for (const chunk of this.query.iter()) {
+			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
+		}
 	}
 }

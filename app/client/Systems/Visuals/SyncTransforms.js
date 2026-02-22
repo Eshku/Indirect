@@ -31,15 +31,15 @@ export class SyncTransforms {
 	update(deltaTime, currentTick) {
 		// --- Position Sync ---
 		for (const chunk of this.positionQuery.iter()) {
-			const viewableRefs = chunk.componentArrays[this.viewable].spriteRef
-			const positionArrays = chunk.componentArrays[this.position]
+			const viewableRefs = chunk.componentData[this.viewable].spriteRef
+			const positionArrays = chunk.componentData[this.position]
 
 			const posX = positionArrays.x
 			const posY = positionArrays.y
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (this.positionQuery.hasChanged(chunk, indexInChunk)) {
+				if (chunk.hasChanged(this.position, indexInChunk)) {
 					const spriteRef = viewableRefs[indexInChunk]
 					if (spriteRef === 0) continue
 
@@ -54,14 +54,14 @@ export class SyncTransforms {
 
 		// --- Rotation Sync ---
 		for (const chunk of this.rotationQuery.iter()) {
-			const viewableRefs = chunk.componentArrays[this.viewable].spriteRef
-			const rotationArrays = chunk.componentArrays[this.rotation]
+			const viewableRefs = chunk.componentData[this.viewable].spriteRef
+			const rotationArrays = chunk.componentData[this.rotation]
 
 			const angle = rotationArrays.angle
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (this.rotationQuery.hasChanged(chunk, indexInChunk)) {
+				if (chunk.hasChanged(this.rotation, indexInChunk)) {
 					const spriteRef = viewableRefs[indexInChunk]
 					if (spriteRef === 0) continue
 
@@ -74,15 +74,15 @@ export class SyncTransforms {
 
 		// --- Scale Sync ---
 		for (const chunk of this.scaleQuery.iter()) {
-			const viewableRefs = chunk.componentArrays[this.viewable].spriteRef
-			const scaleArrays = chunk.componentArrays[this.scale]
+			const viewableRefs = chunk.componentData[this.viewable].spriteRef
+			const scaleArrays = chunk.componentData[this.scale]
 
 			const scaleX = scaleArrays.x
 			const scaleY = scaleArrays.y
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (this.scaleQuery.hasChanged(chunk, indexInChunk)) {
+				if (chunk.hasChanged(this.scale, indexInChunk)) {
 					const spriteRef = viewableRefs[indexInChunk]
 					if (spriteRef === 0) continue
 

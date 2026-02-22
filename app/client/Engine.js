@@ -10,11 +10,11 @@ const MANAGER_INIT_ORDER = [
 
 	// High-Level Engine Systems ---
 	// These depend on a fully initialized ECS.
+	`WorkerManager`,
 	'ECS',
 	//'PropertyGroupManager', // Depends on ComponentManager, does not need to be initialized there
 	'UiManager',
 	'InputManager',
-	`WorkerManager`,
 
 	// --- Utility & Development ---
 	// Auxiliary managers for features like serialization and testing.

@@ -34,26 +34,20 @@ export class SpriteFactorySystem {
 
 	init() {}
 
-	update(deltaTime, currentTick, lastTick) {
+	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.initializationQuery.iter()) {
-			const descriptorArrays = chunk.componentArrays[this.spriteDescriptor]
-			const viewableArrays = chunk.componentArrays[this.viewable]
+			const descriptorArrays = chunk.componentData[this.spriteDescriptor]
+			const viewableArrays = chunk.componentData[this.viewable]
 
 			const assetNameRefs = descriptorArrays.assetName
 			const spriteRefs = viewableArrays.spriteRef
 			const stringStorage = this.stringStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (this.initializationQuery.hasChanged(chunk, indexInChunk)) {
-
+				if (chunk.hasChanged(this.spriteDescriptor, indexInChunk)) {
 					if (spriteRefs[indexInChunk] !== UNINITIALIZED_REF) {
-
 						continue
-						// Already initialized
-						// might be redundent check, as double-tap reactivity was fixed
-						// archetype change should not trigger it too.
 					}
-
 
 					const entityId = chunk.entities[indexInChunk]
 					const assetName = stringStorage[assetNameRefs[indexInChunk]]
@@ -71,4 +65,6 @@ export class SpriteFactorySystem {
 			}
 		}
 	}
+
+	destroy() {}
 }

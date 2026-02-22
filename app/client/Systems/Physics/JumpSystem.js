@@ -14,21 +14,22 @@ export class JumpSystem {
 
 	init() {}
 
-	update(deltaTime, currentTick) {
+	update({deltaTime, currentTick, lastTick}) {
 		for (const chunk of this.query.iter()) {
-			const jumpMarker = chunk.getDirtyMarker(this.jump, currentTick)
-			const velocityMarker = chunk.getDirtyMarker(this.velocity, currentTick)
-
-			const velocityArrays = chunk.componentArrays[this.velocity]
-			const jumpArrays = chunk.componentArrays[this.jump]
-			const isGroundedArrays = chunk.componentArrays[this.isGrounded]
+			const velocityArrays = chunk.componentData[this.velocity]
+			const jumpArrays = chunk.componentData[this.jump]
+			const isGroundedArrays = chunk.componentData[this.isGrounded]
 
 			const velY = velocityArrays.y
 			const wantsToJumpArr = jumpArrays.wantsToJump
 			const jumpForceArr = jumpArrays.jumpForce
 			const isGroundedArr = isGroundedArrays.isGrounded
 
+			let jumpModified = false
+			let velocityModified = false
+
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
+				// This system is simple enough that we can check and modify in one pass.
 				const wantsToJump = wantsToJumpArr[indexInChunk]
 				const isGrounded = isGroundedArr[indexInChunk]
 
@@ -37,10 +38,17 @@ export class JumpSystem {
 
 					wantsToJumpArr[indexInChunk] = 0
 					// We don't set isGrounded to false here. The CollisionSystem will do that
-					jumpMarker.mark(indexInChunk)
-					velocityMarker.mark(indexInChunk)
+					chunk.dirtyTicks[this.jump][indexInChunk] = currentTick
+					chunk.dirtyTicks[this.velocity][indexInChunk] = currentTick
+					jumpModified = true
+					velocityModified = true
 				}
 			}
+			
+			if (jumpModified) chunk.markChunkDirty(this.jump, currentTick)
+			if (velocityModified) chunk.markChunkDirty(this.velocity, currentTick)
 		}
 	}
+
+	destroy() {}
 }

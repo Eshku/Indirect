@@ -1,10 +1,10 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const {systemManager} = ecs
-
+const { systemManager } = ecs
+const { formatBytes } = await import(`${PATH_CORE}/utils/formatUtils.js`)
 
 // --- Constants for Configuration ---
-const PANEL_UPDATE_INTERVAL_S = 0.5 // Seconds
+const PANEL_UPDATE_INTERVAL_S = 1 // Seconds
 const STATS_WINDOW_DURATION_S = 3.0 // Calculate stats over the last 3 seconds.
 const BREACHING_THRESHOLD_MS = 15.0 // Threshold for a system time to be colored red.
 const LIST_REFRESH_INTERVAL_S = 1.0 // How often to re-sort and select the top systems.
@@ -51,6 +51,7 @@ export class PerformanceMonitor {
 		// --- State ---
 		this.lastProcessedStats = null
 		this.pinnedSystems = new Set() // Systems to always show at the top.
+		this.expandedSystems = new Set() // Systems whose detailed view is open.
 		this.topUnpinnedSystems = [] // Cache of system names to display in the unpinned list.
 
 		// --- Timing & History ---
@@ -58,6 +59,7 @@ export class PerformanceMonitor {
 		this.listUpdateAccumulator = 0
 		this.history = {}
 		this.warnedSystems = new Set() // Track systems that have triggered a console warning.
+		this.untrackedSystems = new Set() // Systems to permanently ignore.
 	}
 
 	init() {
@@ -65,6 +67,50 @@ export class PerformanceMonitor {
 		this._createPanel()
 		// @ts-ignore
 		window.performanceMonitor = this
+	}
+	
+	// This is now a regular system job. It just accumulates history.
+	// The display update is handled separately by the GameLoop after all jobs are done.
+	update() {
+		//Still can run something every frame as it is still a system.
+	}
+
+	/**
+	 * This method is called by the GameLoop *after* all other system jobs are complete.
+	 */
+	updateTimings(deltaTime) {
+		this.listUpdateAccumulator += deltaTime
+		const now = performance.now()
+		for (const systemName in this.systemManager.systemTimings) {
+			// If the system has been explicitly untracked, ignore its timings.
+			if (this.untrackedSystems.has(systemName)) {
+				continue
+			}
+			const timingData = this.systemManager.systemTimings[systemName]
+			
+			if (!this.history[systemName]) {
+				this.history[systemName] = []
+			}
+			// Store the full timing object in history
+			this.history[systemName].push({ time: timingData.total, details: timingData, timestamp: now })
+		}
+	}
+
+	/**
+	 * This method is called by the GameLoop *after* all jobs and the command buffer have finished.
+	 * It processes the accumulated history and updates the DOM.
+	 * @param {number} deltaTime - The frame's delta time.
+	 */
+	updateDisplay(deltaTime) {
+		// 2. Check if it's time to update the display.
+		this.timeAccumulator += deltaTime
+		if (this.timeAccumulator < PANEL_UPDATE_INTERVAL_S) return
+
+		// 3. Process history and render all panels
+		this._processAndUpdate()
+
+		// 4. Reset for the next interval.
+		this.timeAccumulator -= PANEL_UPDATE_INTERVAL_S
 	}
 
 	/**
@@ -79,61 +125,68 @@ export class PerformanceMonitor {
 		const style = document.createElement('style')
 		style.id = styleId
 		style.innerHTML = `
-            #performance-monitor .system-row.pinned { background-color: rgba(255, 255, 0, 0.1); }
+            #performance-monitor .system-row.pinned { background-color: rgba(255, 255, 100, 0.1); }
             #performance-monitor .system-row.breaching { color: #ff6b6b; }
+            #performance-monitor .detail-row { display: none; background-color: rgba(255, 255, 255, 0.05); padding-left: 20px; font-style: italic; }
         `
 		document.head.appendChild(style)
-	}
-
-	destroy() {
-		// @ts-ignore
-		if (window.performanceMonitor === this) {
-			// @ts-ignore
-			window.performanceMonitor = null
-		}
-		this.panel?.remove()
-		this.panel = null
-		this.commandBufferElements = null
-		this.rendererElements = null
-		this.summaryElements = null
-		this.memoryElements = null
-		this.systemRowElements = null
-		this.pinnedSeparator = null
 	}
 
 	/**
 	 * Public API to programmatically pin a system for tracking.
 	 * Pinned systems are always visible at the top of the monitor.
-	 * @param {string} systemName - The name of the system to pin.
+	 * @param {...string} systemNames - The name(s) of the system(s) to pin.
 	 */
-	pin(systemName) {
-		if (typeof systemName !== 'string' || !systemName) {
-			console.warn('PerformanceMonitor.pin: Please provide a valid system name.')
-			return
+	pin(...systemNames) {
+		if (systemNames.length === 0) {
+			console.warn('PerformanceMonitor.pin: Please provide at least one system name.')
+			return false
 		}
 
-		if (this.pinnedSystems.has(systemName)) return
+		let changed = false
+		for (const systemName of systemNames) {
+			if (typeof systemName !== 'string' || !systemName) {
+				console.warn(`PerformanceMonitor.pin: Invalid system name provided: ${systemName}. Skipping.`)
+				continue
+			}
+			// Only flag a change if the system wasn't already pinned.
+			if (!this.pinnedSystems.has(systemName)) {
+				this.pinnedSystems.add(systemName)
+				changed = true
+			}
+		}
 
-		this.pinnedSystems.add(systemName)
-
+		// Always re-render for simplicity, as this is a debug console API.
 		if (this.lastProcessedStats) this._renderSystemsList(this.lastProcessedStats)
+		return changed
 	}
 
 	/**
 	 * Public API to programmatically un-pin a system.
 	 * @param {string} systemName - The name of the system to unpin.
+	 * @param {...string} systemNames - The name(s) of the system(s) to unpin.
 	 */
-	unpin(systemName) {
-		if (typeof systemName !== 'string' || !systemName) {
-			console.warn('PerformanceMonitor.unpin: Please provide a valid system name.')
-			return
+	unpin(...systemNames) {
+		if (systemNames.length === 0) {
+			console.warn('PerformanceMonitor.unpin: Please provide at least one system name.')
+			return false
 		}
 
-		if (!this.pinnedSystems.has(systemName)) return
+		let changed = false
+		for (const systemName of systemNames) {
+			if (typeof systemName !== 'string' || !systemName) {
+				console.warn(`PerformanceMonitor.unpin: Invalid system name provided: ${systemName}. Skipping.`)
+				continue
+			}
+			// .delete() returns true if an element was successfully removed.
+			if (this.pinnedSystems.delete(systemName)) {
+				changed = true
+			}
+		}
 
-		this.pinnedSystems.delete(systemName)
-
+		// Always re-render for simplicity.
 		if (this.lastProcessedStats) this._renderSystemsList(this.lastProcessedStats)
+		return changed
 	}
 
 	/**
@@ -141,12 +194,67 @@ export class PerformanceMonitor {
 	 */
 	unpinAll() {
 		if (this.pinnedSystems.size === 0) {
+			return false
+		}
+
+		const changed = this.pinnedSystems.size > 0
+		this.pinnedSystems.clear()
+		if (this.lastProcessedStats) this._renderSystemsList(this.lastProcessedStats)
+		return changed
+	}
+
+	/**
+	 * Public API to completely stop tracking a system.
+	 * This removes it from the history and the UI.
+	 * @param {string} systemName - The name of the system to untrack.
+	 */
+	untrack(systemName) {
+		if (typeof systemName !== 'string' || !systemName) {
+			console.warn('PerformanceMonitor.untrack: Please provide a valid system name.')
 			return
 		}
 
-		this.pinnedSystems.clear()
+		if (!this.history[systemName]) {
+			console.log(`PerformanceMonitor: System "${systemName}" is not being tracked.`)
+			return
+		}
 
-		if (this.lastProcessedStats) this._renderSystemsList(this.lastProcessedStats)
+		// Add to the blacklist so it's not re-added on the next frame.
+		this.untrackedSystems.add(systemName)
+
+		// If the system is re-tracked later, we'll need to remove it from here.
+		// For now, this ensures it stays gone.
+
+		delete this.history[systemName]
+		this.pinnedSystems.delete(systemName)
+		this.warnedSystems.delete(systemName)
+
+		const row = this.systemRowElements.get(systemName)
+		if (row) {
+			row.container.remove()
+			this.systemRowElements.delete(systemName)
+		}
+
+		console.log(`PerformanceMonitor: Stopped tracking "${systemName}".`)
+	}
+
+	/**
+	 * Public API to stop tracking all systems that are not currently pinned.
+	 */
+	untrackNotPinned() {
+		const systemsToUntrack = Object.keys(this.history).filter(
+			name => !this.pinnedSystems.has(name) && name !== 'Render' && name !== 'Command Buffer'
+		)
+
+		if (systemsToUntrack.length === 0) {
+			console.log('PerformanceMonitor: No unpinned systems to untrack.')
+			return
+		}
+
+		for (const name of systemsToUntrack) {
+			this.untrack(name)
+		}
+		this._processAndUpdate()
 	}
 
 	/**
@@ -158,40 +266,18 @@ export class PerformanceMonitor {
 		return Object.keys(this.history).sort()
 	}
 
-	update(deltaTime) {
-		// 1. Accumulate history from the SystemManager for this frame.
-		this.listUpdateAccumulator += deltaTime
-		const now = performance.now()
-		for (const systemName in this.systemManager.systemTimings) {
-			const time = this.systemManager.systemTimings[systemName]
-			if (!this.history[systemName]) {
-				this.history[systemName] = []
-			}
-			this.history[systemName].push({ time, timestamp: now })
-		}
-
-		// 2. Check if it's time to update the display.
-		this.timeAccumulator += deltaTime
-		if (this.timeAccumulator < PANEL_UPDATE_INTERVAL_S) return
-
-		// 3. Process history and render all panels
-		this._processAndUpdate()
-
-		// 4. Reset for the next interval.
-		this.timeAccumulator -= PANEL_UPDATE_INTERVAL_S
-	}
-
 	_processAndUpdate() {
-		const { commandBufferStats, rendererStats, otherSystemsStats, totalAvg, totalMax } = this._calculateCurrentStats()
+		const { commandBufferStats, rendererStats, otherSystemsStats, totalFrameTime, sumOfMaxes } =
+			this._calculateCurrentStats()
 
 		// Cache the stats needed for immediate re-rendering on UI interaction (pinning, toggling).
 		this.lastProcessedStats = otherSystemsStats
 
 		// Render all sections with the new data.
-		this._renderSpecialRow(commandBufferStats, this.commandBufferElements, 'CommandBuffer.flush', 'Command Buffer')
+		this._renderSpecialRow(commandBufferStats, this.commandBufferElements, 'Command Buffer')
 		this._renderSystemsList(otherSystemsStats)
-		this._renderSpecialRow(rendererStats, this.rendererElements, 'Renderer.render', 'Render')
-		this._renderSummary(totalAvg, totalMax)
+		this._renderSpecialRow(rendererStats, this.rendererElements, 'Render', false)
+		this._renderSummary(totalFrameTime, sumOfMaxes)
 		this._renderMemory()
 	}
 
@@ -220,45 +306,75 @@ export class PerformanceMonitor {
 			}
 
 			// Calculate stats from the remaining (current window) history.
-			let total = 0
-			let max = 0
+			let totalTime = 0
+			let maxTime = 0
+			let totalUpdate = 0,
+				totalSchedule = 0, 
+				totalProcess = 0,
+				maxUpdate = 0,
+				maxSchedule = 0,
+				maxProcess = 0
+
 			for (const record of systemHistory) {
-				total += record.time
-				if (record.time > max) {
-					max = record.time
+				totalTime += record.time
+				if (record.time > maxTime) {
+					maxTime = record.time
+				}
+				if (typeof record.details === 'object') {
+					const { update = 0, schedule = 0, process = 0 } = record.details
+					totalUpdate += update
+					totalSchedule += schedule
+					totalProcess += process
+
+					if (update > maxUpdate) maxUpdate = update
+					if (schedule > maxSchedule) maxSchedule = schedule
+					if (process > maxProcess) maxProcess = process
 				}
 			}
-			const avg = total / systemHistory.length
+			const avgTime = totalTime / systemHistory.length
+			const avgUpdate = totalUpdate / systemHistory.length
+			const avgSchedule = totalSchedule / systemHistory.length
+			const avgProcess = totalProcess / systemHistory.length
 
-			processedStats[systemName] = { avg, max, count: systemHistory.length }
+			processedStats[systemName] = {
+				avg: avgTime,
+				max: maxTime,
+				count: systemHistory.length,
+				details: {
+					update: { avg: avgUpdate, max: maxUpdate },
+					schedule: { avg: avgSchedule, max: maxSchedule },
+					process: { avg: avgProcess, max: maxProcess },
+				},
+			}
 		}
 
 		// Calculate summary stats. This includes the command buffer.
-		let totalAvg = 0
-		let totalMax = 0
+		let totalFrameTime = 0
+		let sumOfMaxes = 0
 		for (const systemName in processedStats) {
-			totalAvg += processedStats[systemName].avg
-			totalMax += processedStats[systemName].max // This is a sum of maxes, not a true max, but useful for a rough upper bound.
+			const stats = processedStats[systemName]
+			totalFrameTime += stats.avg
+			sumOfMaxes += stats.max // This is a sum of maxes, not a true max, but useful for a rough upper bound.
 		}
 
-		const commandBufferStats = processedStats['CommandBuffer.flush']
-		const rendererStats = processedStats['Renderer.render']
-		const otherSystemsStats = { ...processedStats }
-		delete otherSystemsStats['CommandBuffer.flush']
-		delete otherSystemsStats['Renderer.render']
+		const commandBufferStats = processedStats['Command Buffer']
+		const rendererStats = processedStats['Render']
 
-		return { commandBufferStats, rendererStats, otherSystemsStats, totalAvg, totalMax }
+		const otherSystemsStats = { ...processedStats }
+		delete otherSystemsStats['Command Buffer']
+		delete otherSystemsStats['Render']
+
+		return { commandBufferStats, rendererStats, otherSystemsStats, totalFrameTime, sumOfMaxes }
 	}
 
 	/**
 	 * Generic renderer for special, always-visible rows like CommandBuffer and Renderer.
 	 * @param {object} data - The stats object for the row.
 	 * @param {object} elements - The DOM elements for the row.
-	 * @param {string} systemName - The internal name of the system for warning tracking.
-	 * @param {string} displayName - The user-facing name to display.
+	 * @param {string} systemName - The internal name and display name of the system.
 	 * @private
 	 */
-	_renderSpecialRow(data, elements, systemName, displayName) {
+	_renderSpecialRow(data, elements, systemName, isSingleValue = false) {
 		const { container, avg, max, hr } = elements
 		if (!container) return
 
@@ -271,16 +387,19 @@ export class PerformanceMonitor {
 		container.style.display = 'flex'
 		if (hr) hr.style.display = 'block'
 
-		const isBreaching = data.max >= BREACHING_THRESHOLD_MS
-		const isWarning = data.max >= WARNING_THRESHOLD_MS
+		// For single-value rows like Render, the 'avg' and 'max' are the same.
+		const breachValue = isSingleValue ? data.avg : data.max
+
+		const isBreaching = breachValue >= BREACHING_THRESHOLD_MS
+		const isWarning = breachValue >= WARNING_THRESHOLD_MS
 
 		if (isWarning) {
 			if (!this.warnedSystems.has(systemName)) {
 				console.warn(
-					`%cPerformance Warning:%c System '${displayName}' breached ${WARNING_THRESHOLD_MS.toFixed(
+					`%cPerformance Warning:%c System '${systemName}' breached ${WARNING_THRESHOLD_MS.toFixed(
 						1
 					)}ms threshold. Max time: ${data.max.toFixed(3)}ms`,
-					'color: yellow; font-weight: bold;',
+					'color: #e67e22; font-weight: bold;',
 					'color: white;'
 				)
 				this.warnedSystems.add(systemName)
@@ -290,17 +409,23 @@ export class PerformanceMonitor {
 		}
 
 		container.classList.toggle('breaching', isBreaching)
-		avg.textContent = data.avg.toFixed(3)
-		max.textContent = data.max.toFixed(3)
+		if (isSingleValue) {
+			avg.textContent = data.avg.toFixed(3)
+			max.textContent = '-' // No separate max for single-value items
+		} else {
+			avg.textContent = data.avg.toFixed(3)
+			max.textContent = data.max.toFixed(3)
+		}
 	}
 
 	_updateSystemRow(rowElements, system) {
-		const { name, avg, max } = system
-		const { container, name: nameEl, avg: avgEl, max: maxEl } = rowElements
+		const { name, avg, max, details } = system
+		const { container, name: nameEl, avg: avgEl, max: maxEl, detailRows } = rowElements
 
 		const isBreaching = max >= BREACHING_THRESHOLD_MS
 		const isWarning = max >= WARNING_THRESHOLD_MS
 		const isPinned = this.pinnedSystems.has(name)
+		const isExpanded = this.expandedSystems.has(name)
 
 		if (isWarning) {
 			if (!this.warnedSystems.has(name)) {
@@ -308,7 +433,7 @@ export class PerformanceMonitor {
 					`%cPerformance Warning:%c System '${name}' breached ${WARNING_THRESHOLD_MS.toFixed(
 						1
 					)}ms threshold. Max time: ${max.toFixed(3)}ms`,
-					'color: yellow; font-weight: bold;',
+					'color: #e67e22; font-weight: bold;',
 					'color: white;'
 				)
 				this.warnedSystems.add(name)
@@ -319,13 +444,29 @@ export class PerformanceMonitor {
 		}
 
 		container.dataset.systemName = name
-		container.title = `${name} (Click to ${isPinned ? 'unpin' : 'pin'})`
+		container.title = `${name} (L-Click to expand, R-Click to ${isPinned ? 'unpin' : 'pin'})`
 		container.classList.toggle('pinned', isPinned)
 		container.classList.toggle('breaching', isBreaching)
 
 		nameEl.textContent = name
 		avgEl.textContent = avg.toFixed(3)
 		maxEl.textContent = max.toFixed(3)
+
+		// Update and show/hide detail rows
+		this._updateDetailRow(detailRows.update, 'Update', details.update, isExpanded)
+		this._updateDetailRow(detailRows.schedule, 'Schedule', details.schedule, isExpanded)
+		this._updateDetailRow(detailRows.process, 'Process', details.process, isExpanded)
+	}
+
+	_updateDetailRow(detailRow, label, value, isExpanded) {
+		// value is now an object { avg, max }
+		if (value.avg > 0 && isExpanded) {
+			detailRow.container.style.display = 'flex'
+			detailRow.avg.textContent = value.avg.toFixed(3)
+			detailRow.max.textContent = value.max.toFixed(3)
+		} else {
+			detailRow.container.style.display = 'none'
+		}
 	}
 
 	_renderSystemsList(systemsStats) {
@@ -343,7 +484,12 @@ export class PerformanceMonitor {
 	 * @private
 	 */
 	_getDisplayedSystems(systemsStats) {
-		const allSystems = Object.entries(systemsStats).map(([name, data]) => ({ name, avg: data.avg, max: data.max }))
+		const allSystems = Object.entries(systemsStats).map(([name, data]) => ({
+			name,
+			avg: data.avg,
+			max: data.max,
+			details: data.details,
+		}))
 
 		const pinned = []
 		const unpinned = []
@@ -376,9 +522,20 @@ export class PerformanceMonitor {
 				.filter(name => !this.pinnedSystems.has(name)) // Exclude systems that were just pinned.
 				.map(name => {
 					const stats = currentUnpinnedStatsMap.get(name)
-					// If a system from our cached top list has no stats this frame (e.g., it stopped running),
-					// create a dummy object so it still gets rendered, preventing the list from shrinking and causing "missed clicks".
-					return stats || { name, avg: 0, max: 0 }
+					// If a system from our cached top list has no stats this frame (e.g., it stopped running), create a dummy object
+					// so it still gets rendered, preventing the list from shrinking and causing "missed clicks".
+					return (
+						stats || {
+							name,
+							avg: 0,
+							max: 0,
+							details: {
+								update: { avg: 0, max: 0 },
+								schedule: { avg: 0, max: 0 },
+							},
+						process: { avg: 0, max: 0 },
+						}
+					)
 				})
 		}
 		return { pinned, unpinnedToDisplay }
@@ -409,14 +566,22 @@ export class PerformanceMonitor {
 		for (const [name, row] of this.systemRowElements.entries()) {
 			if (!activeSystemNames.has(name)) {
 				row.container.remove()
+				row.detailRows.update.container.remove()
+				row.detailRows.schedule.container.remove()
+				row.detailRows.process.container.remove()
 				this.systemRowElements.delete(name)
 			}
 		}
 
 		const body = this.systemsListBody
 		const desiredNodes = []
+		const addSystemNodes = system => {
+			const row = this.systemRowElements.get(system.name)
+			desiredNodes.push(row.container, row.detailRows.update.container, row.detailRows.schedule.container, row.detailRows.process.container)
+		}
 
-		pinned.forEach(s => desiredNodes.push(this.systemRowElements.get(s.name).container))
+		// Add main rows and their detail rows to the desired order
+		pinned.forEach(addSystemNodes)
 
 		if (pinned.length > 0 && unpinnedToDisplay.length > 0) {
 			this.pinnedSeparator.style.display = 'block'
@@ -424,8 +589,7 @@ export class PerformanceMonitor {
 		} else {
 			this.pinnedSeparator.style.display = 'none'
 		}
-
-		unpinnedToDisplay.forEach(s => desiredNodes.push(this.systemRowElements.get(s.name).container))
+		unpinnedToDisplay.forEach(addSystemNodes)
 
 		// Reconcile the current DOM order with the desired order.
 		let currentElement = body.firstChild
@@ -436,6 +600,13 @@ export class PerformanceMonitor {
 				body.insertBefore(node, currentElement)
 			}
 		})
+
+		// Any remaining elements in the body are old and should be removed.
+		while (currentElement) {
+			const next = currentElement.nextSibling
+			body.removeChild(currentElement)
+			currentElement = next
+		}
 	}
 
 	_renderMemory() {
@@ -443,12 +614,13 @@ export class PerformanceMonitor {
 		if (!container) return
 
 		if (performance.memory) {
+			// @ts-ignore
 			container.style.display = 'flex'
 			hr.style.display = 'block'
 
-			const used = performance.memory.usedJSHeapSize / 1048576 // MB
-			const total = performance.memory.jsHeapSizeLimit / 1048576 // MB
-			value.textContent = `${used.toFixed(2)}MB / ${total.toFixed(2)}MB`
+			const used = formatBytes(performance.memory.usedJSHeapSize)
+			const total = formatBytes(performance.memory.jsHeapSizeLimit)
+			value.textContent = `${used} / ${total}`
 		} else {
 			// Hide if performance.memory is not available
 			container.style.display = 'none'
@@ -456,15 +628,15 @@ export class PerformanceMonitor {
 		}
 	}
 
-	_renderSummary(totalAvg, totalMax) {
+	_renderSummary(totalFrameTime, sumOfMaxes) {
 		const { container, avg, max, hr } = this.summaryElements
 		if (!container) return
 
 		// The total average time is a good indicator of overall frame cost.
-		// If this breaches 15ms, it's a significant performance issue.
-		const isBreaching = totalAvg >= BREACHING_THRESHOLD_MS
+		// If this breaches our threshold, it's a significant performance issue.
+		const isBreaching = totalFrameTime >= BREACHING_THRESHOLD_MS
 
-		if (totalAvg === 0 && totalMax === 0) {
+		if (totalFrameTime === 0 && sumOfMaxes === 0) {
 			container.style.display = 'none'
 			hr.style.display = 'none'
 			return
@@ -474,8 +646,8 @@ export class PerformanceMonitor {
 		hr.style.display = 'block'
 
 		container.classList.toggle('breaching', isBreaching)
-		avg.textContent = totalAvg.toFixed(3)
-		max.textContent = totalMax.toFixed(3)
+		avg.textContent = totalFrameTime.toFixed(3) // Sum of avgs is the total frame time
+		max.textContent = sumOfMaxes.toFixed(3) // Sum of maxes
 	}
 
 	_createPanel() {
@@ -514,13 +686,12 @@ export class PerformanceMonitor {
 			)
 		)
 
-		// --- Create all sections first ---
-
 		// Command Buffer Section
 		const cbRow = this._createRowElements('<strong>Command Buffer</strong>')
 		cbRow.container.classList.add('system-row')
-		cbRow.container.title = 'CommandBuffer.flush'
-		cbRow.container.style.display = 'none' // Initially hidden
+		cbRow.container.title = 'Command Buffer'
+		cbRow.container.style.display = 'none'
+
 		const cbHr = this._createStyledElement('hr', {
 			borderColor: '#444',
 			marginTop: '10px',
@@ -538,7 +709,7 @@ export class PerformanceMonitor {
 		})
 		const rRow = this._createRowElements('<strong>Render</strong>')
 		rRow.container.classList.add('system-row')
-		rRow.container.title = 'Renderer.render'
+		rRow.container.title = 'Render'
 		rRow.container.style.display = 'none' // Initially hidden
 		this.rendererElements = { ...rRow, hr: rHr }
 
@@ -549,7 +720,7 @@ export class PerformanceMonitor {
 			marginBottom: '5px',
 			display: 'none',
 		})
-		const sRow = this._createRowElements('Total', true)
+		const sRow = this._createRowElements('<strong>Total</strong>', true)
 		sRow.container.classList.add('system-row')
 		sRow.container.title = 'Total Frame Time (Sum of Averages)'
 		sRow.container.style.display = 'none' // Initially hidden
@@ -581,17 +752,30 @@ export class PerformanceMonitor {
 
 		// Use event delegation on the container for efficient event handling.
 		systemsListContainer.addEventListener('click', event => {
+			event.preventDefault()
 			const row = event.target.closest('[data-system-name]')
 			if (row) {
 				const systemName = row.dataset.systemName
-				if (this.pinnedSystems.has(systemName)) {
-					this.pinnedSystems.delete(systemName)
+				if (this.expandedSystems.has(systemName)) {
+					this.expandedSystems.delete(systemName)
 				} else {
-					this.pinnedSystems.add(systemName)
+					this.expandedSystems.add(systemName)
 				}
 				// Re-render immediately for responsiveness.
 				if (this.lastProcessedStats) {
 					this._renderSystemsList(this.lastProcessedStats)
+				}
+			}
+		})
+		systemsListContainer.addEventListener('contextmenu', event => {
+			event.preventDefault()
+			const row = event.target.closest('[data-system-name]')
+			if (row) {
+				const systemName = row.dataset.systemName
+				if (this.pinnedSystems.has(systemName)) {
+					this.unpin(systemName)
+				} else {
+					this.pin(systemName)
 				}
 			}
 		})
@@ -648,7 +832,14 @@ export class PerformanceMonitor {
 		const max = this._createStyledElement('span', { flex: 1, textAlign: 'right' })
 
 		container.append(name, avg, max)
-		return { container, name, avg, max }
+
+		const detailRows = {
+			update: this._createDetailRowElements('Update'),
+			schedule: this._createDetailRowElements('Schedule'),
+			process: this._createDetailRowElements('Process'),
+		}
+
+		return { container, name, avg, max, detailRows }
 	}
 
 	_createRowElements(labelText, isBold = false) {
@@ -662,6 +853,28 @@ export class PerformanceMonitor {
 
 		const name = this._createStyledElement('span', { flex: 2, textAlign: 'left' })
 		name.innerHTML = labelText // Use innerHTML to allow for <strong> tags
+
+		const avg = this._createStyledElement('span', { flex: 1, textAlign: 'right' })
+		const max = this._createStyledElement('span', { flex: 1, textAlign: 'right' })
+
+		container.append(name, avg, max)
+		return { container, name, avg, max }
+	}
+
+	_createDetailRowElements(labelText) {
+		const container = this._createStyledElement('div', {
+			display: 'none', // Initially hidden
+			justifyContent: 'space-between',
+			alignItems: 'center',
+			gap: '10px',
+			padding: '1px 2px 1px 20px', // Indent
+			fontStyle: 'italic',
+			color: '#ccc',
+		})
+		container.classList.add('detail-row')
+
+		const name = this._createStyledElement('span', { flex: 2, textAlign: 'left' })
+		name.innerHTML = labelText
 
 		const avg = this._createStyledElement('span', { flex: 1, textAlign: 'right' })
 		const max = this._createStyledElement('span', { flex: 1, textAlign: 'right' })
@@ -692,5 +905,32 @@ export class PerformanceMonitor {
 		Object.assign(el.style, styles)
 		if (textContent) el.textContent = textContent
 		return el
+	}
+
+	destroy() {
+		const styleId = 'performance-monitor-styles'
+		const styleElement = document.getElementById(styleId)
+		if (styleElement) {
+			styleElement.remove()
+		}
+
+		window.performanceMonitor = null
+
+		this.panel?.remove()
+		this.panel = null
+
+		// Clear all state and references
+		this.commandBufferElements = null
+		this.rendererElements = null
+		this.summaryElements = null
+		this.memoryElements = null
+		this.systemRowElements?.clear()
+		this.systemRowElements = null // Allow for garbage collection
+		this.pinnedSeparator = null
+		this.pinnedSystems.clear()
+		this.expandedSystems.clear()
+		this.warnedSystems.clear()
+		this.history = {}
+		this.untrackedSystems.clear()
 	}
 }

@@ -49,18 +49,13 @@ export class CollisionSystem {
 		})
 	}
 
-	update(deltaTime, currentTick) {
-		for (const charChunk of this.characterQuery.iter()) {
-			const positionMarker = charChunk.getDirtyMarker(this.position, currentTick)
-			const velocityMarker = charChunk.getDirtyMarker(this.velocity, currentTick)
-			const isGroundedMarker = charChunk.getDirtyMarker(this.isGrounded, currentTick)
-			const collisionFlagsMarker = charChunk.getDirtyMarker(this.collisionFlags, currentTick)
-
-			const charPosArrays = charChunk.componentArrays[this.position]
-			const charVelArrays = charChunk.componentArrays[this.velocity]
-			const charIsGroundedArrays = charChunk.componentArrays[this.isGrounded]
-			const charCollisionFlagsArrays = charChunk.componentArrays[this.collisionFlags]
-			const charColliderArrays = charChunk.componentArrays[this.collider]
+	update({deltaTime, currentTick, lastTick}) {
+		for (const chunk of this.characterQuery.iter()) {
+			const charPosArrays = chunk.componentData[this.position]
+			const charVelArrays = chunk.componentData[this.velocity]
+			const charIsGroundedArrays = chunk.componentData[this.isGrounded]
+			const charCollisionFlagsArrays = chunk.componentData[this.collisionFlags]
+			const charColliderArrays = chunk.componentData[this.collider]
 
 			const charPosX = charPosArrays.x
 			const charPosY = charPosArrays.y
@@ -71,7 +66,12 @@ export class CollisionSystem {
 			const charColliderHeight = charColliderArrays.height
 			const charColliderWidth = charColliderArrays.width
 
-			for (let charIndexInChunk = 0; charIndexInChunk < charChunk.size; charIndexInChunk++) {
+			let posModified = false
+			let velModified = false
+			let groundedModified = false
+			let flagsModified = false
+
+			for (let charIndexInChunk = 0; charIndexInChunk < chunk.size; charIndexInChunk++) {
 				const charHalfW = charColliderWidth[charIndexInChunk] / 2
 				const charHalfH = charColliderHeight[charIndexInChunk] / 2
 				const wasGrounded = charIsGrounded[charIndexInChunk] === 1
@@ -92,16 +92,16 @@ export class CollisionSystem {
 				const groundProbeDistance = 1 // Small distance to check for ground below the character.
 				let isSupportedByPlatform = false
 
-				for (const platformChunk of this.allPlatformsQuery.iter()) {
-					const platformPosArrays = platformChunk.componentArrays[this.position]
-					const platformColliderArrays = platformChunk.componentArrays[this.collider]
+				for (const platChunk of this.allPlatformsQuery.iter()) {
+					const platformPosArrays = platChunk.componentData[this.position]
+					const platformColliderArrays = platChunk.componentData[this.collider]
 
 					const platX = platformPosArrays.x
 					const platY = platformPosArrays.y
 					const platW = platformColliderArrays.width
 					const platH = platformColliderArrays.height
 
-					for (let platformIndexInChunk = 0; platformIndexInChunk < platformChunk.size; platformIndexInChunk++) {
+					for (let platformIndexInChunk = 0; platformIndexInChunk < platChunk.size; platformIndexInChunk++) {
 						const platCenterX = platX[platformIndexInChunk]
 						const platCenterY = platY[platformIndexInChunk]
 						const platHalfW = platW[platformIndexInChunk] / 2
@@ -160,7 +160,8 @@ export class CollisionSystem {
 				let isGroundedThisFrame = false
 
 				if (charPosX[charIndexInChunk] !== originalCharX || charPosY[charIndexInChunk] !== originalCharY) {
-					positionMarker.mark(charIndexInChunk)
+					chunk.dirtyTicks[this.position][charIndexInChunk] = currentTick
+					posModified = true
 				}
 
 				if (bestHorizontalPlatform) {
@@ -184,7 +185,8 @@ export class CollisionSystem {
 				}
 
 				if (bestHorizontalPlatform || bestVerticalPlatform) {
-					velocityMarker.mark(charIndexInChunk)
+					chunk.dirtyTicks[this.velocity][charIndexInChunk] = currentTick
+					velModified = true
 				}
 
 				const oldCollisionFlags = charCollisionFlags[charIndexInChunk]
@@ -200,7 +202,7 @@ export class CollisionSystem {
 					if (!wasGrounded) {
 						// This is a landing event.
 						// Use the mutator to set the correct entityId on the pre-compiled payload.
-						this.landedEventMutators.landedEvent.entityId[0] = charChunk.entities[charIndexInChunk]
+						this.landedEventMutators.landedEvent.entityId[0] = chunk.entities[charIndexInChunk]
 						this.commands.createEntity(this.landedEventPayload)
 					}
 				} else {
@@ -211,20 +213,29 @@ export class CollisionSystem {
 					isGroundedNow = false
 					if (wasGrounded && !justJumped) {
 						// This is the "walked off a ledge" case. Use the pre-compiled payload.
-						this.leftSurfaceEventMutators.leftSurfaceEvent.entityId[0] = charChunk.entities[charIndexInChunk]
+						this.leftSurfaceEventMutators.leftSurfaceEvent.entityId[0] = chunk.entities[charIndexInChunk]
 						this.commands.createEntity(this.leftSurfaceEventPayload)
 					}
 				}
 
 				if (isGroundedNow !== wasGrounded) {
 					charIsGrounded[charIndexInChunk] = isGroundedNow ? 1 : 0
-					isGroundedMarker.mark(charIndexInChunk)
+					chunk.dirtyTicks[this.isGrounded][charIndexInChunk] = currentTick
+					groundedModified = true
 				}
 				if (collisionDirectionFlagsThisFrame !== oldCollisionFlags) {
 					charCollisionFlags[charIndexInChunk] = collisionDirectionFlagsThisFrame
-					collisionFlagsMarker.mark(charIndexInChunk)
+					chunk.dirtyTicks[this.collisionFlags][charIndexInChunk] = currentTick
+					flagsModified = true
 				}
 			}
+
+			if (posModified) chunk.markChunkDirty(this.position, currentTick)
+			if (velModified) chunk.markChunkDirty(this.velocity, currentTick)
+			if (groundedModified) chunk.markChunkDirty(this.isGrounded, currentTick)
+			if (flagsModified) chunk.markChunkDirty(this.collisionFlags, currentTick)
 		}
 	}
+
+	destroy() {}
 }

@@ -1,8 +1,8 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager, entityManager, prefabManager } = ecs
+const { queryManager, prefabManager, sharedDataManager } = ecs
 
-const { propertyGroupManager } = await import(`${PATH_INDIRECT}/PropertyGroupManager/PropertyGroupManager.js`)
+const { entityStore } = await import(`${PATH_ECS}/EntityManager/EntityManager.js`)
 
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
@@ -20,7 +20,7 @@ export class ItemEventSystem {
 		this.cooldownsQuery = queryManager.getQuery({ with: [activeCooldown] })
 
 		this.prefabManager = prefabManager
-		this.propertyGroupManager = propertyGroupManager
+		this.sharedDataManager = sharedDataManager
 		this.entityManager = ecs.entityManager
 
 		// Pre-compile the payload for creating new Cooldown entities.
@@ -29,17 +29,18 @@ export class ItemEventSystem {
 
 	init() {}
 
-	update(deltaTime, currentTick) {
+	update({deltaTime, currentTick, lastTick}) {
 		for (const chunk of this.actorsQuery.iter()) {
-			const actionIntents = chunk.componentArrays[this.actionIntent]
-			const activeSets = chunk.componentArrays[this.activeSet]
-			const actionIntentMarker = chunk.getDirtyMarker(this.actionIntent, currentTick)
+			const actionIntents = chunk.componentData[this.actionIntent]
+			const activeSets = chunk.componentData[this.activeSet]
+			const actionIntentDirtyTicks = chunk.dirtyTicks[this.actionIntent]
 
 			const intents = actionIntents.actionIntent
 			const activeIndices = activeSets.activeSlotIndex
+			let wasModified = false
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (!this.actorsQuery.hasChanged(chunk, indexInChunk)) {
+				if (!chunk.hasChanged(this.actionIntent, indexInChunk)) {
 					continue
 				}
 
@@ -52,7 +53,8 @@ export class ItemEventSystem {
 
 				// The intent has been seen, so we clear it immediately by modifying the component data directly.
 				intents[indexInChunk] = 0
-				actionIntentMarker.mark(indexInChunk)
+				actionIntentDirtyTicks[indexInChunk] = currentTick
+				wasModified = true
 
 				const activeSlotIndex = activeIndices[indexInChunk]
 				// Access the flattened array property directly.
@@ -69,35 +71,39 @@ export class ItemEventSystem {
 				const itemLocation = this.entityManager.getEntityLocation(itemEntityId)
 				if (!itemLocation) continue
 
-				const { chunk: itemChunk, indexInChunk: itemIndexInChunk } = itemLocation
+				const { chunkId: itemChunkId, indexInChunk: itemIndexInChunk } = itemLocation
 
 				// Get PrefabId first, as it's needed for logging and cooldowns.
-				const prefabIdArrays = itemChunk.componentArrays[this.prefab]
+				const prefabIdArrays = entityStore.chunkComponentData[itemChunkId][this.prefab]
 				if (!prefabIdArrays) {
 					console.warn(`ItemEventSystem: Item ${itemEntityId} is missing a Prefab component. Cannot process action.`)
 					continue
 				}
 
-				// The Prefab.id is now a shared property. We must look it up via the sharedGroupId.
-				const prefabSharedGroupId = prefabIdArrays.sharedGroupId[itemIndexInChunk]
-				const sharedGroup = this.propertyGroupManager.getSharedGroup(prefabSharedGroupId)
-				const sharedPrefabData = sharedGroup?.[this.prefab]
-				const itemPrefabId = sharedPrefabData?.id
+				// 1. Get the prototypeId from the entity's Prefab component.
+				const prototypeId = prefabIdArrays.prototypeId[itemIndexInChunk]
+				// 2. Get the prototype object from the prototypeStore.
+				const prototype = this.sharedDataManager.prototypeStore[prototypeId]
+				// 3. Get the sharedDataIndex for the Prefab component from the prototype.
+				const sharedPrefabDataIndex = prototype?.[this.prefab]
+				// 4. Get the actual value from the valueStore.
+				const itemPrefabId = this.sharedDataManager.valueStores[this.prefab]?.id[sharedPrefabDataIndex]
 
 				if (itemPrefabId === undefined) {
 					console.warn(`ItemEventSystem: Could not resolve prefabId for item ${itemEntityId}. Cannot process action.`)
 					continue
 				}
 
-				const cooldownArrays = itemChunk.componentArrays[this.cooldown]
+				const cooldownArrays = entityStore.chunkComponentData[itemChunkId][this.cooldown]
 
 				// Cooldown duration is now a shared property.
 				if (cooldownArrays) {
 					if (this.isOnCooldown(actorId, Number(itemPrefabId))) continue
 
-					// We already have the sharedGroup from the Prefab lookup. We can reuse it.
-					const sharedCooldownData = sharedGroup?.[this.cooldown]
-					const itemCooldownDuration = sharedCooldownData?.duration ?? 0
+					// We already have the prototype from the Prefab lookup. We can reuse it.
+					const sharedCooldownDataIndex = prototype?.[this.cooldown]
+					const itemCooldownDuration =
+						this.sharedDataManager.valueStores[this.cooldown]?.duration[sharedCooldownDataIndex] ?? 0
 
 					// Use the pre-compiled payload and mutators for efficient entity creation.
 					const { payload, mutators } = this.cooldownCreationPayload
@@ -113,6 +119,7 @@ export class ItemEventSystem {
 				const itemPrefabName = this.prefabManager.getPrefabNameById(itemPrefabId) // Explicitly convert BigInts to strings for logging.
 				console.log(`Entity ${actorId.toString()} used ${itemPrefabName} with ID ${itemEntityId.toString()}`)
 			}
+			if (wasModified) chunk.markChunkDirty(this.actionIntent, currentTick)
 		}
 	}
 
@@ -127,7 +134,7 @@ export class ItemEventSystem {
 	 */
 	isOnCooldown(ownerId, prefabId) {
 		for (const chunk of this.cooldownsQuery.iter()) {
-			const cooldowns = chunk.componentArrays[this.activeCooldown]
+			const cooldowns = chunk.componentData[this.activeCooldown]
 			const ownerIds = cooldowns.ownerId
 			const prefabIds = cooldowns.prefabId
 
@@ -137,4 +144,6 @@ export class ItemEventSystem {
 		}
 		return false
 	}
+
+	destroy() {}
 }

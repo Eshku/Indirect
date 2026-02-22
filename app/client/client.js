@@ -8,16 +8,7 @@ const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 
 await engine.init()
 
-// Get the global managers from the Engine
-const {
-	gameManager,
-	assetManager,
-	physicsManager,
-	layerManager,
-	uiManager,
-	inputManager,
-	ecs, // The ECS instance is now a manager itself
-} = engine.getManagers()
+const { gameManager, assetManager, physicsManager, layerManager, uiManager, inputManager, ecs } = engine.getManagers()
 
 const setupBackground = async () => {
 	const pixi = await gameManager.getApp()
@@ -43,14 +34,14 @@ const preload = async () => {
 }
 
 const setupPlayer = async () => {
-	ECS.instantiate('player_character')
+	ecs.instantiate('player_character')
 }
 
 const setupPlatforms = async () => {
-	ECS.instantiate('platform', { position: { x: 0, y: 0 } })
-	ECS.instantiate('platform', { position: { x: 500, y: 50 } })
-	ECS.instantiate('platform', { position: { x: -500, y: 50 } })
-	ECS.instantiate('platform', { position: { x: 0, y: 300 } })
+	ecs.instantiate('platform', { position: { x: 0, y: 0 } })
+	ecs.instantiate('platform', { position: { x: 500, y: 50 } })
+	ecs.instantiate('platform', { position: { x: -500, y: 50 } })
+	ecs.instantiate('platform', { position: { x: 0, y: 300 } })
 }
 
 Logger.start('Setup')
@@ -63,8 +54,5 @@ await setupPlatforms()
 
 Logger.end('Setup')
 
-
 await ecs.systemManager.initAll()
-
-
 await ecs.systemManager.startLoop()

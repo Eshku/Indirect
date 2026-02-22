@@ -30,20 +30,21 @@ const { queryManager } = ecs
 export class EventEntityCleanupSystem {
 	constructor() {
 		const { landedEvent, leftSurfaceEvent } = ecs.getTypeIDs()
+
 		// By querying for any of these event components, we can handle all
 		// transient event cleanup in a single pass.
 		this.transientEventQuery = queryManager.getQuery({
 			any: [landedEvent, leftSurfaceEvent],
 		})
+
+
 	}
 
 	update() {
-		// With query-based commands removed, we must now iterate and issue
-		// a command for each entity individually.
 		for (const chunk of this.transientEventQuery.iter()) {
-			for (let i = 0; i < chunk.size; i++) {
-				this.commands.destroyEntity(chunk.entities[i]);
-			}
+			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
 		}
 	}
+
+	destroy() {}
 }

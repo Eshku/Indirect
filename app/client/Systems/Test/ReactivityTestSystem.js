@@ -1,6 +1,6 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager } = ecs
+const { queryManager, entityManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 /**
@@ -8,6 +8,12 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
  * modifications and structural changes (adding/removing components).
  */
 export class ReactivityTestSystem {
+	static dependencies = {
+		update: {
+			reads: ['reactivityComponent'],
+		},
+	}
+
 	constructor() {
 		// true \ false
 		this.testConfig = {
@@ -50,35 +56,23 @@ export class ReactivityTestSystem {
 			})
 			this.commands.createEntity(payload)
 		}
-		//console.log(`ReactivityTestSystem: Spawned ${this.totalEntities} test entities.`)
 	}
 
 	_initializeEntities() {
 		const allEntities = []
 		// Use the broader query to find all test entities, even if their components change.
 		for (const chunk of this.modificationTargetQuery.iter()) {
-			//console.log(`ReactivityTestSystem: Found ${chunk.size} test entities.`)
-			for (let i = 0; i < chunk.size; i++) {
-				//console.log(`ReactivityTestSystem: Found test entity ${chunk.entities[i]}`)
-				allEntities.push(chunk.entities[i])
-			}
-		}
-
-		if (allEntities.length < 2) {
-			console.warn(`ReactivityTestSystem: Not enough entities to run tests. Found ${allEntities.length}, need 2.`)
-			return
+			// Iterate through the entities of the chunk and add them to the list.
+			for (let i = 0; i < chunk.size; i++) allEntities.push(chunk.entities[i])
 		}
 
 		// We'll use two separate entities for our tests to keep them isolated.
 		this.directModificationEntityId = allEntities[0]
 		this.structuralChangeEntityId = allEntities[1]
 		this.entitiesInitialized = true
-		/* console.log(
-			`ReactivityTestSystem: Direct mod target: ${this.directModificationEntityId}, Structural change target: ${this.structuralChangeEntityId}`
-		) */
 	}
 
-	update(deltaTime, currentTick, lastTick) {
+	update({deltaTime, currentTick, lastTick}) {
 		if (!this.entitiesInitialized) {
 			// On the first update after init, the entities will have been created.
 			this._initializeEntities()
@@ -94,26 +88,25 @@ export class ReactivityTestSystem {
 			this._runStructuralChangeTest(currentTick)
 		}
 
-		this._runDetection(currentTick, lastTick)
+		this._runDetection(currentTick)
 	}
 
 	_runDirectModificationTest(currentTick) {
 		// Every 60 ticks, modify the `value` of one entity's ReactivityComponent.
 		if (currentTick > 0 && currentTick % 60 === 0) {
 			for (const chunk of this.modificationTargetQuery.iter()) {
-				const reactComps = chunk.componentArrays[this.reactivityComponent]
-				const marker = chunk.getDirtyMarker(this.reactivityComponent, currentTick)
+				const entities = chunk.entities
+				const reactComps = chunk.componentData[this.reactivityComponent]
 
 				for (let i = 0; i < chunk.size; i++) {
-					const entityId = chunk.entities[i]
-					if (entityId === this.directModificationEntityId) {
+					if (entities[i] === this.directModificationEntityId) {
 						const oldValue = reactComps.value[i]
 						const newValue = oldValue + 1
 						reactComps.value[i] = newValue
-						marker.mark(i)
+						chunk.markEntityDirty(this.reactivityComponent, i, currentTick)
 
 						console.log(
-							`%cReactivityTestSystem (Trigger): Modified ReactivityComponent on entity ${entityId}. Changed value from ${oldValue} to ${newValue} at tick ${currentTick}.`,
+							`%cReactivityTestSystem (Trigger): Modified ReactivityComponent on entity ${this.directModificationEntityId}. Changed value from ${oldValue} to ${newValue} at tick ${currentTick}.`,
 							'color: orange'
 						)
 						return // Found and modified
@@ -142,24 +135,34 @@ export class ReactivityTestSystem {
 		}
 	}
 
-	_runDetection(currentTick, lastTick) {
+	_runDetection(currentTick) {
 		// This runs every frame to see what changes the reactive query has picked up.
 		for (const chunk of this.detectionQuery.iter()) {
-			const reactComps = chunk.componentArrays[this.reactivityComponent]
+			const entities = chunk.entities
+			const reactComps = chunk.componentData[this.reactivityComponent]
+			const dirtyTicks = chunk.dirtyTicks[this.reactivityComponent]
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				// hasChanged() is the key to reactivity.
-				if (this.detectionQuery.hasChanged(chunk, indexInChunk)) {
-					const entityId = chunk.entities[indexInChunk]
+				// Use the new helper method for cleaner code.
+				if (chunk.hasChanged(this.reactivityComponent, indexInChunk)) {
+					const entityId = entities[indexInChunk]
 					const newValue = reactComps.value[indexInChunk]
-					const dirtyTick = chunk.dirtyTicksArrays[this.reactivityComponent][indexInChunk]
+					const dirtyTick = dirtyTicks[indexInChunk]
 
 					console.log(
-						`%cReactivityTestSystem (Detector): Detected change on entity ${entityId}! New value: ${newValue}. (System last ran at ${lastTick}, component dirtied at ${dirtyTick})`,
+						`%cReactivityTestSystem (Detector): Detected change on entity ${entityId}! New value: ${newValue}. (Component dirtied at ${dirtyTick})`,
 						'color: lightgreen'
 					)
 				}
 			}
+		}
+	}
+
+	destroy() {
+		// Clean up entities created by this test system to prevent accumulation on HMR.
+		// Use the highly efficient chunk-based destruction command.
+		for (const chunk of this.modificationTargetQuery.iter()) {
+			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
 		}
 	}
 }

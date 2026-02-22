@@ -7,9 +7,12 @@
 const INITIAL_BUFFER_SIZE = 1024 * 1024 // 1 MB
 
 export class RawCommandBuffer {
-
 	constructor() {
-		this.buffer = new SharedArrayBuffer(INITIAL_BUFFER_SIZE)
+		// The command buffer is a main-thread-only construct. It should use a standard,
+		// garbage-collected ArrayBuffer. Using SharedArrayBuffer here was causing a
+		// massive memory leak, as resizing the buffer would discard the old SAB,
+		// which is never freed.
+		this.buffer = new ArrayBuffer(INITIAL_BUFFER_SIZE)
 		this.view = new DataView(this.buffer)
 		this.uint8View = new Uint8Array(this.buffer) // For faster string/buffer ops
 		this.offset = 0
@@ -32,7 +35,7 @@ export class RawCommandBuffer {
 	ensureCapacity(requiredSpace) {
 		if (this.offset + requiredSpace > this.buffer.byteLength) {
 			const newSize = Math.max(this.buffer.byteLength * 2, this.offset + requiredSpace)
-			const newBuffer = new SharedArrayBuffer(newSize)
+			const newBuffer = new ArrayBuffer(newSize)
 			new Uint8Array(newBuffer).set(this.uint8View)
 			this.buffer = newBuffer
 			this.uint8View = new Uint8Array(this.buffer)

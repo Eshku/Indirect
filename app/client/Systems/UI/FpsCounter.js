@@ -30,7 +30,7 @@ export class FpsCounter {
 		this.setupFpsDisplay()
 	}
 
-	update(deltaTime) {
+	update({ deltaTime }) {
 		// Manual FPS calculation over 1-second intervals
 		this.frames++
 		this.elapsedTime += deltaTime // deltaTime is in seconds

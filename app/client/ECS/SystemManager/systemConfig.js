@@ -39,9 +39,9 @@ export const systemSchedule = {
 	// Systems that only need to be initialized (e.g., for event listeners)
 	Initialization: [{ name: 'UIInputSystem', frequency: 'none' }],
 
-	// Runs every frame for lowest-latency input processing.
+	Cursor: [{ name: 'CursorSystem', frequency: 'input' }],
+
 	Input: [
-		{ name: 'CursorSystem', frequency: 'input' },
 		{ name: 'InputContextSystem', frequency: 'input' },
 		{ name: 'PlayerInputSystem', frequency: 'input' },
 	],
@@ -80,15 +80,32 @@ export const systemSchedule = {
 		{ name: 'FpsCounter', frequency: 'visuals' },
 	],
 
+	//! Do not run benchmark \ test systems with other systems together, high query overlap potential.
+
 	Benchmark: [
-		/* { name: 'RWMBenchmark', frequency: 'visuals' }, */
+		/* { name: 'CPUBenchmark', frequency: 'logic' }, */
+		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */
+		/* { name: 'ParallelRWMBenchmark', frequency: 'logic' }, */
 		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
 	Test: [
-		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
+		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
+		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
+		/* { name: 'SimpleParallelismTestSystem', frequency: 'logic' }, */
+/* 		{ name: 'DependencySystemA', frequency: 'visuals' },
+		{ name: 'DependencySystemB', frequency: 'visuals' },
+		{ name: 'DependencySystemC', frequency: 'visuals' }, */
+	],
+
+	CoreTests: [
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
-		/* {name:'SchemaTestSystem', frequency: 'none'}, */
-		/* { name: 'ParallelismTestSystem', frequency: 'visuals' }, */
+		/* { name: 'SchemaTestSystem', frequency: 'none' }, */
+		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */
+	],
+
+	TickTests: [
+		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
+		/* { name: 'TimedSystemTest', frequency: 1 }, */
 	],
 }

@@ -71,6 +71,20 @@ export class TestManager {
 	}
 
 	/**
+	 * Clears all registered test suites and resets the manager's state.
+	 * This is crucial for HMR to prevent duplicate test registration.
+	 */
+	clear() {
+		this.suites.clear()
+		this.currentSuiteName = null
+		// Also reset the counters used by runAllTests
+		this.totalSuitesPassed = 0
+		this.totalTestsPassed = 0
+		this.totalTestsRun = 0
+		this.failedTests = []
+	}
+
+	/**
 	 * Executes all tests within a specified suite.
 	 * @param {string} suiteName - The name of the test suite to run.
 	 * @returns {Promise<{passed: boolean, passedCount: number, totalCount: number}>} A promise that resolves with the suite's results.

@@ -22,20 +22,21 @@ export class MovementSystem {
 		this.collisionFlagsConstants = ecs.componentManager.getConstantsForProperty(collisionFlags, 'collisionFlags')
 	}
 
-	update(deltaTime, currentTick) {
+	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.query.iter()) {
-			const velocityMarker = chunk.getDirtyMarker(this.velocity, currentTick)
-
-			const velocityArrays = chunk.componentArrays[this.velocity]
-			const intentArrays = chunk.componentArrays[this.movementIntent]
-			const speedArrays = chunk.componentArrays[this.speed]
-			const collisionFlagsArrays = chunk.componentArrays[this.collisionFlags]
+			const velocityArrays = chunk.componentData[this.velocity]
+			const intentArrays = chunk.componentData[this.movementIntent]
+			const speedArrays = chunk.componentData[this.speed]
+			const collisionFlagsArrays = chunk.componentData[this.collisionFlags]
+			const velocityDirtyTicks = chunk.dirtyTicks[this.velocity]
 
 			const velX = velocityArrays.x
 			const intentX = intentArrays.desiredX
 			const speedVal = speedArrays.value
 			const collisionFlagsArray = collisionFlagsArrays.collisionFlags
-			const collisionFlags = this.collisionFlagsConstants // Local reference for the tight loop
+			const collisionFlags = this.collisionFlagsConstants
+
+			let wasModified = false
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				const desiredMoveX = intentX[indexInChunk] // e.g., -1, 0, 1
@@ -51,10 +52,18 @@ export class MovementSystem {
 					// Moving right and hit right, or moving left and hit left
 					finalVelX = 0
 				}
-				velX[indexInChunk] = finalVelX
 
-				velocityMarker.mark(indexInChunk)
+				// Only mark as dirty if the velocity has actually changed.
+				if (velX[indexInChunk] !== finalVelX) {
+					velX[indexInChunk] = finalVelX
+					velocityDirtyTicks[indexInChunk] = currentTick
+					wasModified = true
+				}
 			}
+
+			if (wasModified) chunk.markChunkDirty(this.velocity, currentTick)
 		}
 	}
+
+	destroy() {}
 }

@@ -16,8 +16,6 @@ const TypeProcessors = {
 const PrimitiveTypeProcessors = Object.keys(TYPED_ARRAY_MAP).reduce((processors, type) => {
 	processors[type] = {
 		parse(propName, definition, componentInfo) {
-			if (definition.shared) return // A shared property does not get its own storage in the chunk.
-
 			const arrayConstructor = getTypedArrayConstructor(definition.type)
 			const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
 
@@ -35,6 +33,13 @@ const PrimitiveTypeProcessors = Object.keys(TYPED_ARRAY_MAP).reduce((processors,
 				readMethod,
 				offset,
 			}
+
+			if (definition.shared) {
+				// A shared property does not get its own storage in the chunk.
+				// We have recorded its info in `properties`, so now we can return.
+				return
+			}
+
 			componentInfo.propertyKeys.push(propName)
 			componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
 		},
@@ -533,10 +538,10 @@ export class SchemaCompiler {
 			}
 		}
 
-		// If the component has any shared properties, add a 'sharedGroupId' to its schema.
+		// If the component has any shared properties, add a 'prototypeId' to its schema.
 		// This ID will be stored on the entity's chunk and point to the actual shared data.
 		if (componentInfo.sharedProperties.length > 0) {
-			const sharedGroupIdPropName = 'sharedGroupId'
+			const prototypeIdPropName = 'prototypeId'
 			const arrayConstructor = getTypedArrayConstructor('u32')
 			const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
 
@@ -546,14 +551,14 @@ export class SchemaCompiler {
 			}
 			const offset = componentInfo.byteSize
 
-			componentInfo.properties[sharedGroupIdPropName] = {
+			componentInfo.properties[prototypeIdPropName] = {
 				type: 'u32',
 				alignment,
 				arrayConstructor,
 				readMethod,
 				offset,
 			}
-			componentInfo.propertyKeys.push(sharedGroupIdPropName)
+			componentInfo.propertyKeys.push(prototypeIdPropName)
 			componentInfo.byteSize += arrayConstructor.BYTES_PER_ELEMENT
 		}
 

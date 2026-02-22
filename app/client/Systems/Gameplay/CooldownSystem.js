@@ -1,6 +1,6 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
-const { ecs } = engine.getManagers()
-const { queryManager } = ecs
+const { ecs, entityManager } = engine.getManagers()
+const { queryManager } = ecs // entityManager is now available at the top level
 
 /**
  * Updates all active cooldowns in the world. This system embodies the "cooldown-as-an-entity" pattern.
@@ -39,7 +39,7 @@ const { queryManager } = ecs
  * The current "cooldown-as-an-entity" model is a temporary solution. Its high entity churn will become a
  * major performance bottleneck at scale. The long-term, optimal solution is to use **Packed Arrays**.
  *
-* In this future architecture, different types of temporary states will be managed by their own
+ * In this future architecture, different types of temporary states will be managed by their own
  * dedicated components, each leveraging a `packed_array` for efficiency and flexibility.
  *
  * 1.  **`ActiveCooldowns` Component:** An owner entity (e.g., a player) will have this component. It will
@@ -65,16 +65,19 @@ export class CooldownSystem {
 		})
 	}
 
-	update(deltaTime, currentTick) {
+	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.cooldownsQuery.iter()) {
-			const cooldownMarker = chunk.getDirtyMarker(this.activeCooldown, currentTick)
-			const remainingTimes = chunk.componentArrays[this.activeCooldown].remainingTime
+			const remainingTimes = chunk.componentData[this.activeCooldown].remainingTime
+
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				remainingTimes[indexInChunk] -= deltaTime
-				cooldownMarker.mark(indexInChunk)
 
 				if (remainingTimes[indexInChunk] <= 0) this.commands.destroyEntity(chunk.entities[indexInChunk])
 			}
+
+			chunk.markAllDirty(this.activeCooldown, currentTick)
 		}
 	}
+
+	destroy() {}
 }
