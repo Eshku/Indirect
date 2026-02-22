@@ -1,7 +1,14 @@
 Indirect Engine
 Copyright 2025 Eshku
 
-The Indirect Engine is a free, open source project licensed under the Apache License, Version 2.0.
+Indirect Engine is a free, open source project licensed under the Apache License, Version 2.0.
 
-The original source code for the Indirect Engine is available at:
-https://github.com/Eshku/Indirect/
+---
+
+## ATTRIBUTIONS FOR DERIVATIVE WORKS
+
+If you distribute a work derived from the Indirect Engine, you may add
+your own attribution notices below:
+
+[Your Project Name / Extension]
+Copyright [Year] [Your Name or Organization]
