@@ -23,7 +23,6 @@
     "electron-builder": "^26.0.12"
   },
   "dependencies": {
-    "pixi.js": "^8.9.1",
-    "planck": "^1.4.2"
+    "pixi.js": "^8.9.1"
   }
 }

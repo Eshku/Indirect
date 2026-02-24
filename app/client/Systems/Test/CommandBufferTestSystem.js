@@ -335,10 +335,6 @@ export class CommandBufferTestSystem {
 
 				// 4. Verification
 				const parentQuery = queryManager.getQuery({ with: [this.parent, this.testEntityTag] })
-				/* 				console.log(`_________`)
-				console.log(`Parent Query Result:`)
-				console.log(parentQuery)
-				console.log(`_________`) */
 
 				let foundChildId
 				let foundParentId

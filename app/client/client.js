@@ -8,7 +8,7 @@ const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 
 await engine.init()
 
-const { gameManager, assetManager, physicsManager, layerManager, uiManager, inputManager, ecs } = engine.getManagers()
+const { gameManager, assetManager, layerManager, uiManager, inputManager, ecs } = engine.getManagers()
 
 const setupBackground = async () => {
 	const pixi = await gameManager.getApp()

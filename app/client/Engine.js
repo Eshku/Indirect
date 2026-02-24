@@ -5,7 +5,6 @@ const MANAGER_INIT_ORDER = [
 	// These have minimal dependencies and provide foundational services.
 	'LayerManager',
 	'GameManager',
-	'PhysicsManager',
 	'AssetManager',
 
 	// High-Level Engine Systems ---
@@ -112,9 +111,6 @@ export class Engine {
 
 		const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
 		loadedManagers.set('GameManager', gameManager)
-
-		const { physicsManager } = await import(`${PATH_MANAGERS}/PhysicsManager/PhysicsManager.js`)
-		loadedManagers.set('PhysicsManager', physicsManager)
 
 		const { assetManager } = await import(`${PATH_MANAGERS}/AssetManager/AssetManager.js`)
 		loadedManagers.set('AssetManager', assetManager)

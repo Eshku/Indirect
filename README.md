@@ -39,7 +39,6 @@ Readme might be outdated.
 
 - **Electron** - Main application framework.
 - **Pixi.js** - 2D rendering engine, but could be changed to any other rendeding engine, we are using our own update loops.
-- **Planck.js** - 2D physics engine. It is there, but it is not yet used ¯\_(ツ)\_/¯
 - **Vanila Javascript** - Yes.
 
 ## Architecture
