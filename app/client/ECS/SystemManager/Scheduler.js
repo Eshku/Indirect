@@ -43,13 +43,13 @@ const JOB_TYPE_TO_METHOD_NAME = ['update', 'schedule', 'process']
  *
  * This scheduler intentionally does not implement a "private LIFO buffer" for each
  * thread, a pattern seen in some other job schedulers (e.g., Intel TBB)
- * 
- * 
+ *
+ *
  * Current archetechture sticks with "good enough" approach, prioritizing
  * simplicity (no juggling private => public storage, no publishing),
  * native self load-balancing (does not matter if initial load is balanced, all jobs are discoverable)
  * and cache locality - initial push does not have to be interleaved.
- * 
+ *
  */
 export class Scheduler {
 	constructor() {

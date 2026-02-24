@@ -1,7 +1,7 @@
 import { TYPED_ARRAY_MAP } from './ComponentSchema.js'
 const { interpret } = await import('./ComponentInterpreter.js')
 
-const getTypedArrayConstructor = (type) => TYPED_ARRAY_MAP[type] || null
+const getTypedArrayConstructor = type => TYPED_ARRAY_MAP[type] || null
 
 /**
  * A registry of processors for different schema property types.
@@ -54,21 +54,23 @@ Object.assign(TypeProcessors, {
 		parse: PrimitiveTypeProcessors.u32.parse, // A string is stored as a u32.
 	},
 	bitmask: {
-		        /**
-		         * DEV-NOTE: A `bitmask` is stored as a single integer (the "bitfield").
-		         * The `default` value for a bitmask must be a number, which is a bitwise combination
-		         * of the values in the `of` object.
-		         */		parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
+		/**
+		 * DEV-NOTE: A `bitmask` is stored as a single integer (the "bitfield").
+		 * The `default` value for a bitmask must be a number, which is a bitwise combination
+		 * of the values in the `of` object.
+		 */ parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			if (definition.shared) {
 				throw new Error(
-					`SchemaCompiler: The 'shared' flag is not supported for bitmask properties like '${componentName}.${propName}'.`
+					`SchemaCompiler: The 'shared' flag is not supported for bitmask properties like '${componentName}.${propName}'.`,
 				)
 			}
 			const { storageType, of: flagMap } = definition
 			const arrayConstructor = getTypedArrayConstructor(storageType)
 
 			if (typeof flagMap !== 'object' || flagMap === null || Array.isArray(flagMap)) {
-				throw new Error(`SchemaCompiler: 'of' for bitmask ${componentName}.${propName} must be an object map of flags to integer values.`)
+				throw new Error(
+					`SchemaCompiler: 'of' for bitmask ${componentName}.${propName} must be an object map of flags to integer values.`,
+				)
 			}
 
 			const readMethod = `get${arrayConstructor.name.replace('Array', '')}`
@@ -108,14 +110,16 @@ Object.assign(TypeProcessors, {
 			const arrayConstructor = getTypedArrayConstructor(storageType)
 
 			if (typeof enumMap !== 'object' || enumMap === null || Array.isArray(enumMap)) {
-				throw new Error(`SchemaCompiler: 'of' for enum ${componentName}.${propName} must be an object map of names to integer values.`)
+				throw new Error(
+					`SchemaCompiler: 'of' for enum ${componentName}.${propName} must be an object map of names to integer values.`,
+				)
 			}
 			const maxValue = (1 << (arrayConstructor.BYTES_PER_ELEMENT * 8)) - 1
 			if (Object.keys(enumMap).length > maxValue + 1) {
 				throw new Error(
 					`SchemaCompiler: Too many values for enum ${componentName}.${propName}. Type '${storageType}' supports ${
 						maxValue + 1
-					} values, but ${Object.keys(enumMap).length} were provided.`
+					} values, but ${Object.keys(enumMap).length} were provided.`,
 				)
 			}
 
@@ -160,14 +164,14 @@ Object.assign(TypeProcessors, {
 		parse(propName, definition, componentInfo, implicitKeys, componentName) {
 			if (definition.shared) {
 				throw new Error(
-					`SchemaCompiler: The 'shared' flag is not supported for complex types like 'pack_array' in '${componentName}.${propName}'.`
+					`SchemaCompiler: The 'shared' flag is not supported for complex types like 'pack_array' in '${componentName}.${propName}'.`,
 				)
 			}
 			const { of } = definition
 
 			if (!of) {
 				throw new Error(
-					`SchemaCompiler: pack_array schema for ${componentName}.${propName} must have an 'of' property.`
+					`SchemaCompiler: pack_array schema for ${componentName}.${propName} must have an 'of' property.`,
 				)
 			}
 
@@ -181,7 +185,7 @@ Object.assign(TypeProcessors, {
 
 			if (!itemArrayConstructor) {
 				throw new Error(
-					`SchemaCompiler: Invalid 'of' type '${itemStorageType}' in pack_array for ${componentName}.${propName}.`
+					`SchemaCompiler: Invalid 'of' type '${itemStorageType}' in pack_array for ${componentName}.${propName}.`,
 				)
 			}
 
@@ -240,10 +244,10 @@ Object.assign(TypeProcessors, {
 		 * It also creates an implicit `my_array_count` property (a `u8`) to store the *current* length of the
 		 * array for each entity, which can be less than the total capacity. This design keeps data access
 		 * extremely fast and cache-friendly for fixed-size collections.
-		 */parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
+		 */ parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			if (definition.shared) {
 				throw new Error(
-					`SchemaCompiler: The 'shared' flag is not supported for complex types like 'flat_array' in '${componentName}.${propName}'.`
+					`SchemaCompiler: The 'shared' flag is not supported for complex types like 'flat_array' in '${componentName}.${propName}'.`,
 				)
 			}
 			const { of, capacity, lengthProperty: userDefinedLengthProp } = definition
@@ -251,12 +255,12 @@ Object.assign(TypeProcessors, {
 
 			if (!of) {
 				throw new Error(
-					`SchemaCompiler: flat_array schema for ${componentName}.${propName} must have an 'of' property.`
+					`SchemaCompiler: flat_array schema for ${componentName}.${propName} must have an 'of' property.`,
 				)
 			}
 			if (typeof len !== 'number' || len <= 0 || !Number.isInteger(len)) {
 				throw new Error(
-					`SchemaCompiler: Invalid 'capacity' or 'length' for flat_array ${componentName}.${propName}. Must be a positive integer.`
+					`SchemaCompiler: Invalid 'capacity' or 'length' for flat_array ${componentName}.${propName}. Must be a positive integer.`,
 				)
 			}
 
@@ -278,7 +282,7 @@ Object.assign(TypeProcessors, {
 					const flagMap = itemSchema.of
 					if (typeof flagMap !== 'object' || flagMap === null || Array.isArray(flagMap)) {
 						throw new Error(
-							`SchemaCompiler: 'of' for bitmask in flat_array ${componentName}.${propName} must be an object map.`
+							`SchemaCompiler: 'of' for bitmask in flat_array ${componentName}.${propName} must be an object map.`,
 						)
 					}
 					// Auto-detect storage type if not provided, based on number of flags.
@@ -298,7 +302,7 @@ Object.assign(TypeProcessors, {
 					const enumMap = itemSchema.of
 					if (typeof enumMap !== 'object' || enumMap === null || Array.isArray(enumMap)) {
 						throw new Error(
-							`SchemaCompiler: 'of' for enum in flat_array ${componentName}.${propName} must be an object map.`
+							`SchemaCompiler: 'of' for enum in flat_array ${componentName}.${propName} must be an object map.`,
 						)
 					}
 
@@ -324,13 +328,12 @@ Object.assign(TypeProcessors, {
 					break
 			}
 
-			// CRITICAL FIX: Ensure the itemRepresentation holds the final storage type.
 			itemRepresentation.type = itemStorageType
 
 			const arrayConstructor = getTypedArrayConstructor(itemStorageType)
 			if (!arrayConstructor) {
 				throw new Error(
-					`SchemaCompiler: Invalid 'of' type '${itemStorageType}' in flat_array for ${componentName}.${propName}.`
+					`SchemaCompiler: Invalid 'of' type '${itemStorageType}' in flat_array for ${componentName}.${propName}.`,
 				)
 			}
 
@@ -374,19 +377,19 @@ Object.assign(TypeProcessors, {
 		parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			if (definition.shared) {
 				throw new Error(
-					`SchemaCompiler: The 'shared' flag is not supported for complex types like 'rpn' in '${componentName}.${propName}'.`
+					`SchemaCompiler: The 'shared' flag is not supported for complex types like 'rpn' in '${componentName}.${propName}'.`,
 				)
 			}
 			const { streamDataType = 'f32', streamCapacity, instanceCapacity } = definition
 
 			if (typeof streamCapacity !== 'number' || streamCapacity <= 0 || !Number.isInteger(streamCapacity)) {
 				throw new Error(
-					`SchemaCompiler: Invalid 'streamCapacity' for rpn ${componentName}.${propName}. Must be a positive integer.`
+					`SchemaCompiler: Invalid 'streamCapacity' for rpn ${componentName}.${propName}. Must be a positive integer.`,
 				)
 			}
 			if (typeof instanceCapacity !== 'number' || instanceCapacity <= 0 || !Number.isInteger(instanceCapacity)) {
 				throw new Error(
-					`SchemaCompiler: Invalid 'instanceCapacity' for rpn ${componentName}.${propName}. Must be a positive integer.`
+					`SchemaCompiler: Invalid 'instanceCapacity' for rpn ${componentName}.${propName}. Must be a positive integer.`,
 				)
 			}
 
@@ -422,7 +425,7 @@ Object.assign(TypeProcessors, {
 				{ of: streamDataType, capacity: streamCapacity },
 				componentInfo,
 				implicitKeys,
-				componentName
+				componentName,
 			)
 			componentInfo.representations[propName].streamLengthProperty = `${propName}_rpnStream_count`
 
@@ -431,14 +434,14 @@ Object.assign(TypeProcessors, {
 				{ of: 'i16', capacity: instanceCapacity },
 				componentInfo,
 				implicitKeys,
-				componentName
+				componentName,
 			)
 			flatArrayHandler.parse(
 				`${propName}_formulaLengths`,
 				{ of: 'u8', capacity: instanceCapacity },
 				componentInfo,
 				implicitKeys,
-				componentName
+				componentName,
 			)
 		},
 	},
@@ -570,7 +573,7 @@ export class SchemaCompiler {
 		if (typeof definitionObject !== 'object' || definitionObject === null || !definitionObject.type) {
 			throw new Error(
 				`SchemaCompiler: Invalid schema definition for ${componentName}.${propName}. ` +
-					`Must be an object with a 'type' property.`
+					`Must be an object with a 'type' property.`,
 			)
 		}
 

@@ -17,6 +17,9 @@ export class CommandBuffer {
 	constructor() {
 		this.rawBuffer = new RawCommandBuffer()
 		this.sortableBuffer = new SortableCommandBuffer()
+		// Counter for generating unique placeholder IDs.
+		// We use a BigInt to match the entity ID type.
+		this.placeholderIdCounter = 0n
 	}
 
 	/**
@@ -25,6 +28,17 @@ export class CommandBuffer {
 	clear() {
 		this.rawBuffer.reset()
 		this.sortableBuffer.clear()
+		this.placeholderIdCounter = 0n
+	}
+
+	/**
+	 * Generates a new, temporary placeholder ID.
+	 * These IDs are marked with the most significant bit set to 1.
+	 * @returns {bigint} A new placeholder entity ID.
+	 */
+	_generatePlaceholderId() {
+		// Set the MSB to 1 to mark it as a placeholder.
+		return (1n << 63n) | this.placeholderIdCounter++
 	}
 
 	/**
@@ -192,13 +206,17 @@ export class CommandBuffer {
 	 * It expects a payload compiled by `PayloadCompiler.compileEntity()`.
 	 * @param {{archetypeId: number, data: ArrayBuffer}} payload - The pre-compiled payload.
 	 * @param {number} layer The execution layer.
+	 * @returns {bigint} A temporary placeholder ID for the entity being created.
 	 */
 	createEntity(payload, layer = 0) {
 		const offset = this.rawBuffer.offset
 		const startOffset = offset
 
+		const placeholderId = this._generatePlaceholderId()
+
 		// It writes the opcode, archetype, and the raw binary data directly.
 		this.rawBuffer.writeU8(OpCodes.CREATE_ENTITY)
+		this.rawBuffer.writeU64(placeholderId) // Write the placeholder for resolution
 		this.rawBuffer.writeU16(payload.archetypeId)
 		this.rawBuffer.writeU16(payload.data.byteLength)
 		this.rawBuffer.writeBuffer(payload.data)
@@ -206,6 +224,7 @@ export class CommandBuffer {
 		const length = this.rawBuffer.offset - startOffset
 		const key = SortableCommandBuffer.encodeKey(SortPhase.CREATE, layer, 0, 0)
 		this.sortableBuffer.add(key, offset, length)
+		return placeholderId
 	}
 
 	getSortedCommands() {

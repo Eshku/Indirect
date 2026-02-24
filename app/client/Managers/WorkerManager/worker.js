@@ -94,9 +94,9 @@ class WorkerEntry {
 		entityStore.chunkComponentData = new Array(sharedData.MAX_CHUNKS)
 		entityStore.chunkDirtyTicks = new Array(sharedData.MAX_CHUNKS)
 		entityStore.chunkArchetypeDirtyTicks = sharedData.chunkArchetypeDirtyTicks
-		entityStore.chunkArchetypeIds = new Uint16Array(sharedData.chunkArchetypeIds) 
-		entityStore.chunkSizes = new Uint16Array(sharedData.chunkSizes) 
-		entityStore.chunkCapacities = new Uint16Array(sharedData.chunkCapacities) 
+		entityStore.chunkArchetypeIds = new Uint16Array(sharedData.chunkArchetypeIds)
+		entityStore.chunkSizes = new Uint16Array(sharedData.chunkSizes)
+		entityStore.chunkCapacities = new Uint16Array(sharedData.chunkCapacities)
 
 		entityStore.archetypeComponentTypeIDArrays = sharedData.archetypeComponentTypeIDArrays
 

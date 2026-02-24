@@ -23,16 +23,17 @@ Readme might be outdated.
 
 **Potential future improvements:**:
 
-- Introduce dynamic (packed) arrays.
-- Placeholder Entities.
+- Dynamic (packed) arrays.
 - Relational Queries
-- HMR.
-- Make proper readme / documentation.
 - Parallel command buffer
+- Custom Jobs to run in parallel.
 - Thread-safe sharad component data.
 - Priority Queue (Min-Heap?) to manage time-based events, as alternative to reducing timers per entity in systems.
-- Serialization \ Deserialization.
 - React on component addition \ changes \ removal.
+- Serialization \ Deserialization.
+- Demo.
+- HMR is going to come later on as foundation is less wobbly.
+- Make proper readme / documentation.
 
 ## Tech Stack
 
@@ -52,22 +53,22 @@ Readme might be outdated.
 - **[Managers](app/client/Managers)**: Storage of some resource, API to interact with it.
 - **[Service](app/client/Services)**: Glorified set of on-demand utilities.
 
-#### Archetypes and Chunks: Core of Data Management
+#### Architecture: Archetypes and Chunks
 
-[`EntityManager`](./app/client/ECS/EntityManager/EntityManager.js) is the heart of ECS, responsible for managing all entities, archetypes, and their data.
+The engine's core is built on a data-oriented design that organizes memory for maximum performance. This is achieved through **Archetypes** and **Chunks**.
 
-**Archetypes** define structure of entities. An archetype represents a unique combination of components. All entities with exact same set of components belong to the same archetype. This is managed internally by `EntityManager`.
+**Archetypes** define the "shape" of an entity. An archetype represents a unique combination of components. All entities with exact same set of components belong to the same archetype. This grouping is managed automatically by the ECS.
 
 - **Immortal Archetypes:** Archetype definitions are "immortal." Once an archetype is created (e.g., by creating an entity with a new combination of components), it is never destroyed, even if it contains no entities. This avoids the performance cost of "archetype churn" (repeatedly creating and destroying archetypes), which would force `QueryManager` to constantly re-evaluate all active queries.
 
-Each archetype's data is organized into fixed-size **[Chunks](./app/client/ECS/ArchetypeManager/Chunk.js)**. A Chunk is a contiguous block of memory that directly stores entities and their associated component data in a Structure of Arrays (SoA) layout.
+Each archetype's data is organized into fixed-size **[Chunks](./app/client/ECS/ArchetypeManager/Chunk.js)**. Chunk is a contiguous block of memory that directly stores entities and their associated component data in **Structure of Arrays (SoA)** layout.
 
 - **Direct Data Storage:** Chunk holds:
-  - An array of entity IDs (`Uint32Array`).
-  - Dedicated `TypedArray`s for each component property (e.g., `position.x` values in one array, `position.y` in another).
-  - `dirtyTicksArrays` to track component modifications.
-- **Memory Allocation:** Component data within Chunks is allocated using `SharedArrayBuffer`, facilitating zero-copy data transfer and enabling multi-threaded processing with Web Workers in the future.
-- **Iteration Foundation:** Systems iterate over these Chunks, processing entities and their data in contiguous blocks.
+  - An array of entity IDs.
+  - Dedicated `TypedArray`s for each component property (e.g., all `position.x` values in one array, all `position.y` in another). This is the SoA layout.
+  - Metadata for tracking component modifications.
+- **Memory Allocation:** Component data within Chunks is allocated using `SharedArrayBuffer`, facilitating zero-copy data transfer and enabling multi-threaded processing with Web Workers.
+- **Iteration Foundation:** Systems iterate over these Chunks, processing entities and their data in contiguous, cache-friendly blocks of memory.
 
 ## Key Features and Design Patterns
 
@@ -468,6 +469,12 @@ this.commands.removeComponent(entityID, this.positionTypeID)
 this.commands.destroyEntity(entityID)
 ```
 
+**Placeholder Entities: Creating and Referencing Entities in the Same Frame**
+
+A common scenario in ECS is needing to create several entities that reference each other in the same frame.
+
+When `this.commands.createEntity(payload)` called, it returns a temporary **placeholder ID**. This placeholder acts as a handle you can use in other commands recorded during the same frame.
+
 ### Prefab Definitions: Manifest-Driven Approach
 
 Engine uses **manifest-driven** approach for defining and creating entities. Instead of referencing file paths directly - it is using human-readable string called a `prefabName` (e.g., `"obsidian_sword"`, `"player_character"`).
@@ -517,7 +524,7 @@ _Example `Fireball.json`:_
 
 ```javascript
 //second argument - overrides
-const player = entityManager.instantiate('player_character', { position: { x: 50, y: 50 } })
+const player = ecs.instantiate('player_character', { position: { x: 50, y: 50 } })
 ```
 
 This architecture keeps game logic clean and focused on _what_ to create (`'player_character'`) rather than _how_ or _from where_ to create it.

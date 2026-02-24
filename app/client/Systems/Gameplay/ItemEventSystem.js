@@ -29,7 +29,7 @@ export class ItemEventSystem {
 
 	init() {}
 
-	update({deltaTime, currentTick, lastTick}) {
+	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.actorsQuery.iter()) {
 			const actionIntents = chunk.componentData[this.actionIntent]
 			const activeSets = chunk.componentData[this.activeSet]
@@ -107,7 +107,7 @@ export class ItemEventSystem {
 
 					// Use the pre-compiled payload and mutators for efficient entity creation.
 					const { payload, mutators } = this.cooldownCreationPayload
-					// CRITICAL FIX: Convert BigInts to Numbers before assigning to TypedArray mutators.
+					// Convert BigInts to Numbers before assigning to TypedArray mutators.
 					// `ownerId` is an 'entity' (BigInt), and `prefabId` is also being read as a BigInt from shared data.
 					mutators.activeCooldown.ownerId[0] = actorId // This is a BigUint64Array, so it takes a BigInt directly.
 					mutators.activeCooldown.prefabId[0] = Number(itemPrefabId)
@@ -125,8 +125,7 @@ export class ItemEventSystem {
 
 	/**
 	 * Checks if a specific owner/prefab combination is currently on cooldown.
-	 * NOTE: This is an O(N) operation over all active cooldowns. It's acceptable
-	 * here because it only runs when a player *tries* to use an item, not every frame.
+	 * NOTE: This is an O(N) operation.
 	 * @param {bigint} ownerId The entity to check.
 	 * @param {number} prefabId The skill/item prefab to check.
 	 * @returns {boolean} True if a matching cooldown entity exists.

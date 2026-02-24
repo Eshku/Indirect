@@ -77,7 +77,6 @@ export class ParallelismTestSystem {
 		// --- Test Configuration ---
 		this.topMargin = 50 // The space at the top to reserve for labels.
 
-
 		// number of columns will be derived from these settings.
 		this.totalChunksToCreate = 60 // Total number of chunks to fill with test entities.
 		this.chunksPerColumn = 10 // Each column will be made of entities from this many chunks.
@@ -118,10 +117,9 @@ export class ParallelismTestSystem {
 		const bytesPerEntity = ecs.entityManager.getBytesPerEntityInArchetype(archetypeId)
 		const entitiesPerChunk = Math.max(
 			MIN_CHUNK_CAPACITY,
-			bytesPerEntity > 0 ? Math.floor(TARGET_CHUNK_SIZE_BYTES / bytesPerEntity) : MIN_CHUNK_CAPACITY
+			bytesPerEntity > 0 ? Math.floor(TARGET_CHUNK_SIZE_BYTES / bytesPerEntity) : MIN_CHUNK_CAPACITY,
 		)
 
-		
 		// For reference, the byte size is calculated as:
 		// Entity ID (8) + Position (16) + Velocity (16) + ParallelismTestTag (0) + Column (1) = 41 bytes per entity.
 		// entitiesPerChunk = floor(16384 / 41) = 399.
@@ -143,10 +141,11 @@ export class ParallelismTestSystem {
 			const entityIndexInColumn = i % entitiesPerColumn
 
 			// Position entities to form vertical columns.
-			this.creationMutators.position.x[0] = this.leftBoundary + columnIndex * columnSpacing			
-			this.creationMutators.position.y[0] = this.topMargin + (entityIndexInColumn / entitiesPerColumn) * (this.worldHeight - this.topMargin)
+			this.creationMutators.position.x[0] = this.leftBoundary + columnIndex * columnSpacing
+			this.creationMutators.position.y[0] =
+				this.topMargin + (entityIndexInColumn / entitiesPerColumn) * (this.worldHeight - this.topMargin)
 			this.creationMutators.column.index[0] = columnIndex
-			
+
 			this.commands.createEntity(this.creationPayload)
 		}
 	}
@@ -184,7 +183,7 @@ export class ParallelismTestSystem {
 		const columnInfo = new Map() // Map<columnIndex, {x: number, chunkIds: Set}>
 
 		// 1. Update sprite positions and gather debug info in a single, streamlined loop.
-		// This is the performance-critical part.
+
 		for (const chunk of this.updateQuery.iter()) {
 			const entities = chunk.entities
 			const positions = chunk.componentData[this.position]
@@ -199,7 +198,6 @@ export class ParallelismTestSystem {
 				const sprite = this.entitySprites.get(entityId)
 				sprite.position.set(x, y)
 
-				// Gather info for debug labels (less performance-critical).
 				const columnIndex = columns.index[i]
 				if (!columnInfo.has(columnIndex)) {
 					columnInfo.set(columnIndex, { x: 0, chunkIds: new Set() })
@@ -239,7 +237,7 @@ export class ParallelismTestSystem {
 	}
 
 	schedule(chunk, context) {
-		const { deltaTime } = context;
+		const { deltaTime } = context
 		//console.log(JSON.stringify(context))
 		const positions = chunk.componentData[this.position]
 		const velocities = chunk.componentData[this.velocity]
@@ -255,7 +253,7 @@ export class ParallelismTestSystem {
 			}
 		}
 	}
-	
+
 	process({ deltaTime, currentTick }) {
 		// This verification step runs on the main thread after all parallel jobs are complete. It
 		// checks that all entities within a single column are perfectly aligned horizontally.

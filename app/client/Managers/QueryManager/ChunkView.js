@@ -57,7 +57,7 @@ export class ChunkView {
 			// It means the worker has a chunk with an archetypeId that it doesn't have the definition for.
 			const workerId = typeof self !== 'undefined' && self.id ? `Worker ${self.id}` : 'Main Thread'
 			throw new Error(
-				`[ChunkView] ${workerId}: Failed to find componentIdArray for archetypeId ${this.archetypeId} in chunk ${this.chunkId}. The worker's archetype definitions are out of sync.`
+				`[ChunkView] ${workerId}: Failed to find componentIdArray for archetypeId ${this.archetypeId} in chunk ${this.chunkId}. The worker's archetype definitions are out of sync.`,
 			)
 		}
 		const count = componentIdArray[0]

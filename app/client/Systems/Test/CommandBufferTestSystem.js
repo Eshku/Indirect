@@ -30,8 +30,8 @@ export class CommandBufferTestSystem {
 	constructor() {
 		this.systemManager = systemManager
 
-		const { position, velocity, testEntityTag } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity, testEntityTag })
+		const { position, velocity, testEntityTag, parent } = ecs.getTypeIDs()
+		Object.assign(this, { position, velocity, testEntityTag, parent })
 
 		// Create queries for verification steps.
 		// All queries now require the TestEntityTag to ensure they only match test entities.
@@ -54,8 +54,6 @@ export class CommandBufferTestSystem {
 	}
 
 	async init() {
-
-		
 		// Preload the specific prefab needed for the instantiate test.
 		await prefabManager.preload(['test_prefab'])
 
@@ -160,7 +158,7 @@ export class CommandBufferTestSystem {
 					if (!prefabManager.getPrefabData('test_prefab')) {
 						console.log(
 							"%c[CB Test] Skipping Instantiate Test: Prefab 'test_prefab' not found or preloaded.",
-							'color: gray'
+							'color: gray',
 						)
 						return
 					}
@@ -306,6 +304,62 @@ export class CommandBufferTestSystem {
 				flush() // Processes the original stale command for A
 				expect(ECS.hasComponent(entityC_ID, 'Velocity')).toBe(false)
 				ECS.destroyEntity(entityC_ID)
+			})
+		})
+
+		describe('Command Buffer (Placeholder Entities)', () => {
+			it('should create a parent and child and link them using placeholders', () => {
+				// 1. Defer creation of parent and child, getting placeholder IDs back.
+				const { payload: parentPayload } = payloadCompiler.compileEntity({
+					testEntityTag: {},
+					position: { x: 500, y: 500 },
+				})
+				const parentPlaceholderId = this.commands.createEntity(parentPayload)
+
+				expect(parentPlaceholderId >> 63n === 1n).toBe(true) // Verify it's a placeholder
+
+				const { payload: childPayload } = payloadCompiler.compileEntity({
+					testEntityTag: {},
+					position: { x: 1, y: 1 },
+				})
+				const childPlaceholderId = this.commands.createEntity(childPayload)
+
+				// 2. Defer adding a 'Parent' component to the child, referencing the parent's placeholder.
+				const { payload: parentComponentPayload } = payloadCompiler.compileComponent(this.parent, {
+					entityId: parentPlaceholderId,
+				})
+				this.commands.addComponent(childPlaceholderId, parentComponentPayload)
+
+				// 3. Flush the command buffer.
+				flush()
+
+				// 4. Verification
+				const parentQuery = queryManager.getQuery({ with: [this.parent, this.testEntityTag] })
+				/* 				console.log(`_________`)
+				console.log(`Parent Query Result:`)
+				console.log(parentQuery)
+				console.log(`_________`) */
+
+				let foundChildId
+				let foundParentId
+				for (const chunk of parentQuery.iter()) {
+					for (let i = 0; i < chunk.size; i++) {
+						const parentComponent = ECS.getComponent(chunk.entities[i], 'Parent')
+						foundChildId = chunk.entities[i]
+						foundParentId = parentComponent.entityId
+						break
+					}
+					if (foundChildId) break
+				}
+
+				expect(foundChildId).not.toBe(undefined)
+				expect(foundParentId).not.toBe(undefined)
+				expect(ECS.isEntityActive(foundChildId)).toBe(true)
+				expect(ECS.isEntityActive(foundParentId)).toBe(true)
+
+				// Verify the parent has the correct position.
+				const parentPos = ECS.getComponent(foundParentId, 'position')
+				expect(parentPos).toEqual({ x: 500, y: 500 })
 			})
 		})
 

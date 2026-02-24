@@ -6,89 +6,30 @@ import * as Schema from '../ComponentManager/ComponentSchema.js'
  *
  * --- `entityStore` Breakdown ---
  *
- * 1.  **Entity Management (`entityVersion`, `entityLocations`, `generations`):**
- *     -   These arrays track the state and location of every entity ID. They are managed exclusively by the
- *         main thread and are not directly shared with workers, as workers only need to know about chunks.
- *     -   To solve the "stale ID" problem (where an old entity ID could be recycled and incorrectly refer to a
- *         new entity), we use **Generational Entity IDs**. Each ID is a `BigInt` (64-bit unsigned integer)
- *         composed of multiple parts:
+ * 1.  **Entity Management & Generational IDs:**
+ *     -   To solve the "stale ID" problem, the engine uses **Generational Entity IDs**. Each ID is a `BigInt`
+ *         (64-bit unsigned integer) composed of an index, a generation counter, and a placeholder flag.
  *
- * | Part        | Bits    | Description                                             |
- * |-------------|---------|---------------------------------------------------------|
- * | Placeholder | 1 bit   | (MSB) A flag to mark the ID as a temporary placeholder. |
- * | Generation  | 31 bits | A counter that increments each time an index is reused. |
- * | Index       | 32 bits | A stable index into internal entity arrays.             |
+ *     -   **ID Layout (64 bits):**
+ *         | Part        | Bits    | Description                                             |
+ *         |-------------|---------|---------------------------------------------------------|
+ *         | Placeholder | 1 bit   | (MSB) A flag to mark the ID as a temporary placeholder. |
+ *         | Generation  | 31 bits | A counter that increments each time an index is reused. |
+ *         | Index       | 32 bits | A stable index into internal entity arrays.             |
  *
- *     -   **Index (lower 32 bits):** A direct, reusable index into arrays like `entityLocations` and `entityVersion`.
- *     -   **Generation (middle 31 bits):** When an entity at `index` is destroyed, its generation counter in the
- *         `generations` array is incremented. The next entity created at that `index` will have the new generation.
- *         An old ID with a stale generation will fail validation.
- *     -   **Placeholder Flag (bit 63):** The most significant bit is reserved. If set, it marks the ID as a
- *         "placeholder," a temporary ID created by a worker thread that will be resolved to a real entity ID by
- *         the main thread. This is a critical feature for enabling parallel entity creation.
+ *     -   This ensures that recycled entity IDs do not accidentally refer to new entities.
  *
- * 2.  **Archetype Management (`archetypeMasks`, `archetypeComponentTypeIDArrays`):**
+ * 2.  **Archetype Management:**
  *     -   An archetype represents a unique combination of components.
- *     -   `archetypeComponentTypeIDArrays`: This is a pre-allocated `new Array(MAX_ARCHETYPES)`. Each element
- *         is a `Uint16Array` (backed by a `SharedArrayBuffer`) listing the component type IDs for that archetype.
- *         This pre-allocated array acts as a "shareable container," solving the "Stale Archetype" problem by
- *         ensuring that when the main thread creates a new archetype, workers can immediately and safely read its structure.
+ *     -   `archetypeComponentTypeIDArrays`: A shareable container that allows workers to safely discover
+ *         the structure of new archetypes at runtime.
  *
- * 3.  **Chunk Metadata (`chunkArchetypeIds`, `chunkSizes`, `chunkCapacities`):**
- *     -   These are large `TypedArray`s, each backed by a single `SharedArrayBuffer`.
- *     -   They provide fast, parallel-safe access to metadata for any chunk. For example, any thread can
- *         read `chunkSizes[chunkId]` to know how many entities are in a chunk.
- *
- * 4.  **Chunk Component Data (`chunkComponentData`, `chunkDirtyTicks`):**
- *     -   This is the most critical part of the shared architecture.
- *     -   `chunkComponentData` is a pre-allocated `new Array(MAX_CHUNKS)`. It is **not** one giant contiguous
- *         buffer. It is a sparse array that holds references to individual chunk data objects.
- *     -   Each element, `chunkComponentData[chunkId]`, is a separate object that contains the actual `SharedArrayBuffer`-backed
- *         `TypedArray`s for that specific chunk's component data (e.g., `{ entities: BigUint64Array, 5: { x: Float32Array, ... } }`).
- *     -   This structure ensures that when workers process different chunks, they are writing to completely
- *         separate memory buffers, eliminating data contention for component data.
- * 
- *     -   **Architectural Choice: Per-Property Buffers vs. A Single Continuous Buffer**
- *         The engine's "Per-Property SoA" model (separate buffers for each component property) was chosen
- *         over the "Continuous SoA" model (a single, giant buffer for all data in a chunk).
- *
- *         -   **Iteration Speed:** The Continuous SoA model shows a minor (~5-10%) performance advantage in
- *             benchmarks for multi-property access. However, the Per-Property model is still exceptionally
- *             fast, providing optimal, cache-friendly linear memory access.
- *
- *         -   **Structural Changes (The Deciding Factor):** The Continuous SoA model is catastrophically
- *             slow for structural changes. A "swap-and-pop" operation
- *             requires multiple, large, cache-trashing memory copies (`copyWithin`) to keep the data
- *             contiguous. The Per-Property model performs the same operation with a few, cheap value
- *             assignments.
- *
- *         -   **Memory Management:** The current model's chunk pooling is highly efficient. A freed chunk can
- *             be instantly re-purposed for any archetype. A single-buffer model leads to severe
- *             memory fragmentation, as memory allocated for one archetype cannot be easily used by another.
- *
- *         **Conclusion:** The engine's architecture makes a deliberate trade-off, accepting a negligible
- *         iteration speed deficit to gain massive, orders-of-magnitude advantages in the speed of
- *         structural changes and memory efficiency. This is the correct and most robust choice.
- *
- * --- Data Lookup Flow (Worker Thread) ---
- *
- * A worker receives a job for `chunkId: 5`.
- *
- * 1.  **Get Chunk Metadata:**
- *     -   `const archetypeId = entityStore.chunkArchetypeIds[5];`
- *     -   `const size = entityStore.chunkSizes[5];`
- *
- * 2.  **Get Archetype Structure:**
- *     -   `const componentList = entityStore.archetypeComponentTypeIDArrays[archetypeId];`
- *     -   This lookup succeeds because `archetypeComponentTypeIDArrays` is a shared container. The worker now knows
- *         which components are in this chunk.
- *
- * 3.  **Get Component Data Buffers:**
- *     -   `const dataForChunk5 = entityStore.chunkComponentData[5];`
- *     -   This lookup succeeds because `chunkComponentData` is a shared container.
- *     -   The worker can now access the raw data arrays: `const positions = dataForChunk5[positionTypeId];`
+ * 3.  **Chunk & Component Data:**
+ *     -   Component data is stored in `Chunks` using a **Structure of Arrays (SoA)** layout.
+ *     -   Each chunk's data is backed by `SharedArrayBuffer`, enabling zero-copy data access for workers.
+ *     -   The engine uses a "Per-Property SoA" model (separate buffers for each component property), which is
+ *         optimized for fast structural changes (e.g., adding/removing components) and efficient memory pooling.
  */
-
 
 export const MAX_ARCHETYPES = 4096
 export const MAX_CHUNKS = 65536
@@ -285,8 +226,8 @@ export class EntityManager {
 		if (this.hasComponentType(sourceArchetypeId, componentTypeId)) {
 			console.warn(
 				`EntityManager.addComponent: Entity ${entityId} already has component ${this.componentManager.getComponentNameByTypeID(
-					componentTypeId
-				)}.`
+					componentTypeId,
+				)}.`,
 			)
 			return false
 		}
@@ -297,7 +238,13 @@ export class EntityManager {
 
 		const componentsToAssign = new Map([[componentTypeId, data]])
 
-		return this._moveEntityToNewArchetype(entityId, sourceArchetypeId, targetArchetypeId, componentsToAssign, currentTick)
+		return this._moveEntityToNewArchetype(
+			entityId,
+			sourceArchetypeId,
+			targetArchetypeId,
+			componentsToAssign,
+			currentTick,
+		)
 	}
 
 	/**
@@ -419,11 +366,12 @@ export class EntityManager {
 		entityStore.generations = [] //  Reset generation counters
 
 		// Notify the query manager that all archetypes are gone so it can clear its queries.
-		// This is critical to prevent queries from holding stale archetype IDs.
+
 		this.queryManager.unregisterAllArchetypes()
 	}
 
 	isEntityActive(entityID) {
+		if (!entityID || typeof entityID !== 'bigint') return false
 		if (entityID >> 63n === 1n) return false
 		if (typeof entityID !== 'bigint') return false
 		const index = Number(entityID & 0xffffffffn)
@@ -572,7 +520,7 @@ export class EntityManager {
 				throw new TypeError(
 					`EntityManager.generateArchetypeMask: Received 'undefined' in componentTypeIDs array. ` +
 						`This usually means a component name was not found or was not registered. ` +
-						`Provided components: [${definedComponentNames}, undefined]`
+						`Provided components: [${definedComponentNames}, undefined]`,
 				)
 			}
 			mask |= Schema.componentBitFlags[typeID]
@@ -668,7 +616,8 @@ export class EntityManager {
 		let indexInArchetype = -1
 
 		// Binary search to find the component's index in the archetype's sorted list.
-		let low = 1, high = count
+		let low = 1,
+			high = count
 		while (low <= high) {
 			const mid = (low + high) >>> 1
 			const midVal = componentIdArray[mid]
@@ -704,7 +653,8 @@ export class EntityManager {
 		let indexInArchetype = -1
 
 		// Binary search to find the component's index in the archetype's sorted list.
-		let low = 1, high = count
+		let low = 1,
+			high = count
 		while (low <= high) {
 			const mid = (low + high) >>> 1
 			const midVal = componentIdArray[mid]
@@ -852,7 +802,7 @@ export class EntityManager {
 		entityIds,
 		componentsToAssign, // Map<typeId, { dataOffsets: number[], dataLengths: number[] }>
 		reader,
-		currentTick
+		currentTick,
 	) {
 		const count = entityIds.length
 		if (count === 0) return
@@ -939,7 +889,10 @@ export class EntityManager {
 		for (const entityId of entityIds) {
 			const location = entityStore.entityLocations[Number(entityId & 0xffffffffn)]
 
-			if (location) {
+			// Only process this removal if the entity's current
+			// location actually matches the source archetype we are supposed to be
+			// removing from. This prevents race conditions with deferred commands.
+			if (location && location.archetypeId === archetype) {
 				const { chunkId, indexInChunk } = location
 				if (!removalsByChunk.has(chunkId)) {
 					removalsByChunk.set(chunkId, [])
@@ -1109,7 +1062,6 @@ export class EntityManager {
 		// Initialize all ticks to 0.
 		entityStore.chunkArchetypeDirtyTicks[newChunkId].fill(0)
 
-
 		entityStore.chunkComponentData[newChunkId] = {
 			entities: new BigUint64Array(new SharedArrayBuffer(capacity * BigUint64Array.BYTES_PER_ELEMENT)),
 		}
@@ -1126,7 +1078,7 @@ export class EntityManager {
 			}
 			entityStore.chunkComponentData[newChunkId][typeID] = propArrays
 			entityStore.chunkDirtyTicks[newChunkId][typeID] = new Uint32Array(
-				new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT)
+				new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT),
 			)
 		}
 
@@ -1190,7 +1142,7 @@ export class EntityManager {
 				}
 				entityStore.chunkComponentData[chunkId][typeID] = propArrays
 				entityStore.chunkDirtyTicks[chunkId][typeID] = new Uint32Array(
-					new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT)
+					new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT),
 				)
 			}
 		}

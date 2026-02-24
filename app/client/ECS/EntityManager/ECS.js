@@ -8,7 +8,6 @@ const { PrefabManager } = await import('../../Managers/PrefabManager/PrefabManag
 const { SystemManager } = await import('../SystemManager/SystemManager.js')
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
-
 const { sharedDataManager } = await import(`${PATH_ECS}/SharedDataManager/SharedDataManager.js`)
 
 /**
@@ -114,7 +113,7 @@ export class ECS {
 		const entityID = this.entityManager.createEntityFromBinarySoAPayload(
 			payload.archetypeId,
 			payload.data,
-			this.systemManager.currentTick
+			this.systemManager.currentTick,
 		)
 		return entityID
 	}
@@ -133,7 +132,7 @@ export class ECS {
 
 		if (!prefabData) {
 			console.error(
-				`ECS: Failed to sync-instantiate entity. Prefab '${prefabName}' is not pre-loaded or registered in the manifest.`
+				`ECS: Failed to sync-instantiate entity. Prefab '${prefabName}' is not pre-loaded or registered in the manifest.`,
 			)
 			return undefined
 		}
@@ -144,7 +143,7 @@ export class ECS {
 	 */
 	_instantiateChildRecursive(
 		prefabData,
-		{ rootPrefabName = null, overrides = {}, parentId = null, ownerId = null } = {}
+		{ rootPrefabName = null, overrides = {}, parentId = null, ownerId = null } = {},
 	) {
 		const isRoot = rootPrefabName !== null
 		const componentData = { ...prefabData.components }
@@ -239,7 +238,7 @@ export class ECS {
 		if (info.sharedProperties.length === 0) {
 			return perEntityData // No shared properties, return as-is.
 		}
-		
+
 		const prototypeId = perEntityData.prototypeId
 		if (prototypeId === undefined) {
 			return perEntityData // No prefab, so no shared data.
@@ -247,7 +246,9 @@ export class ECS {
 
 		const prototype = this.sharedDataManager.prototypeStore[prototypeId]
 		const sharedDataIndex = prototype ? prototype[componentTypeId] : undefined
-		const rawSharedData = sharedDataIndex ? this.sharedDataManager.valueStores[componentTypeId][sharedDataIndex] : undefined
+		const rawSharedData = sharedDataIndex
+			? this.sharedDataManager.valueStores[componentTypeId][sharedDataIndex]
+			: undefined
 		const reconstructedSharedData = reconstruct(componentTypeId, rawSharedData)
 
 		return { ...reconstructedSharedData, ...perEntityData }
@@ -291,7 +292,6 @@ export class ECS {
 		}
 	}
 }
-
 
 export const ecs = new ECS()
 window.ECS = ecs

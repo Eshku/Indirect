@@ -42,13 +42,19 @@ export class CommandBufferExecutor {
 		// --- OPTIMIZATION: Zero-Allocation Consolidation ---
 		// Instead of pushing objects `{entityId, payload}` which causes GC pressure,
 		// we use parallel TypedArrays to store command data.
-		const creations = { identical: [], varied: [] }
+		const creations = {
+			identical: [],
+			// varied is now an array of { placeholderId, archetypeId, payload }
+			varied: [],
+		}
 		const modifications = {
 			// This now stores binary payload modification commands
 			add: new Map(), // Map<componentTypeID, { entityIds: number[], dataOffsets: number[], dataLengths: number[] }>
 			remove: new Map(), // Map<componentTypeID, number[]>
 			set: new Map(), // Map<componentTypeID, { entityIds: number[], soaIndices: number[] }>
 		}
+		const deferredModifications = { add: [], set: [], remove: [] }
+		const placeholderResolutionMap = new Map()
 		const deletions = new Set()
 		const chunkDeletions = new Set()
 
@@ -72,6 +78,11 @@ export class CommandBufferExecutor {
 				// --- Modification Phase Commands ---
 				case OpCodes.ADD_COMPONENT: {
 					const entityId = reader.readU64()
+					if ((entityId >> 63n) === 1n) {
+						// Defer modifications on placeholder entities
+						deferredModifications.add.push(sortedOffsets[i])
+						continue
+					}
 					if (deletions.has(entityId)) continue // Skip mods on deleted entities
 					const componentTypeID = reader.readU16()
 					const dataLength = reader.readU16()
@@ -88,6 +99,11 @@ export class CommandBufferExecutor {
 				}
 				case OpCodes.REMOVE_COMPONENT: {
 					const entityId = reader.readU64()
+					if ((entityId >> 63n) === 1n) {
+						// Defer modifications on placeholder entities
+						deferredModifications.remove.push(sortedOffsets[i])
+						continue
+					}
 					if (deletions.has(entityId)) continue
 					const componentTypeID = reader.readU16()
 					if (!modifications.remove.has(componentTypeID)) modifications.remove.set(componentTypeID, [])
@@ -96,6 +112,11 @@ export class CommandBufferExecutor {
 				}
 				case OpCodes.SET_COMPONENT_DATA: {
 					const entityId = reader.readU64()
+					if ((entityId >> 63n) === 1n) {
+						// Defer modifications on placeholder entities
+						deferredModifications.set.push(sortedOffsets[i])
+						continue
+					}
 					if (deletions.has(entityId)) continue
 					const componentTypeID = reader.readU16()
 					const dataLength = reader.readU16()
@@ -109,20 +130,17 @@ export class CommandBufferExecutor {
 					setBatch.dataOffsets.push(dataOffset)
 					setBatch.dataLengths.push(dataLength)
 
-
-
 					break
 				}
 
 				// --- Creation Phase Commands ---
 				case OpCodes.CREATE_ENTITY: {
-					// Reads the new binary SoA payload format.
+					// Reads the new format with a placeholder ID.
+					const placeholderId = reader.readU64()
 					const archetypeId = reader.readU16()
 					const dataSize = reader.readU16()
 					const payload = reader.readBuffer(dataSize)
-
-					// The payload is a binary blob, just like the identical-creation path.
-					creations.varied.push({ archetypeId, payload })
+					creations.varied.push({ placeholderId, archetypeId, payload })
 					break
 				}
 				case OpCodes.CREATE_ENTITIES_IDENTICAL: {
@@ -137,7 +155,7 @@ export class CommandBufferExecutor {
 		}
 
 		// --- 2. Execution Pass ---
-		// Execute consolidated batches in the correct order: Destroy > Modify > Create
+		// Execute consolidated batches in the correct order: Destroy > Modify (real) > Create > Modify (deferred)
 
 		// --- Deletion ---
 		this.entityManager.destroyEntitiesInBatch(deletions)
@@ -146,22 +164,110 @@ export class CommandBufferExecutor {
 			this.entityManager.destroyAllEntitiesInChunk(chunkId)
 		}
 
-		// --- Modification ---
+		// --- Modification (on existing entities) ---
 		this._buildAndExecuteMoveBatches(modifications, reader, currentTick)
 		this._executeSetDataBatches(modifications.set, reader, currentTick)
 
-		// --- Creation ---
-		for (const { archetypeId, payload } of creations.varied) {
-			this.entityManager.createEntityFromBinarySoAPayload(archetypeId, payload, currentTick)
+		// --- Creation & Placeholder Resolution ---
+		for (const { placeholderId, archetypeId, payload } of creations.varied) {
+			const realEntityId = this.entityManager.createEntityFromBinarySoAPayload(archetypeId, payload, currentTick)
+			placeholderResolutionMap.set(placeholderId, realEntityId)
 		}
 
 		for (const { count, archetypeId, payload } of creations.identical) {
 			this.entityManager.createIdenticalEntitiesInArchetype(archetypeId, payload, count, currentTick)
 		}
 
+		// --- Deferred Modifications (on newly created entities) ---
+		if (
+			deferredModifications.add.length > 0 ||
+			deferredModifications.set.length > 0 ||
+			deferredModifications.remove.length > 0
+		) {
+			this._executeDeferredModifications(deferredModifications, placeholderResolutionMap, reader, currentTick)
+		}
+
 		// Cleanup
 		commandBuffer.clear()
 		this._currentCommandBuffer = null
+	}
+
+	/**
+	 * Processes modification commands that were deferred because they targeted placeholder entities.
+	 * This runs after creations are complete and all placeholders have been resolved to real entity IDs.
+	 * @private
+	 */
+	_executeDeferredModifications(deferredCommands, resolutionMap, reader, currentTick) {
+		const modifications = { add: new Map(), remove: new Map(), set: new Map() }
+		const resolve = id => resolutionMap.get(id) ?? id
+
+		// In-place patch payloads in the command buffer to resolve nested placeholders.
+		// This is safe because the command buffer is cleared after execution.
+		for (const offset of deferredCommands.add) {
+			this._patchCommandPayload(offset, OpCodes.ADD_COMPONENT, resolutionMap, reader)
+		}
+		for (const offset of deferredCommands.set) {
+			this._patchCommandPayload(offset, OpCodes.SET_COMPONENT_DATA, resolutionMap, reader)
+		}
+
+		// Now, consolidate these resolved commands into batches.
+		const processDeferred = (offsets, opCode, batchMap, hasPayload) => {
+			for (const offset of offsets) {
+				reader.seek(offset)
+				reader.readU8() // Skip OpCode
+				const entityId = resolve(reader.readU64())
+				const componentTypeID = reader.readU16()
+
+				if (!batchMap.has(componentTypeID)) {
+					batchMap.set(componentTypeID, hasPayload ? { entityIds: [], dataOffsets: [], dataLengths: [] } : [])
+				}
+				const batch = batchMap.get(componentTypeID)
+
+				if (hasPayload) {
+					const dataLength = reader.readU16()
+					const dataOffset = reader.offset
+					batch.entityIds.push(entityId)
+					batch.dataOffsets.push(dataOffset)
+					batch.dataLengths.push(dataLength)
+				} else {
+					batch.push(entityId)
+				}
+			}
+		}
+
+		processDeferred(deferredCommands.add, OpCodes.ADD_COMPONENT, modifications.add, true)
+		processDeferred(deferredCommands.set, OpCodes.SET_COMPONENT_DATA, modifications.set, true)
+		processDeferred(deferredCommands.remove, OpCodes.REMOVE_COMPONENT, modifications.remove, false)
+
+		// Finally, execute the now-resolved modification batches.
+		this._buildAndExecuteMoveBatches(modifications, reader, currentTick)
+		this._executeSetDataBatches(modifications.set, reader, currentTick)
+	}
+
+	/**
+	 * Finds and replaces placeholder entity IDs within a command's binary payload.
+	 * This modifies the raw command buffer in-place.
+	 * @private
+	 */
+	_patchCommandPayload(offset, opCode, resolutionMap, reader) {
+		reader.seek(offset)
+		reader.readU8() // OpCode
+		reader.readU64() // EntityId
+		const componentTypeID = reader.readU16()
+		const info = Schema.componentInfo[componentTypeID]
+		if (!info) return
+
+		const view = new DataView(reader.buffer)
+		for (const propKey of info.propertyKeys) {
+			const propInfo = info.properties[propKey]
+			if (propInfo.type === 'entity' || propInfo.type === 'u64') {
+				const propOffset = reader.offset + 2 + propInfo.offset // +2 for dataLength
+				const placeholderId = view.getBigUint64(propOffset, true)
+				if (resolutionMap.has(placeholderId)) {
+					view.setBigUint64(propOffset, resolutionMap.get(placeholderId), true)
+				}
+			}
+		}
 	}
 
 	/**

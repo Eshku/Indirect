@@ -75,7 +75,7 @@
 const { loadAllComponents } = await import(`${PATH_ECS}/ComponentManager/componentLoader.js`)
 const { schemaCompiler } = await import('./SchemaCompiler.js')
 const { reconstruct } = await import('./ComponentInterpreter.js')
-const {toCamelCase} = await import(`${PATH_CORE}/utils/stringUtils.js`)
+const { toCamelCase } = await import(`${PATH_CORE}/utils/stringUtils.js`)
 
 import * as Schema from './ComponentSchema.js'
 
@@ -106,7 +106,6 @@ export class ComponentManager {
 
 	async registerComponents(componentModules) {
 		for (const { moduleName, module, category } of componentModules) {
-
 			// Default exports supported...for now //?
 			const componentSchema = module.default || module[moduleName]
 			if (componentSchema && typeof componentSchema === 'object') {
@@ -163,7 +162,7 @@ export class ComponentManager {
 		Schema.componentConstants[typeID] = constants
 		Schema.compiledDefaults[typeID] = Object.freeze(compiledDefaults)
 	}
-	
+
 	/**
 	 * Gets the component's string name for a given ID.
 	 * This is useful for debugging and logging.
@@ -242,7 +241,6 @@ export class ComponentManager {
 	 * @returns {object | undefined} The read-only constant map (e.g., `{ LEFT: 1, RIGHT: 2, ... }`), or undefined if not found.
 	 */
 	getConstantsForProperty(componentIdentifier, propertyName) {
-
 		const componentConstants = this.getConstantsFor(componentIdentifier)
 		if (!componentConstants) {
 			console.warn(`ComponentManager: Could not find constants for component "${componentIdentifier}".`)
@@ -252,7 +250,7 @@ export class ComponentManager {
 		const propertyConstants = componentConstants[propertyName.toUpperCase()]
 		if (!propertyConstants) {
 			console.warn(
-				`ComponentManager: Could not find constants for property "${propertyName}" on component "${componentIdentifier}".`
+				`ComponentManager: Could not find constants for property "${propertyName}" on component "${componentIdentifier}".`,
 			)
 			return undefined
 		}

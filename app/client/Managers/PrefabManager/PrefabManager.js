@@ -300,7 +300,7 @@ export class PrefabManager {
 				// This is a critical data error. We will log a detailed error and skip this component entirely,
 				// rather than assigning a default or empty value, to ensure the error is noticed and fixed at the source.
 				console.error(
-					`PrefabManager: Invalid shorthand for component "${componentName}" in prefab "${prefabName}". Components with no schema are treated as "Tag Components" and cannot have data.`
+					`PrefabManager: Invalid shorthand for component "${componentName}" in prefab "${prefabName}". Components with no schema are treated as "Tag Components" and cannot have data.`,
 				)
 			} else {
 				// The component data is already in its full object form, so we keep it as is.
@@ -371,7 +371,7 @@ export class PrefabManager {
 					currentChild = mergedChild
 				} else {
 					console.warn(
-						`PrefabManager: In prefab '${rootPrefabName}', could not resolve extended child prefab '${childDef.extends}'.`
+						`PrefabManager: In prefab '${rootPrefabName}', could not resolve extended child prefab '${childDef.extends}'.`,
 					)
 					delete currentChild.extends
 				}
