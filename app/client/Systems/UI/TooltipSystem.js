@@ -358,8 +358,9 @@ export class TooltipSystem {
 
 				const sharedGroupId = cooldownArrays.sharedGroupId?.[indexInChunk]
 				if (sharedGroupId === undefined) return null
-
-				const sharedGroup = this.propertyGroupManager.sharedGroups[sharedGroupId]
+				//! prop groups were removed, going to be replaced with thread-safe prototypes later on or whatever I make to replace the thing.
+				const sharedGroup = this.propertyGroupManager.sharedGroups[sharedGroupId] 
+				
 				const duration = sharedGroup?.[this.cooldown]?.duration ?? 0
 				return { label: 'Cooldown', value: `${duration.toFixed(2)}s` }
 			}

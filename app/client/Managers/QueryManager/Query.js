@@ -1,37 +1,10 @@
 /**
  * Represents a declarative query for entities with a specific set of components.
  *
- * ---
- * ### Dev Note: Mutable Queries and Parallelism
- *
- * A "mutable" query is one that can change its `with`, `without`, or other filters at runtime.
- * While engine's `QueryManager` supports creating unique, non-cached mutable queries,
- * they pose a significant challenge for a parallel job scheduler.
- *
- * **Problem:** A scheduler relies on a static analysis of a system's data dependencies
- * (its queries) at start of a frame to build a dependency graph and safely schedule jobs
- * in parallel. If a query's filters change mid-frame, initial analysis becomes invalid,
- * and scheduler could incorrectly run two systems in parallel that now conflict, leading
-to a race condition.
- *
- * **"Quarantine" Approach (Simple & Safe):**
- * Simplest and safest way to handle this is for scheduler to "quarantine" any system
- * that uses a mutable query, forcing it to run serially on main thread.
- *
- * **"Dynamic Re-Analysis" Approach (Advanced & Complex):**
- * A more advanced (and much more complex) scheduler could handle this more gracefully. When a
- * mutable query's filters change, it could signal scheduler. Scheduler would then,
- * for *next* frame, re-analyze that system's dependencies and attempt to re-insert it
- * into parallel job graph. While this unlocks more powerful queries, it introduces 
- * overhead of re-scheduling. This is an inefficient pattern if a query changes its
- * definition frequently, but it enables more powerful and dynamic system logic. This is a
- * potential future optimization, not a current implementation.
- * ---
- *
  * --- ARCHITECTURAL NOTE on Query Design (Unity IJobChunk-Style) ---
  *
  * Design of our query system is inspired model used in
- * Unity's Data-Oriented Technology Stack (DOTS). 
+ * Unity's Data-Oriented Technology Stack (DOTS).
  *
  * 1.  **A Single, Consistent API**: `query.iter()` method is single entry point
  *     for all iteration. It yields each **Chunk** of entities that match query's
@@ -47,8 +20,6 @@ to a race condition.
 import * as Schema from '../../ECS/ComponentManager/ComponentSchema.js'
 import { ChunkView } from './ChunkView.js'
 import { entityStore } from '../../ECS/EntityManager/EntityManager.js'
-
-const INITIAL_CHUNK_CAPACITY = 256
 
 export class Query {
 	static _createSimpleMask(componentTypeIDs, categoryName) {
@@ -168,6 +139,14 @@ export class Query {
 			total += entityStore.chunkSizes[chunkId]
 		}
 		return total
+	}
+
+	/**
+	 * Gets the array of chunk IDs matching this query.
+	 * @returns {number[]}
+	 */
+	getChunks() {
+		return this.matchingChunkIds
 	}
 
 	registerArchetype(archetype) {

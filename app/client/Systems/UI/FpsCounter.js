@@ -51,7 +51,10 @@ export class FpsCounter {
 
 	setupFpsDisplay() {
 		this.displayContainer = new PIXI.Container()
-		this.background = new PIXI.Graphics()
+		// Use a scalable Sprite instead of a Graphics object for performance.
+		this.background = new PIXI.Sprite(PIXI.Texture.WHITE)
+		this.background.tint = this.BACKGROUND_COLOR
+		this.background.alpha = this.BACKGROUND_ALPHA
 
 		this.fpsText = new PIXI.Text('FPS: ...', this.FPS_TEXT_STYLE)
 		this.fpsText.x = this.PADDING
@@ -75,10 +78,9 @@ export class FpsCounter {
 		const bgWidth = this.fpsText.width + this.PADDING * 2
 		const bgHeight = this.fpsText.height + this.PADDING * 2
 
-		this.background.clear()
-		this.background.beginFill(this.BACKGROUND_COLOR, this.BACKGROUND_ALPHA)
-		this.background.drawRect(0, 0, bgWidth, bgHeight)
-		this.background.endFill()
+		// Simply scale the sprite. This is much cheaper than redrawing a Graphics object.
+		this.background.width = bgWidth
+		this.background.height = bgHeight
 
 		this.displayContainer.x = this.app.screen.width - bgWidth - this.MARGIN
 		this.displayContainer.y = this.MARGIN

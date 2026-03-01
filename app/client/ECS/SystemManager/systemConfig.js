@@ -36,26 +36,26 @@
  *   infrequent tasks that don't need to run every frame, like periodic UI refreshes.
  */
 export const systemSchedule = {
+	
 	// Systems that only need to be initialized (e.g., for event listeners)
 	Initialization: [{ name: 'UIInputSystem', frequency: 'none' }],
 
 	Cursor: [{ name: 'CursorSystem', frequency: 'input' }],
 
 	Input: [
-		{ name: 'InputContextSystem', frequency: 'input' },
 		{ name: 'PlayerInputSystem', frequency: 'input' },
 	],
 
 	// Runs on a fixed timestep for deterministic gameplay logic and physics.
 	Logic: [
-		{ name: 'ItemEventSystem', frequency: 'logic' },
 		{ name: 'CooldownSystem', frequency: 'logic' },
-		{ name: 'JumpSystem', frequency: 'logic' },
-		{ name: 'GravitySystem', frequency: 'logic' },
+
 		{ name: 'MovementSystem', frequency: 'logic' },
 
 		{ name: `ApplyVelocity`, frequency: `logic` },
-		{ name: 'CollisionSystem', frequency: 'logic' },
+
+		{ name: 'SpatialHashingSystem', frequency: 'logic' },
+
 		{ name: 'EventEntityCleanupSystem', frequency: 'logic' },
 	],
 
@@ -65,19 +65,16 @@ export const systemSchedule = {
 	// Runs once per rendered frame for smooth visuals, interpolation, and UI.
 	Visuals: [
 		{ name: 'SpriteFactorySystem', frequency: 'visuals' },
-		{ name: 'PlatformFactorySystem', frequency: 'visuals' },
-
-		{ name: 'HotbarSyncSystem', frequency: 'visuals' },
+		{ name: 'RenderLayerSystem', frequency: 'visuals' },
 		{ name: 'TooltipSystem', frequency: 'visuals' },
-
 		{ name: 'CameraSystem', frequency: 'visuals' },
-
 		{ name: 'SyncTransforms', frequency: 'visuals' },
 	],
 
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
+		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' }, 
 	],
 
 	//! Do not run benchmark \ test systems with other systems together, high query overlap potential.
@@ -90,15 +87,23 @@ export const systemSchedule = {
 	],
 
 	Test: [
+		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
 		/* { name: 'SimpleParallelismTestSystem', frequency: 'logic' }, */
-/* 		{ name: 'DependencySystemA', frequency: 'visuals' },
+		/* 		{ name: 'DependencySystemA', frequency: 'visuals' },
 		{ name: 'DependencySystemB', frequency: 'visuals' },
 		{ name: 'DependencySystemC', frequency: 'visuals' }, */
+
+
+
+
+		//! Spoilers, not yet implemented
+		/* { name: 'KernelArchitecture', frequency: 'logic' }, */
 	],
 
 	CoreTests: [
+		/* { name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
 		/* { name: 'SchemaTestSystem', frequency: 'none' }, */
 		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */

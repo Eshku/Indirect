@@ -120,7 +120,7 @@ import { ChunkView } from '../../Managers/QueryManager/ChunkView.js'
  *
  * 4.  **Reactivity Check**: A reactive system running later in the same tick (tick 5) will see the change because
  *     the condition `dirtyTick (5) > lastCompletedLogicTick (4)` is true. This allows for immediate **inter-system**
- *     reactivity (e.g., `ItemEventSystem` reacting to `PlayerInputSystem`).
+ *     reactivity.
  *
  * 5.  **Intra-System Reactivity**: This model also correctly handles cases where a system reacts to its own changes
  *     within the same `update()` call. For example, if a system's update logic first modifies a component (marking it
@@ -140,8 +140,8 @@ export class GameLoop {
 	 * @param {import('./SystemManager.js').SystemManager} systemManager - The system manager instance.
 	 */
 	constructor() {
-		this.lastTick = -1
-		this.currentTick = 0
+		this.lastTick = 0
+		this.currentTick = 1
 		this.frameCounter = 0
 
 		this.FIXED_TIMESTEP = 1 / 60

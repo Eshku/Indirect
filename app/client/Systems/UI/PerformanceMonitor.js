@@ -1,7 +1,6 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
 const { systemManager } = ecs
-const { formatBytes } = await import(`${PATH_CORE}/utils/formatUtils.js`)
 
 // --- Constants for Configuration ---
 const PANEL_UPDATE_INTERVAL_S = 1 // Seconds
@@ -34,6 +33,7 @@ const TOP_SYSTEMS_COUNT = 5 // How many of the slowest systems to show by defaul
  * - **Frame Summary**: A total of all system `avg` and `max` times is displayed at the bottom, giving a rough
  *   idea of the total frame cost from the perspective of the ECS.
  */
+
 export class PerformanceMonitor {
 	constructor() {
 		this.systemManager = null // Injected in init
@@ -44,7 +44,6 @@ export class PerformanceMonitor {
 		this.commandBufferElements = { container: null, name: null, avg: null, max: null, hr: null }
 		this.rendererElements = { container: null, name: null, avg: null, max: null, hr: null }
 		this.summaryElements = { container: null, name: null, avg: null, max: null, hr: null }
-		this.memoryElements = { container: null, name: null, value: null, hr: null }
 		this.systemRowElements = new Map()
 		this.pinnedSeparator = null
 
@@ -68,7 +67,7 @@ export class PerformanceMonitor {
 		// @ts-ignore
 		window.performanceMonitor = this
 	}
-	
+
 	// This is now a regular system job. It just accumulates history.
 	// The display update is handled separately by the GameLoop after all jobs are done.
 	update() {
@@ -87,7 +86,7 @@ export class PerformanceMonitor {
 				continue
 			}
 			const timingData = this.systemManager.systemTimings[systemName]
-			
+
 			if (!this.history[systemName]) {
 				this.history[systemName] = []
 			}
@@ -243,7 +242,7 @@ export class PerformanceMonitor {
 	 */
 	untrackNotPinned() {
 		const systemsToUntrack = Object.keys(this.history).filter(
-			name => !this.pinnedSystems.has(name) && name !== 'Render' && name !== 'Command Buffer'
+			name => !this.pinnedSystems.has(name) && name !== 'Render' && name !== 'Command Buffer',
 		)
 
 		if (systemsToUntrack.length === 0) {
@@ -278,7 +277,6 @@ export class PerformanceMonitor {
 		this._renderSystemsList(otherSystemsStats)
 		this._renderSpecialRow(rendererStats, this.rendererElements, 'Render', false)
 		this._renderSummary(totalFrameTime, sumOfMaxes)
-		this._renderMemory()
 	}
 
 	/**
@@ -309,7 +307,7 @@ export class PerformanceMonitor {
 			let totalTime = 0
 			let maxTime = 0
 			let totalUpdate = 0,
-				totalSchedule = 0, 
+				totalSchedule = 0,
 				totalProcess = 0,
 				maxUpdate = 0,
 				maxSchedule = 0,
@@ -397,10 +395,10 @@ export class PerformanceMonitor {
 			if (!this.warnedSystems.has(systemName)) {
 				console.warn(
 					`%cPerformance Warning:%c System '${systemName}' breached ${WARNING_THRESHOLD_MS.toFixed(
-						1
+						1,
 					)}ms threshold. Max time: ${data.max.toFixed(3)}ms`,
 					'color: #e67e22; font-weight: bold;',
-					'color: white;'
+					'color: white;',
 				)
 				this.warnedSystems.add(systemName)
 			}
@@ -431,10 +429,10 @@ export class PerformanceMonitor {
 			if (!this.warnedSystems.has(name)) {
 				console.warn(
 					`%cPerformance Warning:%c System '${name}' breached ${WARNING_THRESHOLD_MS.toFixed(
-						1
+						1,
 					)}ms threshold. Max time: ${max.toFixed(3)}ms`,
 					'color: #e67e22; font-weight: bold;',
-					'color: white;'
+					'color: white;',
 				)
 				this.warnedSystems.add(name)
 			}
@@ -533,7 +531,7 @@ export class PerformanceMonitor {
 								update: { avg: 0, max: 0 },
 								schedule: { avg: 0, max: 0 },
 							},
-						process: { avg: 0, max: 0 },
+							process: { avg: 0, max: 0 },
 						}
 					)
 				})
@@ -577,7 +575,12 @@ export class PerformanceMonitor {
 		const desiredNodes = []
 		const addSystemNodes = system => {
 			const row = this.systemRowElements.get(system.name)
-			desiredNodes.push(row.container, row.detailRows.update.container, row.detailRows.schedule.container, row.detailRows.process.container)
+			desiredNodes.push(
+				row.container,
+				row.detailRows.update.container,
+				row.detailRows.schedule.container,
+				row.detailRows.process.container,
+			)
 		}
 
 		// Add main rows and their detail rows to the desired order
@@ -606,25 +609,6 @@ export class PerformanceMonitor {
 			const next = currentElement.nextSibling
 			body.removeChild(currentElement)
 			currentElement = next
-		}
-	}
-
-	_renderMemory() {
-		const { container, value, hr } = this.memoryElements
-		if (!container) return
-
-		if (performance.memory) {
-			// @ts-ignore
-			container.style.display = 'flex'
-			hr.style.display = 'block'
-
-			const used = formatBytes(performance.memory.usedJSHeapSize)
-			const total = formatBytes(performance.memory.jsHeapSizeLimit)
-			value.textContent = `${used} / ${total}`
-		} else {
-			// Hide if performance.memory is not available
-			container.style.display = 'none'
-			hr.style.display = 'none'
 		}
 	}
 
@@ -682,8 +666,8 @@ export class PerformanceMonitor {
 					borderBottom: '1px solid #444',
 					paddingBottom: '5px',
 				},
-				'Performance Monitor'
-			)
+				'Performance Monitor',
+			),
 		)
 
 		// Command Buffer Section
@@ -726,23 +710,11 @@ export class PerformanceMonitor {
 		sRow.container.style.display = 'none' // Initially hidden
 		this.summaryElements = { ...sRow, hr: sHr }
 
-		// Memory Section
-		const mHr = this._createStyledElement('hr', {
-			borderColor: '#444',
-			marginTop: '10px',
-			marginBottom: '5px',
-			display: 'none',
-		})
-		const mRow = this._createMemoryRowElements('Memory')
-		mRow.container.style.display = 'none' // Initially hidden
-		this.memoryElements = { ...mRow, hr: mHr }
-
 		// --- Append in the new order ---
 		this._createSystemsListContainer()
 		this.panel.append(this.rendererElements.hr, this.rendererElements.container)
 		this.panel.append(this.commandBufferElements.hr, this.commandBufferElements.container)
 		this.panel.append(this.summaryElements.hr, this.summaryElements.container)
-		this.panel.append(this.memoryElements.hr, this.memoryElements.container)
 
 		document.body.appendChild(this.panel)
 	}
@@ -883,23 +855,6 @@ export class PerformanceMonitor {
 		return { container, name, avg, max }
 	}
 
-	_createMemoryRowElements(labelText) {
-		const container = this._createStyledElement('div', {
-			display: 'flex',
-			justifyContent: 'space-between',
-			alignItems: 'center',
-			fontWeight: 'bold',
-		})
-
-		const name = this._createStyledElement('span', {})
-		name.innerHTML = labelText
-
-		const value = this._createStyledElement('span', {})
-
-		container.append(name, value)
-		return { container, name, value }
-	}
-
 	_createStyledElement(tag, styles, textContent = '') {
 		const el = document.createElement(tag)
 		Object.assign(el.style, styles)
@@ -923,7 +878,6 @@ export class PerformanceMonitor {
 		this.commandBufferElements = null
 		this.rendererElements = null
 		this.summaryElements = null
-		this.memoryElements = null
 		this.systemRowElements?.clear()
 		this.systemRowElements = null // Allow for garbage collection
 		this.pinnedSeparator = null

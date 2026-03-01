@@ -28,6 +28,10 @@ export class AssetManager {
 		this._freeDisplayObjectRefs = []
 
 		/**
+		 * @type {object | null} Stores the parsed JSON manifest of the currently loaded texture atlas.
+		 */
+		this.atlasManifest = null
+		/**
 		 * Direct, public access to the internal storage array for high-performance systems.
 		 * @type {PIXI.DisplayObject[]}
 		 */
@@ -133,6 +137,78 @@ export class AssetManager {
 		return this.assets.get(assetName)
 	}
 
+	/**
+	 * Manually adds a pre-existing PIXI.Texture to the asset cache.
+	 * This is useful for procedurally generated textures that are not loaded from a file.
+	 * @param {string} assetName - A unique name to identify the asset.
+	 * @param {PIXI.Texture} texture - The texture object to add.
+	 * @returns {boolean} True if the asset was added, false if the name was taken or inputs were invalid.
+	 */
+	addTexture(assetName, texture) {
+		if (typeof assetName !== 'string' || !assetName) {
+			console.error('AssetManager.addAsset: assetName must be a non-empty string.')
+			return false
+		}
+		if (!(texture instanceof PIXI.Texture)) {
+			console.error(`AssetManager.addAsset: provided texture for "${assetName}" is not a valid PIXI.Texture.`)
+			return false
+		}
+		if (this.assets.has(assetName)) {
+			console.warn(
+				`AssetManager.addAsset: An asset with the name "${assetName}" already exists. It will not be overwritten.`,
+			)
+			return false
+		}
+		this.assets.set(assetName, texture)
+		return true
+	}
+
+	/**
+	 * Stores the texture atlas manifest for later lookup of frame data.
+	 * @param {object} manifest - The parsed JSON manifest of the texture atlas.
+	 */
+	setAtlasManifest(manifest) {
+		this.atlasManifest = manifest
+	}
+
+	/**
+	 * Retrieves the normalized UV coordinates (u, v, w, h) for a given asset from the loaded atlas manifest.
+	 * @param {string} assetName - The name of the asset in the atlas.
+	 * @returns {{u: number, v: number, w: number, h: number} | null} The normalized UVs, or null if not found.
+	 */
+	getAtlasFrameData(assetName) {
+		if (!this.atlasManifest) {
+			console.warn('AssetManager: No atlas manifest loaded.')
+			return null
+		}
+
+		const frameData = this.atlasManifest.frames[assetName]
+		if (!frameData) {
+			console.warn(`AssetManager: Asset "${assetName}" not found in atlas manifest.`)
+			return null
+		}
+
+		const { frame } = frameData
+		const { w: atlasWidth, h: atlasHeight } = this.atlasManifest.meta.size
+
+		return {
+			u: frame.x / atlasWidth,
+			v: frame.y / atlasHeight,
+			w: frame.w / atlasWidth,
+			h: frame.h / atlasHeight,
+		}
+	}
+
+	/**
+	 * Retrieves the metadata size of the loaded atlas.
+	 * @returns {{w: number, h: number} | null} The atlas dimensions, or null if not found.
+	 */
+	getAtlasSize() {
+		if (!this.atlasManifest) return null
+
+		return this.atlasManifest.meta.size
+	}
+
 	// --- Managed Reference Pattern Methods ---
 
 	/**
@@ -147,7 +223,7 @@ export class AssetManager {
 		const texture = this.loadAsset(assetName)
 		if (!texture) {
 			console.warn(
-				`AssetManager.acquireSpriteRefSync: Asset "${assetName}" not preloaded. Use async acquireSpriteRef instead.`
+				`AssetManager.acquireSpriteRefSync: Asset "${assetName}" not preloaded. Use async acquireSpriteRef instead.`,
 			)
 			return null
 		}
@@ -270,7 +346,7 @@ export class AssetManager {
 				sprite.anchor.set(anchor.x ?? 0, anchor.y ?? 0)
 			} else {
 				console.warn(
-					`AssetManager.createSprite: Invalid anchor type for asset "${assetName}". Expected number or object.`
+					`AssetManager.createSprite: Invalid anchor type for asset "${assetName}". Expected number or object.`,
 				)
 			}
 		}

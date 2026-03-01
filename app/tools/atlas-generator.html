@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>Procedural Atlas Generator</title>
+		<script src="../../node_modules/pixi.js/dist/pixi.min.js"></script>
+		<style>
+			body {
+				font-family: sans-serif;
+				background-color: #2c2c2c;
+				color: #f0f0f0;
+				padding: 20px;
+			}
+			#controls {
+				margin-bottom: 20px;
+			}
+			button {
+				padding: 10px 15px;
+				font-size: 16px;
+				cursor: pointer;
+			}
+			#atlas-preview {
+				border: 1px solid #555;
+				background-color: #1a1a1a;
+				display: inline-block;
+			}
+			#individual-previews {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 10px;
+				margin-top: 10px;
+			}
+			.preview-item {
+				border: 1px solid #444;
+				padding: 5px;
+				background-color: #1a1a1a;
+				text-align: center;
+			}
+			.preview-item p {
+				margin: 0 0 5px 0;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Procedural Texture Atlas Generator</h1>
+		<div
+			id="server-warning"
+			style="display: none; background-color: #502a2a; border: 1px solid #ff4136; padding: 10px; margin-bottom: 20px"
+		></div>
+		<p>
+			This tool generates a texture atlas and a corresponding JSON manifest. Click the button below to download the
+			`atlas.png` and `atlas.json` files.
+		</p>
+
+		<div id="controls">
+			<button id="generate-button">Generate and Download Atlas</button>
+		</div>
+		<div id="atlas-preview"></div>
+		<hr style="margin: 20px 0; border-color: #555" />
+		<h2>Individual Previews</h2>
+		<div id="individual-previews"></div>
+
+		<script>
+			// --- Configuration ---
+			const ATLAS_SIZE = 256
+			const PADDING = 2
+
+			// --- Asset Definitions ---
+			// Define procedural and image-based assets.
+			const assets = [
+				{
+					name: 'spinner',
+					src: '../client/assets/sprites/spinner.png',
+					size: 32,
+				},
+
+				{
+					name: 'player_ship',
+					src: '../client/assets/sprites/player_ship.png',
+					size: 64,
+				},
+
+				{
+					name: 'projectile_player',
+					draw: (graphics, size) => {
+						const s = size / 2
+						graphics.circle(0, 0, s).fill({ color: 0x7fdbff, alpha: 1 })
+					},
+					size: 4,
+				},
+			]
+
+			/**
+			 * Calculates the next power of two for a given number.
+			 * E.g., nextPowerOfTwo(70) will return 128.
+			 * @param {number} n The input number.
+			 * @returns {number} The next power of two.
+			 */
+			function nextPowerOfTwo(n) {
+				if (n === 0) return 1
+				let p = 1
+				while (p < n) p <<= 1
+				return p
+			}
+			/**
+			 * Calculates the position and size for each asset in the atlas.
+			 * This uses a simple row-based packing algorithm.
+			 * @param {object[]} assets - The array of asset definitions.
+			 * @param {number} atlasSize - The width and height of the atlas canvas.
+			 * @param {number} padding - The space to leave between assets.
+			 * @returns {{frames: object, contentBounds: PIXI.Rectangle}} - The layout data.
+			 * @throws {Error} If an asset is too large or if assets overflow the atlas.
+			 */
+			function performLayout(assets, atlasSize, padding) {
+				const frames = {}
+				let currentX = padding
+				let currentY = padding
+				let rowMaxHeight = 0
+				let maxContentX = 0
+
+				// Pre-check for any individual asset that is too large to ever fit.
+				for (const asset of assets) {
+					if (!asset.size) {
+						throw new Error(`Asset "${asset.name}" is missing the required 'size' property.`)
+					}
+					if (asset.size + padding * 2 > atlasSize) {
+						throw new Error(
+							`Asset "${asset.name}" (size: ${asset.size}) is too large to fit in the atlas (size: ${atlasSize}, padding: ${padding}).`,
+						)
+					}
+				}
+
+				for (const asset of assets) {
+					// If the current asset doesn't fit on this row, wrap to the next one.
+					if (currentX + asset.size + padding > atlasSize) {
+						maxContentX = Math.max(maxContentX, currentX)
+						currentX = padding
+						currentY += rowMaxHeight + padding
+						rowMaxHeight = 0
+					}
+
+					// Check for vertical overflow before placing the asset.
+					if (currentY + asset.size + padding > atlasSize) {
+						throw new Error(
+							`Atlas overflow: Not enough vertical space to place asset "${asset.name}". Consider increasing ATLAS_SIZE.`,
+						)
+					}
+
+					frames[asset.name] = {
+						frame: { x: currentX, y: currentY, w: asset.size, h: asset.size },
+						sourceSize: { w: asset.size, h: asset.size },
+					}
+
+					currentX += asset.size + padding
+					rowMaxHeight = Math.max(rowMaxHeight, asset.size)
+				}
+
+				// Calculate the final content bounds.
+				const tightWidth = Math.max(maxContentX, currentX)
+				const tightHeight = currentY + rowMaxHeight + padding
+
+				// Round up to the next power of two for GPU efficiency (mipmapping, etc.).
+				const potWidth = nextPowerOfTwo(tightWidth)
+				const potHeight = nextPowerOfTwo(tightHeight)
+
+				if (potWidth > atlasSize || potHeight > atlasSize) {
+					throw new Error(`Calculated Power-of-Two size (${potWidth}x${potHeight}) exceeds ATLAS_SIZE (${atlasSize}).`)
+				}
+
+				const finalBounds = new PIXI.Rectangle(0, 0, potWidth, potHeight)
+
+				return { frames, contentBounds: finalBounds }
+			}
+
+			/**
+			 * Loads any assets that are defined with a 'src' path.
+			 * Attaches the loaded PIXI.Texture to the asset object.
+			 */
+			async function loadSourceAssets() {
+				const imageAssets = assets.filter(a => a.src)
+				if (imageAssets.length === 0) return
+
+				console.log('Loading external image assets...')
+				const promises = imageAssets.map(async asset => {
+					try {
+						const texture = await PIXI.Assets.load(asset.src)
+						asset.texture = texture // Attach loaded texture to the asset object
+						console.log(`- Loaded ${asset.name} from ${asset.src}`)
+					} catch (e) {
+						console.error(`Failed to load asset "${asset.name}" from ${asset.src}`, e)
+						throw new Error(`Failed to load ${asset.src}`)
+					}
+				})
+				await Promise.all(promises)
+				console.log('All external assets loaded.')
+			}
+
+			// --- PIXI Setup and Drawing Logic ---
+			const app = new PIXI.Application()
+			let atlasData = {}
+			let contentBounds = new PIXI.Rectangle(0, 0, 0, 0)
+
+			async function setup() {
+				try {
+					// Pre-load any external image assets before initializing the canvas.
+					await loadSourceAssets()
+
+					await app.init({
+						width: ATLAS_SIZE,
+						height: ATLAS_SIZE,
+						backgroundColor: 0x000000,
+						backgroundAlpha: 0, // Transparent background for the final PNG
+					})
+					document.getElementById('atlas-preview').appendChild(app.canvas)
+
+					// 1. Perform layout calculation first. This separates logic from drawing.
+					const layout = performLayout(assets, ATLAS_SIZE, PADDING)
+					atlasData = {
+						meta: {
+							image: 'atlas.png',
+							size: { w: layout.contentBounds.width, h: layout.contentBounds.height },
+						},
+						frames: layout.frames,
+					}
+					contentBounds = layout.contentBounds
+
+					// 2. Draw the assets onto the main atlas canvas based on the layout.
+					for (const asset of assets) {
+						const frameInfo = atlasData.frames[asset.name].frame
+						let displayObject
+
+						if (asset.draw) {
+							// Procedural asset
+							const graphics = new PIXI.Graphics()
+							graphics.position.set(frameInfo.x + asset.size / 2, frameInfo.y + asset.size / 2)
+							asset.draw(graphics, asset.size)
+							displayObject = graphics
+						} else if (asset.texture) {
+							// Image-based asset
+							const sprite = new PIXI.Sprite(asset.texture)
+							const scale = Math.min(asset.size / sprite.texture.width, asset.size / sprite.texture.height)
+							sprite.scale.set(scale)
+							sprite.anchor.set(0.5)
+							sprite.position.set(frameInfo.x + asset.size / 2, frameInfo.y + asset.size / 2)
+							displayObject = sprite
+						}
+						if (displayObject) app.stage.addChild(displayObject)
+					}
+
+					// 3. Generate individual previews.
+					await generateIndividualPreviews()
+				} catch (error) {
+					// Handle layout errors gracefully by showing a message and disabling the button.
+					console.error('Error during atlas generation:', error)
+					const errorElement = document.createElement('p')
+					errorElement.style.color = 'red'
+					errorElement.style.fontWeight = 'bold'
+					errorElement.textContent = `Generation failed: ${error.message}`
+					document.getElementById('controls').appendChild(errorElement)
+					document.getElementById('generate-button').disabled = true
+				}
+			}
+
+			async function generateIndividualPreviews() {
+				const individualPreviewsContainer = document.getElementById('individual-previews')
+				for (const asset of assets) {
+					const previewWrapper = document.createElement('div')
+					previewWrapper.className = 'preview-item'
+
+					const label = document.createElement('p')
+					label.textContent = `${asset.name} (${asset.size}x${asset.size})`
+					previewWrapper.appendChild(label)
+
+					const previewApp = new PIXI.Application()
+					await previewApp.init({
+						width: asset.size,
+						height: asset.size,
+						backgroundColor: 0x1a1a1a, // Match the preview background
+					})
+
+					let displayObject
+					if (asset.draw) {
+						const graphics = new PIXI.Graphics()
+						graphics.position.set(asset.size / 2, asset.size / 2) // Center the drawing
+						asset.draw(graphics, asset.size)
+						displayObject = graphics
+					} else if (asset.texture) {
+						const sprite = new PIXI.Sprite(asset.texture)
+						const scale = Math.min(asset.size / sprite.texture.width, asset.size / sprite.texture.height)
+						sprite.scale.set(scale)
+						sprite.anchor.set(0.5)
+						sprite.position.set(asset.size / 2, asset.size / 2)
+						displayObject = sprite
+					}
+					if (displayObject) previewApp.stage.addChild(displayObject)
+
+					previewWrapper.appendChild(previewApp.canvas)
+					individualPreviewsContainer.appendChild(previewWrapper)
+				}
+			}
+
+			// --- Download Logic ---
+			function download(filename, data) {
+				const element = document.createElement('a')
+				element.setAttribute('href', data)
+				element.setAttribute('download', filename)
+				element.style.display = 'none'
+				document.body.appendChild(element)
+				element.click()
+				document.body.removeChild(element)
+			}
+
+			document.getElementById('generate-button').addEventListener('click', async () => {
+				// 1. Generate and download the JSON manifest
+				const jsonString = JSON.stringify(atlasData, null, 2)
+				const jsonBlob = new Blob([jsonString], { type: 'application/json' })
+				const jsonUrl = URL.createObjectURL(jsonBlob)
+				download('atlas.json', jsonUrl)
+				URL.revokeObjectURL(jsonUrl)
+
+				// 2. Generate and download the PNG image
+				// Extract only the part of the canvas that contains content, preserving the padding.
+				const imageBase64 = await app.renderer.extract.base64({
+					target: app.stage,
+					frame: contentBounds,
+				})
+				download('atlas.png', imageBase64)
+
+				console.log('Atlas files generated and download initiated.')
+			})
+
+			// --- Initialization ---
+			window.addEventListener('DOMContentLoaded', () => {
+				if (window.location.protocol === 'file:') {
+					const warning = document.getElementById('server-warning')
+					warning.style.display = 'block'
+					warning.innerHTML = `<strong>Warning:</strong> 
+            <br>Due to security reasons and shit - run local server.
+            <br><code>npx http-server . -p 8080</code>`
+				}
+
+				// Initialize the preview generation
+				setup()
+			})
+		</script>
+	</body>
+</html>

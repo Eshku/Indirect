@@ -1,23 +1,21 @@
 const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
 
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
-const { ecs, uiManager, entityManager } = engine.getManagers()
-const { queryManager } = ecs // entityManager is now available at the top level
-
-const { HOTBAR_SLOT_COUNT } = await import(`${PATH_UI}/Hotbar.js`)
+const { ecs, uiManager } = engine.getManagers()
+const { queryManager } = ecs
 
 /**
- * Handles all player inputs, both continuous (e.g., movement) and instant (e.g., hotbar selection).
- * This system acts as a bridge between the low-level `eventEmitter` and the ECS world.
+ * Handles all player inputs for continuous actions like movement and firing.
+ * This system acts as a bridge between the abstract input events and the ECS world.
  * It translates raw input events into component data changes for the player entity.
  */
 export class PlayerInputSystem {
 	constructor() {
-		const { playerTag, movementIntent, jump, actionIntent, activeSet } = ecs.getTypeIDs()
-		Object.assign(this, { playerTag, movementIntent, jump, actionIntent, activeSet })
+		const { playerTag, movementIntent, actionIntent } = ecs.getTypeIDs()
+		Object.assign(this, { playerTag, movementIntent, actionIntent })
 
 		this.playerQuery = queryManager.getQuery({
-			with: [playerTag, movementIntent, jump, actionIntent, activeSet],
+			with: [playerTag, movementIntent, actionIntent],
 		})
 
 		this.inputState = {
@@ -25,20 +23,13 @@ export class PlayerInputSystem {
 			moveRight: false,
 			moveUp: false,
 			moveDown: false,
-			jump: false,
 			mainAttack: false,
 		}
 
-		this.instantActionQueue = []
 		this.playerId = null
 	}
 
 	async init() {
-
-
-
-		this.hotbar = uiManager.getElement('Hotbar')
-
 		findPlayer: for (const chunk of this.playerQuery.iter()) {
 			for (let i = 0; i < chunk.size; i++) {
 				this.playerId = chunk.entities[i]
@@ -57,22 +48,15 @@ export class PlayerInputSystem {
 				eventEmitter.off(`Input ${action}`, this.continuousActionHandlers[action])
 			}
 		}
-		if (this.hotbarHandlers) {
-			for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
-				const eventSlotNumber = (i + 1) % HOTBAR_SLOT_COUNT
-				eventEmitter.off(`Input Hotbar${eventSlotNumber}`, this.hotbarHandlers[i])
-			}
-		}
 	}
 
 	setupEventListeners() {
 		// Cache the handlers so they can be removed correctly in destroy().
 		this.continuousActions = {
-			Up: 'moveUp',
-			Down: 'moveDown',
+			Forward: 'moveUp',
+			Backward: 'moveDown',
 			Left: 'moveLeft',
 			Right: 'moveRight',
-			Jump: 'jump',
 			MainAttack: 'mainAttack',
 		}
 
@@ -84,33 +68,16 @@ export class PlayerInputSystem {
 			this.continuousActionHandlers[action] = handler
 			eventEmitter.on(`Input ${action}`, handler)
 		}
-
-		this.hotbarHandlers = []
-		for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
-			const eventSlotNumber = (i + 1) % HOTBAR_SLOT_COUNT
-			const handler = key => {
-				if (key.isActive) {
-					this.instantActionQueue.push({ type: 'slotChange', value: i })
-				}
-			}
-			this.hotbarHandlers[i] = handler
-			eventEmitter.on(`Input Hotbar${eventSlotNumber}`, handler)
-		}
 	}
 
-	update({deltaTime, currentTick}) {
+	update({ deltaTime, currentTick }) {
 		if (!this.playerId) return
 
 		this._processContinuousInputs(currentTick)
-		this._processInstantActions(currentTick)
-
-		if (this.instantActionQueue.length > 0) {
-			this.instantActionQueue.length = 0
-		}
 	}
 
 	_processContinuousInputs(currentTick) {
-		const { moveLeft, moveRight, moveUp, moveDown, jump, mainAttack } = this.inputState
+		const { moveLeft, moveRight, moveUp, moveDown, mainAttack } = this.inputState
 
 		let intentX = 0
 		if (moveLeft && !moveRight) intentX = -1
@@ -126,21 +93,17 @@ export class PlayerInputSystem {
 			intentY /= length
 		}
 
-		const wantsToJump = jump ? 1 : 0
 		const mainAttackIntent = mainAttack ? 1 : 0
 
 		for (const chunk of this.playerQuery.iter()) {
 			const movementIntents = chunk.componentData[this.movementIntent]
-			const jumps = chunk.componentData[this.jump]
 			const actionIntents = chunk.componentData[this.actionIntent]
 
 			const intentsX = movementIntents.desiredX
 			const intentsY = movementIntents.desiredY
-			const jumpsWants = jumps.wantsToJump
 			const actionsIntent = actionIntents.actionIntent
 
 			let movementModified = false
-			let jumpModified = false
 			let actionModified = false
 
 			for (let i = 0; i < chunk.size; i++) {
@@ -149,12 +112,6 @@ export class PlayerInputSystem {
 					intentsY[i] = intentY
 					chunk.dirtyTicks[this.movementIntent][i] = currentTick
 					movementModified = true
-				}
-
-				if (jumpsWants[i] !== wantsToJump) {
-					jumpsWants[i] = wantsToJump
-					chunk.dirtyTicks[this.jump][i] = currentTick
-					jumpModified = true
 				}
 
 				// For continuous actions like holding down an attack button, we always set the intent
@@ -167,33 +124,7 @@ export class PlayerInputSystem {
 				}
 			}
 			if (movementModified) chunk.markChunkDirty(this.movementIntent, currentTick)
-			if (jumpModified) chunk.markChunkDirty(this.jump, currentTick)
 			if (actionModified) chunk.markChunkDirty(this.actionIntent, currentTick)
-		}
-	}
-
-	_processInstantActions(currentTick) {
-		if (this.instantActionQueue.length === 0) return
-
-		for (const action of this.instantActionQueue) {
-			if (action.type === 'slotChange') {
-				this._setActiveHotbarSlot(action.value, currentTick)
-			}
-		}
-	}
-
-	_setActiveHotbarSlot(slotIndex, currentTick) {
-		for (const chunk of this.playerQuery.iter()) {
-			const activeSets = chunk.componentData[this.activeSet]
-
-			// The player query will only match one entity.
-			// We can safely operate on the first entity in the first chunk.
-			const indexInChunk = 0
-			if (activeSets.activeSlotIndex[indexInChunk] !== slotIndex) {
-				activeSets.activeSlotIndex[indexInChunk] = slotIndex
-				chunk.dirtyTicks[this.activeSet][indexInChunk] = currentTick
-				chunk.markChunkDirty(this.activeSet, currentTick)
-			}
 		}
 	}
 }

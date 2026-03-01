@@ -301,6 +301,8 @@ To manage parallel execution safely, each system must declare its data access pa
 
 #### System Example
 
+__System syntax \ API is subject to change__
+
 ```javascript
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
@@ -561,8 +563,6 @@ System scheduling is defined by `frequency` property of each system in [app/clie
 - **`Visuals`:**
   - **When:** Runs once per visual frame, after all `Logic` and timed updates for that frame are complete. `DeltaTime` can vary.
   - **Use For:** Rendering, visual effects, interpolation between fixed updates (`alpha`), UI updates, and camera movement. This is for logic that needs to be as smooth as display's refresh rate allows.
-
-  **Update Group names are subject to change.**
 
 ### Debugging & Immediate-Mode API: [ECS](/app/client/ECS/EntityManager/ECS.js) Object
 

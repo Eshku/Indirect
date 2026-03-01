@@ -71,6 +71,7 @@ export class WorkerManager {
 	async initializeWorkers(ecs) {
 		this.ecs = ecs
 		this.entityManager = ecs.entityManager
+		const { physicsManager } = ecs.engine.getManagers()
 
 		// Get the shared buffers from the scheduler.
 		const scheduler = ecs.systemManager.gameLoop.scheduler
@@ -140,6 +141,7 @@ export class WorkerManager {
 					mainThreadInbox: this.sharedBuffers.mainThreadInbox,
 					dequeBuffers: this.sharedBuffers.dequeBuffers, // Send the array of deque buffers
 					systemIdMap,
+					spatialHashGridSABs: physicsManager.getSpatialHashGridSABs(),
 					totalThreads: this.totalThreads,
 					initialChunks,
 					prebuiltLogics

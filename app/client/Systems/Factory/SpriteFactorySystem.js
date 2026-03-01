@@ -1,5 +1,5 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
-const { ecs, layerManager, assetManager } = engine.getManagers()
+const { ecs, assetManager } = engine.getManagers()
 
 const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
@@ -8,10 +8,10 @@ const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningT
 const UNINITIALIZED_REF = 0
 
 /**
- * Creates visual PIXI.Sprite representations for entities that have a
- * `SpriteDescriptor` and an uninitialized `Viewable` component. This system
- * acts as an "initializer" for asset-based visuals, populating existing
- * components to avoid structural changes.
+ * Creates a PIXI.Sprite reference for entities that have a `SpriteDescriptor`
+ * and an uninitialized `Viewable` component. This system's only job is to
+ * create the sprite in the AssetManager and link it via the `Viewable` component.
+ * It does not add the sprite to the scene.
  */
 export class SpriteFactorySystem {
 	constructor() {
@@ -20,10 +20,8 @@ export class SpriteFactorySystem {
 
 		this.initializationQuery = queryManager.getQuery({
 			with: [spriteDescriptor, viewable],
-			react: [spriteDescriptor],
+			react: [spriteDescriptor], // React to when a sprite is described
 		})
-
-		this.gameActorsLayer = layerManager.getLayer('gameActors')
 
 		// Pre-compile the payload and cache the payload/mutator objects separately.
 		const { payload, mutators } = payloadCompiler.compileComponent(this.viewable, { spriteRef: 0 })
@@ -41,24 +39,20 @@ export class SpriteFactorySystem {
 
 			const assetNameRefs = descriptorArrays.assetName
 			const spriteRefs = viewableArrays.spriteRef
-			const stringStorage = this.stringStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (chunk.hasChanged(this.spriteDescriptor, indexInChunk)) {
-					if (spriteRefs[indexInChunk] !== UNINITIALIZED_REF) {
-						continue
-					}
-
+				// Only act if the descriptor was just added/changed AND the sprite hasn't been created yet.
+				if (chunk.hasChanged(this.spriteDescriptor, indexInChunk) && spriteRefs[indexInChunk] === UNINITIALIZED_REF) {
 					const entityId = chunk.entities[indexInChunk]
-					const assetName = stringStorage[assetNameRefs[indexInChunk]]
-					const spriteRef = assetManager.acquireSpriteRefSync(assetName, { anchor: { x: 0.5, y: 0.5 } })
+					const assetName = this.stringStorage[assetNameRefs[indexInChunk]]
 
-					if (spriteRef !== null) {
-						const sprite = assetManager.getDisplayObjectByRef(spriteRef)
-						if (sprite) this.gameActorsLayer.addChild(sprite)
+					// Synchronously get a sprite reference from the asset manager.
+					const newSpriteRef = assetManager.acquireSpriteRefSync(assetName, { anchor: { x: 0.5, y: 0.5 } })
 
-						// Use the cached mutator and payload for efficiency and readability.
-						this.viewableMutators.viewable.spriteRef[0] = spriteRef
+					if (newSpriteRef !== null) {
+						// This system's only job is to create the sprite and update the Viewable component.
+						// It does NOT add it to the scene. Another system will handle that.
+						this.viewableMutators.viewable.spriteRef[0] = newSpriteRef
 						this.commands.setComponentData(entityId, this.viewablePayload)
 					}
 				}

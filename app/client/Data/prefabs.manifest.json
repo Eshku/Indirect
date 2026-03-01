@@ -1,6 +1,9 @@
 {
-	"player_character": {
+	"player": {
 		"path": "client/Data/Prefabs/Playable/Player.json"
+	},
+	"spinner": {
+		"path": "client/Data/Prefabs/Enemies/spinner.json"
 	},
 	"item_base": {
 		"path": "client/Data/Prefabs/Items/Item.json"
@@ -31,5 +34,8 @@
 	},
 	"test_prefab": {
 		"path": "client/Data/Prefabs/Tests/TestPrefab.json"
+	},
+	"cursor": {
+		"path": "client/Data/Prefabs/UI/Cursor.json"
 	}
 }

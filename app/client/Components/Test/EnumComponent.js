@@ -12,6 +12,6 @@ export const EnumComponent = {
 			RUNNING: 1,
 			JUMPING: 2,
 		},
-		default: 'IDLE',
+		default: 0,
 	},
 }

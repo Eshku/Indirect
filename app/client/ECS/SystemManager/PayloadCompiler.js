@@ -1,17 +1,22 @@
 /**
  * Compiles high-level entity data into low-level binary payloads.
  * This is a build-time or setup-time utility, not for use in hot loops.
- * This is a key part of the Zero-Overhead Data Pipeline, designed to eliminate
- * runtime object traversal and deserialization for entity creation.
+ * This is a key part of the Zero-Overhead Data Pipeline, designed to eliminate runtime object traversal and
+ * deserialization for entity creation.
  *
  * ---
- * ### DEV-NOTE: The "Write" Assembly Authority
- * This service is the authority for the **"Write Path" payload assembly**. Its
- * responsibility is to take a high-level entity definition (e.g., `{ Position: {x:10} }`
- * or a prefab name) and orchestrate its compilation into a final, engine-ready binary
- * `ArrayBuffer` payload. It is a stateful service that uses the stateless
- * `ComponentInterpreter` for data transformation and then uses core managers
- * (`ArchetypeManager`, `PrefabManager`) to assemble the final payload.
+ * ### DEV-NOTE: The "Write" Path Assembler
+ * This service is the authority for the **"Write" Path payload assembly**. Its responsibility is to take a high-level
+ * entity definition (e.g., `{ Position: {x:10} }` or a prefab name) and assemble it into a final, engine-ready binary
+ * `ArrayBuffer` payload.
+ *
+ * It operates as a client of several other services:
+ * 1.  **`ComponentInterpreter`**: To transform high-level data (like strings) into raw numeric values.
+ * 2.  **`SchemaCompiler`**: To get the `componentInfo` blueprint, which contains the memory layout and pre-compiled `mutatorFactories`.
+ * 3.  **`EntityManager` / `PrefabManager`**: To resolve archetypes and prefab data.
+ *
+ * The `PayloadCompiler` itself is a "dumb" assembler; it allocates a buffer and executes the mutator factories
+ * provided by the `SchemaCompiler` to create the final payload and its mutators.
  */
 
 const { interpret } = await import('../ComponentManager/ComponentInterpreter.js')
@@ -41,9 +46,9 @@ class PayloadCompiler {
 	 */
 	compileEntity(source, overrides = {}) {
 		if (typeof source === 'string') {
-			return this._compilePrefab(source, overrides, this._compileSoA.bind(this))
+			return this._compilePrefab(source, overrides, this._compile.bind(this))
 		} else if (typeof source === 'object' && source !== null) {
-			return this._compileFromObject(source, this._compileSoA.bind(this))
+			return this._compileFromObject(source, this._compile.bind(this))
 		} else {
 			throw new TypeError(
 				'PayloadCompiler.compileEntity: First argument must be a prefab name (string) or a component data object.',
@@ -61,9 +66,9 @@ class PayloadCompiler {
 	 */
 	compileEntities(source, overrides = {}) {
 		if (typeof source === 'string') {
-			return this._compilePrefab(source, overrides, this._compileAoS.bind(this))
+			return this._compilePrefab(source, overrides, this._compile.bind(this))
 		} else if (typeof source === 'object' && source !== null) {
-			return this._compileFromObject(source, this._compileAoS.bind(this))
+			return this._compileFromObject(source, this._compile.bind(this))
 		} else {
 			throw new TypeError(
 				'PayloadCompiler.compileEntities: First argument must be a prefab name (string) or a component data object.',
@@ -95,7 +100,7 @@ class PayloadCompiler {
 		const componentDataMap = new Map([[typeID, rawData]])
 
 		// Use the SoA compiler, as this is for a single component payload.
-		const { payload, mutators } = this._compileSoA(archetypeId, componentDataMap)
+		const { payload, mutators } = this._compile(archetypeId, componentDataMap)
 
 		return {
 			payload: { typeID, data: payload.data },
@@ -103,128 +108,41 @@ class PayloadCompiler {
 		}
 	}
 
-	compileComponents(typeIDs, data = {}) {
-		//! this will be main way of pre-compiling data for single entity.
-		//! Could be used for single component addition or multiple
-		//! Compile component probably going to be alias for simplicity.
-		//!This is going to be Soa based
-	}
-
-	compileComponentsForEntities(typeIDs, data = {}) {
-		//!AoS - based way to pre-compile single or multiple components
-		//! to MULTIPLE entities (query based or some batch commands later on)
-		//! Gonna need to adapt command buffer and archetype manager
-		//! once done probably can tear apart managers too.
-	}
-
 	/**
-	 * The internal, low-level workhorse for compiling a payload.
-	 * @param {number} archetypeId The target archetype for the entity.
-	 * @param {Map<number, object>} componentDataMap A map of componentTypeID to its high-level data object.
-	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}} A payload object with its mutators.
-	 * @private
+	 * [FUTURE] Pre-compiles a payload for one or more components for a single entity.
+	 * This will be the primary way to get a payload for `commands.addComponent` or `commands.setComponent`.
+	 * @param {number[]} typeIDs - An array of component type IDs.
+	 * @param {object} [data={}] - A data object where keys are component names.
+	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}}
 	 */
-	_compileAoS(archetypeId, componentDataMap) {
-		const sortedTypeIDs = this.entityManager.getComponentTypeIDsForArchetype(archetypeId)
-		if (!sortedTypeIDs) {
-			throw new Error(`PayloadCompiler: Archetype with ID ${archetypeId} not found.`)
-		}
-
-		// --- 1. Calculate total size and component offsets from the Schema ---
-		// The component type IDs from the entity manager are guaranteed to be sorted.
-		// This logic must perfectly mirror the alignment logic in SchemaCompiler.
-		let totalByteSize = 0
-		const componentOffsets = new Map()
-		for (const typeID of sortedTypeIDs) {
-			const info = Schema.componentInfo[typeID]
-			// Align the current offset to meet the requirement of the current component.
-			const alignment = info.alignment
-			if (alignment > 0 && totalByteSize % alignment !== 0) {
-				totalByteSize += alignment - (totalByteSize % alignment)
-			}
-			componentOffsets.set(typeID, totalByteSize)
-			totalByteSize += info.byteSize
-		}
-
-		// --- 2. Allocate buffer and create DataView ---
-		const payloadBuffer = new ArrayBuffer(totalByteSize)
-		const payloadView = new DataView(payloadBuffer)
-
-		// --- 3. Write data and create mutators ---
-		const mutators = {}
-		for (const typeID of sortedTypeIDs) {
-			const info = Schema.componentInfo[typeID]
-			const componentName = Schema.componentNames[typeID]
-			const compiledDefaults = Schema.compiledDefaults[typeID]
-
-			mutators[componentName] = {}
-
-			// We must iterate over the original schema keys to correctly handle complex types
-			// that are flattened into multiple properties. NO, we iterate over final keys.
-			for (const propKey of info.propertyKeys) {
-				// Get the pre-calculated base offset for this component.
-				const initialData = componentDataMap.get(typeID) || {}
-
-				// The data in `initialData` is already fully interpreted and flattened by `createIdMapFromData`.
-				// We just need to iterate through the schema's *final* property keys and write the values.
-				const propInfo = info.properties[propKey]
-				if (!propInfo) continue // Skip properties that don't exist in the final schema (like original array names)
-
-				// Align the current offset to meet the requirement of the current property.
-				// This logic must now mirror the SchemaCompiler's internal alignment.
-				const componentBaseOffset = componentOffsets.get(typeID)
-				let writeOffset = componentBaseOffset + propInfo.offset
-				const alignment = propInfo.alignment
-				if (alignment > 0 && writeOffset % alignment !== 0) {
-					writeOffset += alignment - (writeOffset % alignment)
-				}
-
-				const value = initialData[propKey] ?? compiledDefaults[propKey]
-
-				this._writeValue(payloadView, writeOffset, value, propInfo.type)
-
-				// Create a mutator for this property.
-				// We create mutators for the original, high-level properties, not the flattened ones.
-				const rep = info.representations[propKey]
-				if (rep) {
-					// This is a high-level property like 'position' or 'tags'
-					if (rep.type === 'flat_array') {
-						// Use the item's representation to get the correct constructor.
-						const itemConstructor = Schema.TYPED_ARRAY_MAP[rep.itemRepresentation.type]
-						// Create mutators for the array and its length property
-						const arrayStartOffset = componentBaseOffset + info.properties[`${propKey}0`].offset
-						mutators[componentName][propKey] = new itemConstructor(payloadBuffer, arrayStartOffset, rep.capacity)
-						mutators[componentName][rep.lengthProperty] = new info.properties[rep.lengthProperty].arrayConstructor(
-							payloadBuffer,
-							componentBaseOffset + info.properties[rep.lengthProperty].offset,
-							1,
-						)
-					} else {
-						mutators[componentName][propKey] = new propInfo.arrayConstructor(payloadBuffer, writeOffset, 1)
-					}
-				}
-			} // end for(originalPropKey)
-		} // end for(typeID)
-
-		const payload = {
-			archetypeId,
-			data: payloadBuffer,
-		}
-
-		// The payload itself is mutable via the mutators, but the structure of the
-		// returned object is frozen to prevent accidental modification.
-		return Object.freeze({ payload, mutators: Object.freeze(mutators) })
+	compileComponents(typeIDs, data = {}) {
+		// This will be the main way of pre-compiling data for a single entity's components.
+		// It will be SoA-based for efficient single-entity structural changes.
+		// `compileComponent` will become an alias for this with a single typeID.
+		throw new Error('compileComponents is not yet implemented.')
 	}
 
 	/**
-	 * The internal, low-level workhorse for compiling a payload into a "flattened" SoA binary format.
+	 * [FUTURE] Pre-compiles a payload for one or more components for a BATCH of entities.
+	 * This will be used for efficient, query-based batch modifications.
+	 * @param {number[]} typeIDs - An array of component type IDs.
+	 * @param {object} [data={}] - A data object where keys are component names.
+	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}}
+	 */
+	compileComponentsForEntities(typeIDs, data = {}) {
+		// This will be AoS-based for efficient batch creation/modification of many entities.
+		throw new Error('compileComponentsForEntities is not yet implemented.')
+	}
+
+	/**
+	 * The internal, low-level workhorse for compiling a payload into a "flattened struct" binary format.
 	 * This format is a single ArrayBuffer containing the data for one entity, with components laid out sequentially.
 	 * @param {number} archetypeId The target archetype for the entity.
 	 * @param {Map<number, object>} componentDataMap A map of componentTypeID to its high-level data object.
 	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}} A payload object with its mutators.
 	 * @private
 	 */
-	_compileSoA(archetypeId, componentDataMap) {
+	_compile(archetypeId, componentDataMap) {
 		const sortedTypeIDs = this.entityManager.getComponentTypeIDsForArchetype(archetypeId)
 		if (!sortedTypeIDs) {
 			throw new Error(`PayloadCompiler: Archetype with ID ${archetypeId} not found.`)
@@ -253,39 +171,13 @@ class PayloadCompiler {
 			const initialData = componentDataMap.get(typeID) || {}
 
 			mutators[componentName] = {}
-			// Iterate over original schema keys to correctly create mutators for high-level properties like flat_arrays
-			for (const propKey of info.originalSchemaKeys) {
-				const propInfo = info.properties[propKey]
-				const rep = info.representations[propKey]
-				if (!rep) continue // Skip implicit properties like 'flat_array_count'
 
-				const componentBaseOffset = componentOffsets.get(typeID)
-
-				if (rep.type === 'flat_array') {
-					const itemConstructor = Schema.TYPED_ARRAY_MAP[rep.itemRepresentation.type]
-					const arrayStartOffset = componentBaseOffset + info.properties[`${propKey}0`].offset
-					mutators[componentName][propKey] = new itemConstructor(payloadBuffer, arrayStartOffset, rep.capacity)
-
-					const lengthPropInfo = info.properties[rep.lengthProperty]
-					const lengthPropOffset = componentBaseOffset + lengthPropInfo.offset
-
-					mutators[componentName][rep.lengthProperty] = new info.properties[rep.lengthProperty].arrayConstructor(
-						payloadBuffer,
-						lengthPropOffset,
-						1,
-					)
-				} else if (propInfo) {
-					const componentBaseOffset = componentOffsets.get(typeID)
-					let writeOffset = componentBaseOffset + propInfo.offset
-					const alignment = propInfo.alignment
-					if (alignment > 0 && writeOffset % alignment !== 0) {
-						writeOffset += alignment - (writeOffset % alignment)
-					}
-					// console.log(`[PayloadCompiler] Mutator for ${componentName}.${propKey}: base=${componentBaseOffset}, propOffset=${propInfo.offset}, finalOffset=${writeOffset}, align=${alignment}`);
-					mutators[componentName][propKey] = new propInfo.arrayConstructor(payloadBuffer, writeOffset, 1)
-				}
+			// Execute the pre-compiled mutator factory functions from the schema.
+			const componentBaseOffset = componentOffsets.get(typeID)
+			for (const factory of info.mutatorFactories) {
+				factory(mutators[componentName], payloadBuffer, componentBaseOffset, info)
 			}
-			for (const propKey of info.propertyKeys) {
+			for (const propKey of info.propertyKeys) { // Now iterate all final properties to write data
 				// Now iterate all final properties to write data
 				const propInfo = info.properties[propKey]
 				if (!propInfo) continue
@@ -297,7 +189,6 @@ class PayloadCompiler {
 				if (alignment > 0 && writeOffset % alignment !== 0) {
 					writeOffset += alignment - (writeOffset % alignment)
 				}
-				// console.log(`[PayloadCompiler] Writing ${componentName}.${propKey}: base=${componentBaseOffset}, propOffset=${propInfo.offset}, finalOffset=${writeOffset}, align=${alignment}, value=${value}`);
 				this._writeValue(payloadView, writeOffset, value, propInfo.type)
 			}
 		}

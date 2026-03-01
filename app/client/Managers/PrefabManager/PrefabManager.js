@@ -27,6 +27,18 @@ const { PrefabLoader } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabLoad
  * 2.  **Decoupling:** This completely decouples the game logic from the file system structure. You can reorganize your asset folders, and you only need to update the manifest, not your game code.
  * 3.  **Flexibility & Modding:** This design is incredibly powerful for modding. A mod can introduce new items, characters, or effects simply by providing its own manifest file that the engine loads and merges. It also makes creating developer tools (like a level editor with a dropdown of spawnable objects) trivial.
 
+ * ---
+ * ### TODO: Dynamic Prefab Registration
+ * A potential future feature is to allow dynamic registration of prefabs at runtime via a
+ * `prefabManager.registerPrefab(name, data, [saveToDisc])` method. This would be highly beneficial for:
+ * - Unit testing (to avoid file I/O).
+ * - Procedurally generated content.
+ * - Live-editing tools.
+ * A robust implementation would need to handle ID assignment, potential name collisions,
+ * and re-processing of dependent prefabs if the new prefab is an `extends` target.
+ * This is not a current priority but is a valuable architectural consideration.
+ * ---
+
 
  */
 export class PrefabManager {

@@ -280,83 +280,98 @@ export class CommandBufferExecutor {
 	 * @private
 	 */
 	_buildAndExecuteMoveBatches(modifications, reader, currentTick) {
-		// The new batching structure: Map<sourceChunk, Map<targetArchetypeId, moveBatch>>
-		// moveBatch = { entityIds: number[], sourceIndices: number[], componentsToAssign: Map<typeId, { dataOffsets: number[], dataLengths: number[] }> }
-		const movesByChunk = new Map()
+		// --- 1. Gather & Consolidate Pass ---
+		// First, determine the net structural change for each unique entity.
+		const entityTransitions = new Map() // Map<entityId, { sourceArchetypeId: number, targetMask: bigint, componentsToAdd: Map<typeId, {dataOffset, dataLength}> }>
 
-		// Process additions (SoA path)
+		// Helper to ensure an entity is in the transition map before processing a modification for it.
+		const ensureTransition = entityId => {
+			if (!entityTransitions.has(entityId)) {
+				const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId)
+				if (sourceArchetypeId === undefined) return null // Entity might have been destroyed
+				entityTransitions.set(entityId, {
+					sourceArchetypeId,
+					targetMask: entityStore.archetypeMasks[sourceArchetypeId],
+					componentsToAdd: new Map(),
+				})
+			}
+			return entityTransitions.get(entityId)
+		}
+
+		// Process Additions
 		for (const [componentTypeID, addBatch] of modifications.add.entries()) {
-			const { entityIds, dataOffsets, dataLengths } = addBatch
-			for (let i = 0; i < entityIds.length; i++) {
-				const entityId = entityIds[i]
-				const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId)
-				if (sourceArchetypeId === undefined) continue
+			const bitflag = Schema.componentBitFlags[componentTypeID]
+			for (let i = 0; i < addBatch.entityIds.length; i++) {
+				const entityId = addBatch.entityIds[i]
+				const transition = ensureTransition(entityId)
+				if (!transition) continue
 
-				const location = this.entityManager.getEntityLocation(entityId)
-				if (!location || this.entityManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
-
-				const sourceChunkId = location.chunkId
-				const targetArchetypeId = this.entityManager.getArchetypeByMask(
-					entityStore.archetypeMasks[sourceArchetypeId] | Schema.componentBitFlags[componentTypeID]
-				)
-
-				// --- Gather into the new batch structure ---
-				if (!movesByChunk.has(sourceChunkId)) movesByChunk.set(sourceChunkId, new Map())
-				const chunkMoves = movesByChunk.get(sourceChunkId)
-
-				if (!chunkMoves.has(targetArchetypeId)) {
-					chunkMoves.set(targetArchetypeId, {
-						entityIds: [],
-						sourceIndices: [],
-						componentsToAssign: new Map(),
-					})
-				}
-				const moveBatch = chunkMoves.get(targetArchetypeId)
-				moveBatch.entityIds.push(entityId)
-				moveBatch.sourceIndices.push(location.indexInChunk)
-
-				// Add the component data to be assigned
-				if (!moveBatch.componentsToAssign.has(componentTypeID)) {
-					moveBatch.componentsToAssign.set(componentTypeID, { dataOffsets: [], dataLengths: [] })
-				}
-				moveBatch.componentsToAssign.get(componentTypeID).dataOffsets.push(dataOffsets[i])
-				moveBatch.componentsToAssign.get(componentTypeID).dataLengths.push(dataLengths[i])
+				transition.targetMask |= bitflag
+				transition.componentsToAdd.set(componentTypeID, {
+					dataOffset: addBatch.dataOffsets[i],
+					dataLength: addBatch.dataLengths[i],
+				})
 			}
 		}
 
-		// Process removals
+		// Process Removals
 		for (const [componentTypeID, entityIds] of modifications.remove.entries()) {
+			const bitflag = Schema.componentBitFlags[componentTypeID]
 			for (const entityId of entityIds) {
-				const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId)
-				if (sourceArchetypeId === undefined) continue
-
-				const location = this.entityManager.getEntityLocation(entityId)
-				if (!location || !this.entityManager.hasComponentType(sourceArchetypeId, componentTypeID)) continue
-
-				const sourceChunkId = location.chunkId
-				const targetArchetypeId = this.entityManager.getArchetypeByMask(
-					entityStore.archetypeMasks[sourceArchetypeId] & ~Schema.componentBitFlags[componentTypeID]
-				)
-
-				// --- Gather into the new batch structure ---
-				if (!movesByChunk.has(sourceChunkId)) movesByChunk.set(sourceChunkId, new Map())
-				const chunkMoves = movesByChunk.get(sourceChunkId)
-
-				if (!chunkMoves.has(targetArchetypeId)) {
-					chunkMoves.set(targetArchetypeId, { entityIds: [], sourceIndices: [], componentsToAssign: new Map() }) // ew
-				}
-				const moveBatch = chunkMoves.get(targetArchetypeId)
-				moveBatch.entityIds.push(entityId)
-				moveBatch.sourceIndices.push(location.indexInChunk)
+				const transition = ensureTransition(entityId)
+				if (!transition) continue
+				transition.targetMask &= ~bitflag
 			}
 		}
 
-		// --- Blit Pass ---
-		// Now execute batches.
+		// --- 2. Build Move Batches ---
+		// Group entities by their exact move operation to form compatible batches.
+		const movesByChunk = new Map() // Map<sourceChunkId, Map<targetArchetypeId, moveBatch>>
+
+		for (const [entityId, transition] of entityTransitions.entries()) {
+			const { sourceArchetypeId, targetMask, componentsToAdd } = transition
+			const targetArchetypeId = this.entityManager.getArchetypeByMask(targetMask)
+
+			// If the net change results in no archetype change, skip.
+			if (targetArchetypeId === sourceArchetypeId) continue
+
+			const location = this.entityManager.getEntityLocation(entityId)
+			if (!location || location.archetypeId !== sourceArchetypeId) continue
+
+			const sourceChunkId = location.chunkId
+
+			if (!movesByChunk.has(sourceChunkId)) movesByChunk.set(sourceChunkId, new Map())
+			const chunkMoves = movesByChunk.get(sourceChunkId)
+
+			if (!chunkMoves.has(targetArchetypeId)) {
+				chunkMoves.set(targetArchetypeId, {
+					entityIds: [],
+					sourceLocations: [],
+					componentsToAssign: new Map(),
+				})
+			}
+			const moveBatch = chunkMoves.get(targetArchetypeId)
+
+			moveBatch.entityIds.push(entityId)
+			moveBatch.sourceLocations.push(location)
+
+			// Populate the component data to be assigned for this entity.
+			for (const [typeID, dataInfo] of componentsToAdd.entries()) {
+				if (!this.entityManager.hasComponentType(sourceArchetypeId, typeID)) {
+					if (!moveBatch.componentsToAssign.has(typeID)) {
+						moveBatch.componentsToAssign.set(typeID, { dataOffsets: [], dataLengths: [] })
+					}
+					const addBatch = moveBatch.componentsToAssign.get(typeID)
+					addBatch.dataOffsets.push(dataInfo.dataOffset)
+					addBatch.dataLengths.push(dataInfo.dataLength)
+				}
+			}
+		}
+
+		// --- 3. Blit Pass (Execution) ---
 		for (const [sourceChunkId, targets] of movesByChunk.entries()) {
 			for (const [targetArchetypeId, moveBatch] of targets.entries()) {
-				const { entityIds, sourceIndices, componentsToAssign } = moveBatch
-				const sourceLocations = sourceIndices.map(indexInChunk => ({ chunkId: sourceChunkId, indexInChunk }))
+				const { entityIds, sourceLocations, componentsToAssign } = moveBatch
 				const sourceArchetypeId = entityStore.chunkArchetypeIds[sourceChunkId]
 
 				this.entityManager._addEntitiesByCopyingBatch(
@@ -368,6 +383,7 @@ export class CommandBufferExecutor {
 					reader,
 					currentTick
 				)
+				// This can now safely remove the batch of entities from their original archetype
 				this.entityManager._removeEntitiesBatch(sourceArchetypeId, entityIds)
 			}
 		}

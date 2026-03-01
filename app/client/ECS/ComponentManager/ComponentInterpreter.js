@@ -78,9 +78,13 @@ export function interpret(typeID, data) {
 				for (let i = 0; i < capacity; i++) {
 					const key = `${propName}${i}`
 					if (i < liveLength) {
-						// We now expect raw numeric values for enums/bitmasks in arrays.
 						const value = sourceArray[i] ?? 0
-						rawData[key] = itemRepresentation.originalType === 'string' ? stringInterningTable.intern(value) : value
+						let interpretedValue = value
+						// Interpret string-based values for enums and strings within the array.
+						if (itemRepresentation.originalType === 'string' && typeof value === 'string') {
+							interpretedValue = stringInterningTable.intern(value)
+						}
+						rawData[key] = interpretedValue
 					} else {
 						rawData[key] = 0
 					}

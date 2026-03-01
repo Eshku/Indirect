@@ -1,0 +1,47 @@
+{
+  "meta": {
+    "image": "atlas.png",
+    "size": {
+      "w": 128,
+      "h": 128
+    }
+  },
+  "frames": {
+    "spinner": {
+      "frame": {
+        "x": 2,
+        "y": 2,
+        "w": 32,
+        "h": 32
+      },
+      "sourceSize": {
+        "w": 32,
+        "h": 32
+      }
+    },
+    "player_ship": {
+      "frame": {
+        "x": 36,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 64
+      }
+    },
+    "projectile_player": {
+      "frame": {
+        "x": 102,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "sourceSize": {
+        "w": 4,
+        "h": 4
+      }
+    }
+  }
+}

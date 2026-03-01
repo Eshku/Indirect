@@ -85,7 +85,6 @@ export class ComponentManager {
 		this.componentConstants = Schema.componentConstants
 		this.compiledDefaults = Schema.compiledDefaults
 
-		this.propertyGroupManager = null // self-reference after init
 		this.entityManager = null // self-reference after init
 		this._cachedComponentsObject = null
 		this.EMPTY_BITMASK = 0n
@@ -100,7 +99,6 @@ export class ComponentManager {
 
 		this.entityManager = ecs.entityManager
 
-		// The old propertyGroupManager is no longer needed.
 		await this.registerComponents(componentModules)
 	}
 

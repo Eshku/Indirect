@@ -37,6 +37,7 @@ export class ApplyVelocity {
 					posDirtyTicks[indexInChunk] = currentTick
 					wasModified = true
 				}
+
 			}
 			if (wasModified) chunk.markChunkDirty(this.position, currentTick)
 		}

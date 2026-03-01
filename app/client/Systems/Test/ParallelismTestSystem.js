@@ -55,9 +55,9 @@ export class ParallelismTestSystem {
 		this.debugLabels = new Map()
 		this.spritesInitialized = false
 
-		layerManager.getLayer('gameWorld').addChild(this.particleContainer)
-		layerManager.getLayer('gameWorld').addChild(this.labelBackgrounds)
-		layerManager.getLayer('gameWorld').addChild(this.textContainer)
+		layerManager.getLayer('gameContainer').addChild(this.particleContainer)
+		layerManager.getLayer('gameContainer').addChild(this.labelBackgrounds)
+		layerManager.getLayer('gameContainer').addChild(this.textContainer)
 
 		// Create a reusable 4x4 white texture for the sprites.
 		// This is much more performant than drawing graphics every frame.
@@ -78,7 +78,7 @@ export class ParallelismTestSystem {
 		this.topMargin = 50 // The space at the top to reserve for labels.
 
 		// number of columns will be derived from these settings.
-		this.totalChunksToCreate = 60 // Total number of chunks to fill with test entities.
+		this.totalChunksToCreate = 40 // Total number of chunks to fill with test entities.
 		this.chunksPerColumn = 10 // Each column will be made of entities from this many chunks.
 
 		this.leftBoundary = this.worldWidth * 0.1

@@ -3,6 +3,8 @@ const { ecs, layerManager, gameManager } = engine.getManagers()
 const { queryManager } = ecs
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
 
+//! Going to need culling.
+
 export class CameraSystem {
 	constructor() {
 		const { playerTag, position } = ecs.getTypeIDs()
@@ -13,6 +15,8 @@ export class CameraSystem {
 		})
 
 		this.playerId = null
+
+		this.starfieldSprite = null
 
 		this.camera = { x: 0, y: 0 }
 
@@ -41,6 +45,9 @@ export class CameraSystem {
 					gameContainer.x = Math.round(-this.camera.x + this.screenWidth / 2)
 					gameContainer.y = Math.round(-this.camera.y + this.screenHeight / 2)
 				}
+
+				// Get a reference to the background sprite.
+				this.starfieldSprite = layerManager.get('starfieldSprite')
 				return
 			}
 		}
@@ -57,7 +64,7 @@ export class CameraSystem {
 		return false
 	}
 
-	update({deltaTime, currentTick}) {
+	update({ deltaTime, currentTick }) {
 		this.screenWidth = gameManager.getApp().screen.width
 		this.screenHeight = gameManager.getApp().screen.height
 
@@ -80,6 +87,23 @@ export class CameraSystem {
 			this.camera.x = lerp(this.camera.x, desiredX, this.smoothingFactorX * deltaTime)
 			this.camera.y = lerp(this.camera.y, desiredY, this.smoothingFactorY * deltaTime)
 
+			// Update the tiling background position to create the illusion of movement.
+			if (this.starfieldSprite) {
+				// --- Background Scrolling Logic ---
+				// The `tilePosition` property of a PIXI.TilingSprite controls the texture's offset.
+				// To create the illusion of moving through an infinite space, we tie this offset
+				// directly to the camera's logical position.
+
+				// `this.camera.x` tracks the player's world X position.
+				// `this.camera.y` tracks the player's *inverted* world Y position (-player.y).
+
+				// By setting the tilePosition to the negative of the camera's coordinates, we
+				// ensure the background texture scrolls correctly with the player's movement.
+				// While seemingly counter-intuitive, this produces the desired visual effect.
+				this.starfieldSprite.tilePosition.x = -this.camera.x
+				this.starfieldSprite.tilePosition.y = -this.camera.y
+			}
+
 			const gameContainer = layerManager.getLayer('gameContainer')
 			if (!gameContainer) return
 
@@ -93,6 +117,9 @@ export class CameraSystem {
 
 	calculateTargetPosition(playerPosition) {
 		const desiredX = playerPosition.x
+		// Invert the Y-axis. The game world uses a Y-Up coordinate system (like in math),
+		// but the rendering/screen space uses a Y-Down system. The camera's internal `y`
+		// stores the inverted value to make calculations for screen-space objects easier.
 		const desiredY = -playerPosition.y
 		return { desiredX, desiredY }
 	}

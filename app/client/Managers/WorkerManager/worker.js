@@ -35,6 +35,7 @@ class WorkerEntry {
 		this.allDeques = []
 		this.chunkViewInstance = null
 		this.importFromString = null
+		this.spatialHashGrid = null
 
 		// --- Reusable Arrays to Reduce GC Pressure ---
 		// These are used in hot paths to avoid allocating new arrays on every job.
@@ -80,6 +81,7 @@ class WorkerEntry {
 			frameContextSAB,
 			mainThreadInbox,
 			dequeBuffers,
+			spatialHashGridSABs,
 			sharedData,
 			prebuiltLogics,
 			initialChunks,
@@ -126,15 +128,25 @@ class WorkerEntry {
 			const mpscQueueModuleUrl = new URL('../../Core/Algorithms/MPSCQueue.js', baseUrl)
 			const dequeModuleUrl = new URL('../../Core/Algorithms/WorkStealingDeque.js', baseUrl)
 
-			const [chunkViewModule, blobUtilModule, mpscQueueModule, dequeModule, jobLayoutModule, frameStateLayoutModule] =
-				await Promise.all([
-					import(chunkViewModuleUrl.href),
-					import(blobUtilModuleUrl.href),
-					import(mpscQueueModuleUrl.href),
-					import(dequeModuleUrl.href),
-					import(jobLayoutModuleUrl.href),
-					import(frameStateLayoutModuleUrl.href),
-				])
+			const spatialHashGridModuleUrl = new URL('../../Core/DataStructures/SpatialHashGrid.js', baseUrl)
+
+			const [
+				chunkViewModule,
+				blobUtilModule,
+				mpscQueueModule,
+				dequeModule,
+				jobLayoutModule,
+				frameStateLayoutModule,
+				spatialHashGridModule,
+			] = await Promise.all([
+				import(chunkViewModuleUrl.href),
+				import(blobUtilModuleUrl.href),
+				import(mpscQueueModuleUrl.href),
+				import(dequeModuleUrl.href),
+				import(jobLayoutModuleUrl.href),
+				import(frameStateLayoutModuleUrl.href),
+				import(spatialHashGridModuleUrl.href),
+			])
 
 			// Assign all the imported constants to the worker instance for easy access.
 			Object.assign(this, jobLayoutModule)
@@ -153,6 +165,7 @@ class WorkerEntry {
 			const { importFromString } = blobUtilModule
 			const { MPSCQueue } = mpscQueueModule
 			const { WorkStealingDeque, NO_JOB_AVAILABLE } = dequeModule
+			const { SpatialHashGrid } = spatialHashGridModule
 			// Assign the imported classes and functions to the worker instance.
 			this.ChunkView = ChunkView
 			this.importFromString = importFromString
@@ -166,6 +179,11 @@ class WorkerEntry {
 			}
 
 			this.chunkViewInstance = new this.ChunkView(entityStore)
+
+			// Create the worker's local instance of the SpatialHashGrid API.
+			this.spatialHashGrid = new SpatialHashGrid(spatialHashGridSABs)
+			// Make it available on the global worker scope so schedule functions can access it.
+			self.spatialHashGrid = this.spatialHashGrid
 
 			// All workers get a handle to the same MPSC queue to send jobs to the main thread.
 			this.mainThreadInbox = new MPSCQueue(mainThreadInbox)

@@ -1099,40 +1099,33 @@ export class EntityManager {
 	 * @private
 	 */
 	_reinitializeChunk(chunkId, archetypeId) {
-		// This is an intelligent re-initialization. Instead of re-allocating all buffers,
-		// we reuse the existing ones and only add/remove what's necessary.
-
 		const capacity = entityStore.chunkCapacities[chunkId]
 		const oldArchetypeId = entityStore.chunkArchetypeIds[chunkId] // Get the archetype it USED to be.
+
+		// Keep a reference to the old data objects before we replace them.
+		const oldComponentData = entityStore.chunkComponentData[chunkId]
+		const oldDirtyTicks = entityStore.chunkDirtyTicks[chunkId]
 
 		// Reset the chunk's core metadata.
 		entityStore.chunkArchetypeIds[chunkId] = archetypeId
 		entityStore.chunkSizes[chunkId] = 0
 
+		// Create fresh containers for the new archetype's data. The entities buffer is always kept.
+		const newComponentData = { entities: oldComponentData.entities }
+		const newDirtyTicks = {}
+
 		// Get component lists for old and new archetypes.
 		const oldComponentIds = new Set(this.getComponentTypeIDsForArchetype(oldArchetypeId))
 		const newComponentIds = this.getComponentTypeIDsForArchetype(archetypeId)
 
-		// 1. Remove references to components that are no longer in the archetype.
-		// This allows their buffers to be garbage collected.
-		for (const typeID of oldComponentIds) {
-			if (!this.hasComponentType(archetypeId, typeID)) {
-				entityStore.chunkComponentData[chunkId][typeID] = undefined
-				// The per-entity dirty tick array can be cleared.
-				entityStore.chunkDirtyTicks[chunkId][typeID] = undefined
-			}
-		}
-		// The chunkArchetypeDirtyTicks buffer is now the wrong size. We must de-reference it
-		// and create a new one for the new archetype.
-		entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined
-		const newComponentCount = this.getComponentTypeIDsForArchetype(archetypeId).length
-		const archetypeTicksBuffer = new SharedArrayBuffer(newComponentCount * Uint32Array.BYTES_PER_ELEMENT)
-		entityStore.chunkArchetypeDirtyTicks[chunkId] = new Uint32Array(archetypeTicksBuffer)
-
-		// 2. Add buffers for components that are new to this archetype.
+		// Rebuild the data structures for the new archetype.
 		for (const typeID of newComponentIds) {
-			if (!oldComponentIds.has(typeID)) {
-				// This component is new, so we must allocate buffers for it.
+			if (oldComponentIds.has(typeID)) {
+				// This component is shared, so we reuse its buffers.
+				newComponentData[typeID] = oldComponentData[typeID]
+				newDirtyTicks[typeID] = oldDirtyTicks[typeID]
+			} else {
+				// This component is new, so we must allocate new buffers for it.
 				const info = Schema.componentInfo[typeID]
 				const propArrays = {}
 				for (const propKey of info.propertyKeys) {
@@ -1140,12 +1133,24 @@ export class EntityManager {
 					const buffer = new SharedArrayBuffer(capacity * constructor.BYTES_PER_ELEMENT)
 					propArrays[propKey] = new constructor(buffer)
 				}
-				entityStore.chunkComponentData[chunkId][typeID] = propArrays
-				entityStore.chunkDirtyTicks[chunkId][typeID] = new Uint32Array(
+				newComponentData[typeID] = propArrays
+				newDirtyTicks[typeID] = new Uint32Array(
 					new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT),
 				)
 			}
 		}
+
+		// Assign the newly constructed data objects to the chunk.
+		// The old objects (oldComponentData, oldDirtyTicks) and any un-reused buffers
+		// are now unreferenced and will be garbage collected.
+		entityStore.chunkComponentData[chunkId] = newComponentData
+		entityStore.chunkDirtyTicks[chunkId] = newDirtyTicks
+
+		// The chunkArchetypeDirtyTicks buffer is size-dependent, so it must always be recreated.
+		entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined // De-reference old one
+		const newComponentCount = newComponentIds.length
+		const archetypeTicksBuffer = new SharedArrayBuffer(newComponentCount * Uint32Array.BYTES_PER_ELEMENT)
+		entityStore.chunkArchetypeDirtyTicks[chunkId] = new Uint32Array(archetypeTicksBuffer)
 
 		// Add the re-purposed chunk to its new archetype's list.
 		const archetypeChunks = entityStore.archetypeChunks[archetypeId]

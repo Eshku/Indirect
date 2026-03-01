@@ -4,6 +4,7 @@ const MANAGER_INIT_ORDER = [
 	// Non-ECS Services & Low-Level ECS ---
 	// These have minimal dependencies and provide foundational services.
 	'LayerManager',
+	'PhysicsManager',
 	'GameManager',
 	'AssetManager',
 
@@ -11,7 +12,6 @@ const MANAGER_INIT_ORDER = [
 	// These depend on a fully initialized ECS.
 	`WorkerManager`,
 	'ECS',
-	//'PropertyGroupManager', // Depends on ComponentManager, does not need to be initialized there
 	'UiManager',
 	'InputManager',
 
@@ -128,6 +128,9 @@ export class Engine {
 
 		const { workerManager } = await import(`${PATH_MANAGERS}/WorkerManager/WorkerManager.js`)
 		loadedManagers.set('WorkerManager', workerManager)
+
+		const { physicsManager } = await import(`${PATH_MANAGERS}/PhysicsManager/PhysicsManager.js`)
+		loadedManagers.set('PhysicsManager', physicsManager)
 
 		return loadedManagers
 	}

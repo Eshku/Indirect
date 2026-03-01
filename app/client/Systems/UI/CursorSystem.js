@@ -1,9 +1,11 @@
 const { Cursor } = await import(`${PATH_UI}/Cursor.js`)
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
 const { Easing } = await import(`${PATH_CORE}/utils/easing.js`)
-const { lerpColor } = await import(`${PATH_CORE}/utils/lerp.js`)
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
-
+const { ecs } = engine.getManagers()
+const { payloadCompiler } = ecs
+const { lerpColor } = await import(`${PATH_CORE}/utils/lerp.js`)
+const { CursorState: CursorStateDef } = await import(`${PATH_CLIENT}/Components/UI/CursorState.js`)
 
 const DEFAULT_STATES = {
 	// Default "aiming" state when over empty ground.
@@ -76,6 +78,8 @@ const DEFAULT_STATES = {
 
 const TRANSITION_DURATION = 0.25 // seconds
 
+//TODO use cursor entity, so data can be read by other systems
+
 /**
  * A system dedicated to creating, managing, and updating the cursor.
  * It controls the cursor's position, visual state, and special effects
@@ -88,21 +92,24 @@ export class CursorSystem {
 		this.pixiApp = null
 		this.renderer = null
 		this.cursor = null
+		this.commands = null // Injected by SystemManager
 
-		// --- Injected by init() ---
-		this.componentManager = null
-		this.queryManager = null
-		this.uiManager = null
-		this.layerManager = null
-		this.gameManager = null
-		this.entityManager = null
+		// --- Component/Entity State ---
+		const { position, cursorTag, cursorState } = ecs.getTypeIDs()
+		this.positionComponent = position
+		this.cursorStateComponent = cursorState
+		this.cursorQuery = ecs.queryManager.getQuery({ with: [cursorTag] })
+		this.cursorEntityId = null
+		this.positionPayload = null
+		this.cursorStatePayload = null
 
-		// State management
+		// --- Visual State Management ---
 		this.states = DEFAULT_STATES
+		this.cursorStateFlags = CursorStateDef.flags.of
 		this.sourceStateName = 'default'
 		this.targetStateName = 'default'
 		this.transition = {
-			progress: 1.0, // 0 = start, 1 = end
+			progress: 1.0,
 		}
 		this.currentVisuals = { ...this.states.default } // Holds interpolated visual values
 		this.stateTextures = {} // Cache for generated textures
@@ -121,24 +128,34 @@ export class CursorSystem {
 		this.isSettled = false
 		this.lastTrailPoint = { x: -1, y: -1 }
 		this.minTrailPointDistanceSq = 4 // pixels squared (2*2)
-
 	}
 
 	/**
 	 * Initializes the system. This is called by the SystemManager once.
 	 */
 	async init() {
-		const { uiManager, layerManager, gameManager } = engine.getManagers()
-		this.uiManager = uiManager
-		this.layerManager = layerManager
-		this.gameManager = gameManager
+		const { layerManager, gameManager } = engine.getManagers()
 
-		this.pixiApp = this.gameManager.getApp()
+		this.pixiApp = gameManager.getApp()
 		this.renderer = this.pixiApp.renderer
-		const cursorLayer = this.layerManager.getLayer('cursor')
+		const cursorLayer = layerManager.getLayer('cursor')
 
 		// Create the visual cursor component
 		this.cursor = new Cursor(this.pixiApp, cursorLayer)
+
+		// Find the cursor entity that was instantiated from the prefab
+		for (const chunk of this.cursorQuery.iter()) {
+			this.cursorEntityId = chunk.entities[0]
+		}
+
+		if (this.cursorEntityId === null) {
+			console.error('CursorSystem: Could not find the cursor entity. Was it instantiated at startup?')
+			return // Stop initialization if the entity isn't found
+		}
+
+		// Pre-compile payloads for updating components. This is a one-time setup.
+		this.positionPayload = payloadCompiler.compileComponent(this.positionComponent, { x: 0, y: 0 })
+		this.cursorStatePayload = payloadCompiler.compileComponent(this.cursorStateComponent, { flags: 0 })
 
 		// Pre-generate all state textures
 		await this._generateAllStateTextures()
@@ -156,7 +173,6 @@ export class CursorSystem {
 		this.cursor.updateVisuals(this.currentVisuals, 1.0)
 		this.cursor.setScreenPosition(this.visualPosition.x, this.visualPosition.y)
 		this.cursor.show()
-
 	}
 
 	/**
@@ -164,7 +180,6 @@ export class CursorSystem {
 	 * @param {object} context - The frame context object.
 	 */
 	update({ deltaTime }) {
-
 		// 1. Update hardware position from input
 		const pointer = this.renderer.events.pointer
 		this.hardwarePosition.x = pointer.global.x
@@ -202,6 +217,22 @@ export class CursorSystem {
 
 		// 3. Update smoothed visual position
 		this.updatePosition(deltaTime)
+
+		// 4. Write data to the cursor entity
+		if (this.cursorEntityId !== null) {
+			// Update position component
+			const posMutators = this.positionPayload.mutators.position
+			posMutators.x[0] = this.visualPosition.x
+			posMutators.y[0] = this.visualPosition.y
+			this.commands.setComponentData(this.cursorEntityId, this.positionPayload.payload)
+
+			// Update state component
+			const stateFlag = this.cursorStateFlags[this.targetStateName.toUpperCase()] || this.cursorStateFlags.DEFAULT
+			this.cursorStatePayload.mutators.cursorState.flags[0] = stateFlag
+			this.commands.setComponentData(this.cursorEntityId, this.cursorStatePayload.payload)
+		}
+
+		// 5. Update visual transitions and effects
 		this.updateTransition(deltaTime)
 		this.updateTrail(this.visualPosition)
 	}
@@ -238,9 +269,10 @@ export class CursorSystem {
 	 * @private
 	 */
 	updateState() {
+		const { uiManager } = engine.getManagers()
 		// TODO: Implement entity hover detection
 		const hoveredEntity = null // Placeholder for now
-		const hoveredElement = this.uiManager.getHoveredElement(this.hardwarePosition)
+		const hoveredElement = uiManager.getHoveredElement(this.hardwarePosition)
 
 		// Determine the new state based on a priority system
 		let newStateName = 'default'

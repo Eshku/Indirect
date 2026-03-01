@@ -26,6 +26,16 @@ const PrimitiveTypeProcessors = Object.keys(TYPED_ARRAY_MAP).reduce((processors,
 			}
 			const offset = componentInfo.byteSize
 
+			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
+				let writeOffset = componentBaseOffset + offset
+				if (alignment > 0 && writeOffset % alignment !== 0) {
+					writeOffset += alignment - (writeOffset % alignment)
+				}
+				mutators[propName] = new arrayConstructor(payloadBuffer, writeOffset, 1)
+			}
+
+			componentInfo.mutatorFactories.push(factory)
+
 			componentInfo.properties[propName] = {
 				type: definition.type,
 				alignment,
@@ -81,6 +91,16 @@ Object.assign(TypeProcessors, {
 				componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
 			}
 			const offset = componentInfo.byteSize
+
+			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
+				let writeOffset = componentBaseOffset + offset
+				if (alignment > 0 && writeOffset % alignment !== 0) {
+					writeOffset += alignment - (writeOffset % alignment)
+				}
+				mutators[propName] = new arrayConstructor(payloadBuffer, writeOffset, 1)
+			}
+
+			componentInfo.mutatorFactories.push(factory)
 
 			componentInfo.properties[propName] = {
 				type: storageType,
@@ -144,6 +164,16 @@ Object.assign(TypeProcessors, {
 				componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
 			}
 			const offset = componentInfo.byteSize
+
+			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
+				let writeOffset = componentBaseOffset + offset
+				if (alignment > 0 && writeOffset % alignment !== 0) {
+					writeOffset += alignment - (writeOffset % alignment)
+				}
+				mutators[propName] = new arrayConstructor(payloadBuffer, writeOffset, 1)
+			}
+
+			componentInfo.mutatorFactories.push(factory)
 
 			componentInfo.properties[propName] = {
 				type: storageType,
@@ -340,6 +370,26 @@ Object.assign(TypeProcessors, {
 			componentInfo.representations[propName].itemRepresentation = itemRepresentation
 			componentInfo.representations[propName].capacity = len
 
+			const itemConstructor = getTypedArrayConstructor(itemRepresentation.type)
+			const arrayStartPropName = `${propName}0`
+			const lengthPropName = userDefinedLengthProp || `${propName}_count`
+
+			const factory = (mutators, payloadBuffer, componentBaseOffset, info) => {
+				const arrayStartPropInfo = info.properties[arrayStartPropName]
+				const lengthPropInfo = info.properties[lengthPropName]
+
+				const arrayStartOffset = componentBaseOffset + arrayStartPropInfo.offset
+				mutators[propName] = new itemConstructor(payloadBuffer, arrayStartOffset, len)
+
+				if (lengthPropInfo) {
+					// This can fail if lengthPropInfo is not found, which it will be if the factory is created before the prop.
+					const lengthPropOffset = componentBaseOffset + lengthPropInfo.offset
+					mutators[lengthPropInfo.propName] = new lengthPropInfo.arrayConstructor(payloadBuffer, lengthPropOffset, 1)
+				}
+			}
+
+			componentInfo.mutatorFactories.push(factory)
+
 			const lengthProperty = userDefinedLengthProp || `${propName}_count`
 			componentInfo.representations[propName].lengthProperty = lengthProperty
 			if (componentInfo.originalSchemaKeys.indexOf(lengthProperty) === -1) {
@@ -351,6 +401,7 @@ Object.assign(TypeProcessors, {
 					arrayConstructor: lenArrayConstructor,
 					readMethod: `get${lenArrayConstructor.name.replace('Array', '')}`,
 					offset: componentInfo.byteSize, // This will be incorrect if not last, but it is.
+					propName: lengthProperty,
 				}
 				componentInfo.propertyKeys.push(lengthProperty)
 				implicitKeys.push(lengthProperty)
@@ -405,44 +456,37 @@ Object.assign(TypeProcessors, {
 
 			// Create representations for the implicit properties before delegating to another handler.
 			// This ensures the target handler finds the expected structure in componentInfo.
+			const streamPropName = `${propName}_rpnStream`
 			const streamPropDef = { of: streamDataType, capacity: streamCapacity }
-			componentInfo.representations[`${propName}_rpnStream`] = { type: 'flat_array', ...streamPropDef }
-			componentInfo.representations[`${propName}_formulaStarts`] = {
+			componentInfo.representations[streamPropName] = {
 				type: 'flat_array',
-				of: 'i16',
-				capacity: instanceCapacity,
+				originalKey: streamPropName,
+				...streamPropDef,
 			}
-			componentInfo.representations[`${propName}_formulaLengths`] = {
+
+			const startsPropName = `${propName}_formulaStarts`
+			const startsPropDef = { of: 'i16', capacity: instanceCapacity }
+			componentInfo.representations[startsPropName] = {
 				type: 'flat_array',
-				of: 'u8',
-				capacity: instanceCapacity,
+				originalKey: startsPropName,
+				...startsPropDef,
+			}
+
+			const lengthsPropName = `${propName}_formulaLengths`
+			const lengthsPropDef = { of: 'u8', capacity: instanceCapacity }
+			componentInfo.representations[lengthsPropName] = {
+				type: 'flat_array',
+				originalKey: lengthsPropName,
+				...lengthsPropDef,
 			}
 
 			// Delegate to the flat_array handler for the underlying data structures
 			const flatArrayHandler = TypeProcessors.flat_array
-			flatArrayHandler.parse(
-				`${propName}_rpnStream`,
-				{ of: streamDataType, capacity: streamCapacity },
-				componentInfo,
-				implicitKeys,
-				componentName,
-			)
+			flatArrayHandler.parse(streamPropName, streamPropDef, componentInfo, implicitKeys, componentName)
 			componentInfo.representations[propName].streamLengthProperty = `${propName}_rpnStream_count`
 
-			flatArrayHandler.parse(
-				`${propName}_formulaStarts`,
-				{ of: 'i16', capacity: instanceCapacity },
-				componentInfo,
-				implicitKeys,
-				componentName,
-			)
-			flatArrayHandler.parse(
-				`${propName}_formulaLengths`,
-				{ of: 'u8', capacity: instanceCapacity },
-				componentInfo,
-				implicitKeys,
-				componentName,
-			)
+			flatArrayHandler.parse(startsPropName, startsPropDef, componentInfo, implicitKeys, componentName)
+			flatArrayHandler.parse(lengthsPropName, lengthsPropDef, componentInfo, implicitKeys, componentName)
 		},
 	},
 })
@@ -450,18 +494,21 @@ Object.assign(TypeProcessors, {
 /**
  * Parses and compiles a component's declarative schema object.
  *
- * This compiler performs a one-time, start-up compilation of a component's schema.
- * It produces the low-level memory layout (`componentInfo`), a pre-compiled object
- * of default values in their final numeric form (`compiledDefaults`), and a set of
- * frozen constants for enums and bitmasks (`constants`).
+ * This compiler performs a one-time, start-up compilation of a component's schema. It produces a `componentInfo`
+ * object which is the complete blueprint for a component, containing:
+ * 1. The low-level memory layout (property offsets, total size, alignment).
+ * 2. A pre-compiled object of default values in their final numeric form (`compiledDefaults`).
+ * 3. A set of frozen constants for enums and bitmasks (`constants`).
+ * 4. A pre-compiled array of `mutatorFactories`—functions that know how to create runtime mutators for the component's properties.
  *
  * ---
- * ### DEV-NOTE: The Startup Parser
- * This service is the authority for the **one-time, startup schema parsing process**.
- * Its sole responsibility is to read the static `schema` from each component file,
- * calculate its memory layout (`componentInfo`), and pre-compile its constants. It acts
- * as a client of the stateless `ComponentInterpreter` to process the `default` values
- * into their raw, engine-friendly format.
+ * ### DEV-NOTE: The Architectural Blueprint Compiler
+ * This service is the authority for the **one-time, startup schema compilation process**.
+ * Its sole responsibility is to read a static `schema`, calculate its memory layout,
+ * and pre-compile all necessary metadata, including constants and mutator factory functions.
+ * It acts as a client of the stateless `ComponentInterpreter` to process `default` values
+ * into their raw, engine-friendly format. The `componentInfo` object it produces is the
+ * definitive blueprint used by all other parts of the engine.
  */
 export class SchemaCompiler {
 	/**
@@ -498,6 +545,7 @@ export class SchemaCompiler {
 			propertyKeys: [],
 			representations: {},
 			originalSchemaKeys: [],
+			mutatorFactories: [],
 			properties: {},
 			byteSize: 0,
 			alignment: 0,
@@ -615,23 +663,18 @@ export class SchemaCompiler {
 	 * @private
 	 */
 	_compileDefaults(componentInfo, compiledDefaults) {
+		const defaultValues = {}
 		for (const propName in componentInfo.representations) {
 			const rep = componentInfo.representations[propName]
-			if (rep.default === undefined) continue
-
-			// With numeric defaults for enums/bitmasks, we can assign them directly.
-			// For other simple types (u8, f32, etc.), default is already a number.
-			if (typeof rep.default === 'number' || typeof rep.default === 'boolean') {
-				compiledDefaults[propName] = rep.default
-			} else if (rep.type === 'flat_array' && Array.isArray(rep.default)) {
-				// Handle flat_array defaults directly.
-				const len = rep.default.length
-				compiledDefaults[rep.lengthProperty] = len
-				for (let i = 0; i < len; i++) {
-					compiledDefaults[`${propName}${i}`] = rep.default[i]
-				}
+			if (rep.default !== undefined) {
+				defaultValues[propName] = rep.default
 			}
 		}
+
+		// Interpret the high-level default values (like 'IDLE' for an enum) into their
+		// raw, numeric equivalents using the single source of truth for this logic.
+		const interpretedDefaults = interpret(componentInfo.typeID, defaultValues)
+		Object.assign(compiledDefaults, interpretedDefaults)
 
 		// Ensure all properties defined in the final schema have a default value, even if it's 0.
 		// This prevents `undefined` values in component arrays.

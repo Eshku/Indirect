@@ -156,6 +156,27 @@ export function expect(actual) {
 				throw new AssertionError(`Expected ${actual} ${inverted ? 'not ' : ''}to be greater than or equal to ${expected}`, `a value >= ${expected}`, actual)
 			}
 		},
+		/**
+		 * Checks if a value is an instance of a constructor.
+		 * @param {Function} constructor - The constructor to check against.
+		 * @throws {AssertionError} If the assertion fails.
+		 * @example
+		 * expect(new Date()).toBeInstanceOf(Date); // Passes
+		 * expect([]).toBeInstanceOf(Array); // Passes
+		 */
+		toBeInstanceOf(constructor) {
+			const passed = actual instanceof constructor
+			if (passed === inverted) {
+				// Provide more informative names in the error message.
+				const actualName = actual?.constructor?.name || typeof actual
+				const expectedName = constructor?.name || 'Unknown Constructor'
+				throw new AssertionError(
+					`Expected value ${inverted ? 'not ' : ''}to be an instance of ${expectedName}, but was instance of ${actualName}`,
+					`instance of ${expectedName}`,
+					`instance of ${actualName}`,
+				)
+			}
+		},
 	})
 
 	return {
