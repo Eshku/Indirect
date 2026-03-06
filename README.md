@@ -92,7 +92,7 @@ Systems use queries to find entities that have a specific set of components.
 - **`any`**: At least one of these components _must_ be present.
 - **`react`**: Query only returns entities where one of these components has changed since system last ran.
 
-Primary way to iterate is `query.iter()`, which yields [`Chunk Views`](app\client\Managers\QueryManager\ChunkView.js) for processing.
+Primary way to iterate is `query.iter()`, which yields [`Chunk Views`](app/client/Managers/QueryManager/ChunkView.js) for processing.
 
 ### Parallelism: A Kernel-Based Job Scheduler
 
