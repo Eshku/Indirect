@@ -83,7 +83,7 @@ Components are defined as plain JavaScript objects that act as a schema, dictati
 - **`flat_array`**: For fixed-size collections of simple data.
 - **Tag Components**: An empty schema `{}` that serves only as a marker for queries.
 
-### [Queries](app/client/Managers/QueryManager/Query.js)
+### Queries
 
 Systems use queries to find entities that have a specific set of components.
 
