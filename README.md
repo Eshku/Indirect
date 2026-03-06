@@ -32,7 +32,6 @@ This is a foundation for what could become an engine, built around a hybrid para
 ## Tech Stack
 
 - **Electron**: Main application framework.
-- **Pixi.js**: 2D rendering engine.
 - **Vanilla JavaScript**: Core language.
 
 ## Architecture
@@ -112,19 +111,19 @@ Engine uses a hybrid parallel job scheduler that separates main-thread **orchest
 
 **System Execution Order**
 
-Methods of a system are executed in a specific, guaranteed order to manage the interplay between main-thread logic and parallel execution.
+Methods of a system are executed in a specific, guaranteed order to manage interplay between main-thread logic and parallel execution.
 
 1.  **`schedule(frameContext)` (Job Factory Phase)**
-    This method is always called first. Its sole purpose is to create and return an array of job definitions (kernels and their payloads) for the scheduler. It runs on the main thread before any other execution phase begins. It does not contain game logic itself, but rather defines the parallel work to be done.
+    This method is always called first. Its sole purpose is to create and return an array of job definitions (kernels and their payloads) for scheduler. It runs on the main thread before any other execution phase begins. It does not contain game logic itself, but rather defines parallel work to be done.
 
 2.  **`update(frameContext)` (Main-Thread Execution)**
-    After `schedule()` has defined the jobs, the `update()` method runs on the main thread. It is used for any logic that must run sequentially before the parallel kernels begin.
+    After `schedule()` has defined jobs, `update()` method runs on main thread. It is used for any logic that must run sequentially before parallel kernels begin.
 
 3.  **Kernel Execution (Parallel Phase)**
-    The kernel jobs created by `schedule()` are now executed by the worker threads (or the main thread, if no workers are available). The scheduler ensures these jobs only start after the system's `update()` method is complete.
+    Kernel jobs created by `schedule()` are now executed by worker threads (or the main thread, if no workers are available). Scheduler ensures these jobs only start after system's `update()` method is complete.
 
 4.  **`process(frameContext)` (Main-Thread Finalizer)**
-    After all of the system's `update()` and kernel jobs have finished, the `process()` method runs on the main thread. It acts as a finalizer, allowing for logic that needs to happen after all other work for that system is complete (e.g., aggregating results from kernels).
+    After all of system's `update()` and kernel jobs have finished, `process()` method runs on the main thread. It acts as a finalizer, allowing for logic that needs to happen after all other work for that system is complete (e.g., aggregating results from kernels).
 
 **Declaring Dependencies:**
 
