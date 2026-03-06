@@ -17,6 +17,7 @@ const {
 	initComponentAPI,
 	initSystemAPI,
 	initManagerAPI,
+	initKernelAPI,
 } = require('./electron/API')
 
 const { initAppConfig } = require('./appConfig')
@@ -32,6 +33,7 @@ initPrefabAPI(ipcMain, __dirname)
 initComponentAPI(ipcMain, __dirname)
 initSystemAPI(ipcMain, __dirname)
 initManagerAPI(ipcMain, __dirname)
+initKernelAPI(ipcMain, __dirname)
 
 initAppConfig()
 

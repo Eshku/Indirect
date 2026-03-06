@@ -324,3 +324,5 @@ export class QueryManager {
 		}
 	}
 }
+
+export const queryManager = new QueryManager()

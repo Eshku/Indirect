@@ -1,7 +1,7 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager, entityManager } = ecs
-const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+
+const { reactivityTarget, reactivityComponent, componentA, componentB } = ecs.getTypeIDs()
 
 /**
  * A system to test the engine's reactivity pipeline, including direct component
@@ -10,7 +10,7 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
 export class ReactivityTestSystem {
 	static dependencies = {
 		update: {
-			reads: ['reactivityComponent'],
+			reads: [reactivityComponent],
 		},
 	}
 
@@ -21,36 +21,30 @@ export class ReactivityTestSystem {
 			runStructuralChangeTest: false,
 		}
 
-		const { reactivityTarget, reactivityComponent, componentA, componentB } = ecs.getTypeIDs()
-		Object.assign(this, { reactivityTarget, reactivityComponent, componentA, componentB })
-
-		// --- Queries ---
-		// Query for entities to modify. We need ReactivityComponent to modify its value.
-		this.modificationTargetQuery = queryManager.getQuery({
-			with: [reactivityTarget, reactivityComponent],
-		})
-
-		// Reactive query that detects changes to ReactivityComponent
-		this.detectionQuery = queryManager.getQuery({
-			with: [reactivityTarget, reactivityComponent], // Ensure we can read the value
-			react: [reactivityComponent],
-		})
-
 		// --- Test State ---
 		// Needs at least 2
 		this.totalEntities = 2
 		this.entitiesInitialized = false
 		this.directModificationEntityId = null
 		this.structuralChangeEntityId = null
-
-		// Pre-compile the payload for adding ComponentA. Since it's a tag, the data is empty.
-		this.componentAPayload = payloadCompiler.compileComponent(this.componentA, {}).payload
 	}
 
 	init() {
+		// --- Queries ---
+		this.modificationTargetQuery = this.getQuery({
+			with: [reactivityTarget, reactivityComponent],
+		})
+		this.detectionQuery = this.getQuery({
+			with: [reactivityTarget, reactivityComponent],
+			react: [reactivityComponent],
+		})
+
+		// --- Payloads ---
+		this.componentAPayload = this.compiler.compileComponent(componentA, {}).payload
+
 		for (let i = 0; i < this.totalEntities; i++) {
 			// Compile the payload once.
-			const { payload } = payloadCompiler.compileEntity({
+			const { payload } = this.compiler.compileEntity({
 				ReactivityTarget: {},
 				ReactivityComponent: { value: 0 },
 			})
@@ -72,7 +66,7 @@ export class ReactivityTestSystem {
 		this.entitiesInitialized = true
 	}
 
-	update({deltaTime, currentTick, lastTick}) {
+	update({ deltaTime, currentTick, lastTick }) {
 		if (!this.entitiesInitialized) {
 			// On the first update after init, the entities will have been created.
 			this._initializeEntities()
@@ -96,18 +90,18 @@ export class ReactivityTestSystem {
 		if (currentTick > 0 && currentTick % 60 === 0) {
 			for (const chunk of this.modificationTargetQuery.iter()) {
 				const entities = chunk.entities
-				const reactComps = chunk.componentData[this.reactivityComponent]
+				const reactComps = chunk.componentData[reactivityComponent]
 
 				for (let i = 0; i < chunk.size; i++) {
 					if (entities[i] === this.directModificationEntityId) {
 						const oldValue = reactComps.value[i]
 						const newValue = oldValue + 1
 						reactComps.value[i] = newValue
-						chunk.markEntityDirty(this.reactivityComponent, i, currentTick)
+						chunk.markEntityDirty(reactivityComponent, i, currentTick)
 
 						console.log(
 							`%cReactivityTestSystem (Trigger): Modified ReactivityComponent on entity ${this.directModificationEntityId}. Changed value from ${oldValue} to ${newValue} at tick ${currentTick}.`,
-							'color: orange'
+							'color: orange',
 						)
 						return // Found and modified
 					}
@@ -122,16 +116,16 @@ export class ReactivityTestSystem {
 		if (currentTick === 180) {
 			console.log(
 				`%cReactivityTestSystem (Structural): Adding ComponentA to entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
-				'color: cyan'
+				'color: cyan',
 			)
 
 			this.commands.addComponent(this.structuralChangeEntityId, this.componentAPayload)
 		} else if (currentTick === 240) {
 			console.log(
 				`%cReactivityTestSystem (Structural): Removing ComponentA from entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
-				'color: magenta'
+				'color: magenta',
 			)
-			this.commands.removeComponent(this.structuralChangeEntityId, this.componentA)
+			this.commands.removeComponent(this.structuralChangeEntityId, componentA)
 		}
 	}
 
@@ -139,19 +133,19 @@ export class ReactivityTestSystem {
 		// This runs every frame to see what changes the reactive query has picked up.
 		for (const chunk of this.detectionQuery.iter()) {
 			const entities = chunk.entities
-			const reactComps = chunk.componentData[this.reactivityComponent]
-			const dirtyTicks = chunk.dirtyTicks[this.reactivityComponent]
+			const reactComps = chunk.componentData[reactivityComponent]
+			const dirtyTicks = chunk.dirtyTicks[reactivityComponent]
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				// Use the new helper method for cleaner code.
-				if (chunk.hasChanged(this.reactivityComponent, indexInChunk)) {
+				if (chunk.hasChanged(reactivityComponent, indexInChunk)) {
 					const entityId = entities[indexInChunk]
 					const newValue = reactComps.value[indexInChunk]
 					const dirtyTick = dirtyTicks[indexInChunk]
 
 					console.log(
 						`%cReactivityTestSystem (Detector): Detected change on entity ${entityId}! New value: ${newValue}. (Component dirtied at ${dirtyTick})`,
-						'color: lightgreen'
+						'color: lightgreen',
 					)
 				}
 			}

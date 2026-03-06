@@ -4,16 +4,22 @@ const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, uiManager } = engine.getManagers()
 const { queryManager } = ecs
 
+const { playerTag, movementIntent, actionIntent } = ecs.getTypeIDs()
+
 /**
  * Handles all player inputs for continuous actions like movement and firing.
  * This system acts as a bridge between the abstract input events and the ECS world.
  * It translates raw input events into component data changes for the player entity.
  */
 export class PlayerInputSystem {
-	constructor() {
-		const { playerTag, movementIntent, actionIntent } = ecs.getTypeIDs()
-		Object.assign(this, { playerTag, movementIntent, actionIntent })
+	static dependencies = {
+		update: {
+			reads: [movementIntent],
+			writes: [movementIntent, actionIntent],
+		},
+	}
 
+	constructor() {
 		this.playerQuery = queryManager.getQuery({
 			with: [playerTag, movementIntent, actionIntent],
 		})
@@ -96,8 +102,8 @@ export class PlayerInputSystem {
 		const mainAttackIntent = mainAttack ? 1 : 0
 
 		for (const chunk of this.playerQuery.iter()) {
-			const movementIntents = chunk.componentData[this.movementIntent]
-			const actionIntents = chunk.componentData[this.actionIntent]
+			const movementIntents = chunk.componentData[movementIntent]
+			const actionIntents = chunk.componentData[actionIntent]
 
 			const intentsX = movementIntents.desiredX
 			const intentsY = movementIntents.desiredY
@@ -110,7 +116,7 @@ export class PlayerInputSystem {
 				if (intentsX[i] !== intentX || intentsY[i] !== intentY) {
 					intentsX[i] = intentX
 					intentsY[i] = intentY
-					chunk.dirtyTicks[this.movementIntent][i] = currentTick
+					chunk.dirtyTicks[movementIntent][i] = currentTick
 					movementModified = true
 				}
 
@@ -119,12 +125,12 @@ export class PlayerInputSystem {
 				// this intent (setting it to 0) each tick, allowing this system to re-trigger it on the next tick.
 				if (mainAttackIntent === 1) {
 					actionsIntent[i] = mainAttackIntent // This is a direct write, not a toggle
-					chunk.dirtyTicks[this.actionIntent][i] = currentTick
+					chunk.dirtyTicks[actionIntent][i] = currentTick
 					actionModified = true
 				}
 			}
-			if (movementModified) chunk.markChunkDirty(this.movementIntent, currentTick)
-			if (actionModified) chunk.markChunkDirty(this.actionIntent, currentTick)
+			if (movementModified) chunk.markChunkDirty(movementIntent, currentTick)
+			if (actionModified) chunk.markChunkDirty(actionIntent, currentTick)
 		}
 	}
 }

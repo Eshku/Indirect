@@ -3,6 +3,8 @@ const { ecs } = engine.getManagers()
 const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
+const { position, velocity, parallelCpuTag } = ecs.getTypeIDs()
+const { parallelCpu } = ecs.getKernelIDs()
 /**
  * A purely CPU-bound parallel benchmark.
  * This system performs a large number of calculations per entity, with minimal
@@ -11,17 +13,18 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
  */
 export class ParallelCPUBenchmark {
 	static dependencies = {
-		schedule: {
-			reads: ['velocity'], // Read once per entity
-			writes: ['position'], // Write once per entity
+		parallelCpu: {
+			reads: [velocity],
+			writes: [position],
+			context: {
+				position,
+				velocity,
+			},
 		},
 	}
 
 	constructor() {
-		const { position, velocity, parallelCpuTag } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity, parallelCpuTag })
-
-		this.scheduleQuery = queryManager.getQuery({
+		this.query = queryManager.getQuery({
 			with: [position, velocity, parallelCpuTag],
 		})
 
@@ -41,27 +44,17 @@ export class ParallelCPUBenchmark {
 		this.spawnEntities()
 	}
 
-	schedule(chunk, context) {
-		const positions = chunk.componentData[this.position]
-		const velocities = chunk.componentData[this.velocity]
+	schedule() {
+		const jobs = []
+		const chunkIds = this.query.getChunks()
 
-		for (let i = 0; i < chunk.size; i++) {
-			// Read initial state once
-			let x = positions.x[i]
-			let y = velocities.y[i]
-
-			// Perform a lot of computation. 
-			for (let j = 0; j < 50; j++) {
-				const newX = Math.sin(x) * y - Math.cos(y) * x
-				const newY = Math.cos(x) * y + Math.sin(y) * x
-				x = newX
-				y = newY
-			}
-
-			// Write the final result once
-			positions.x[i] = x
+		for (const chunkId of chunkIds) {
+			jobs.push({
+				kernel: parallelCpu,
+				payload: chunkId,
+			})
 		}
-		chunk.markAllDirty(this.position, context.currentTick)
+		return jobs
 	}
 
 	spawnEntities() {
@@ -69,7 +62,7 @@ export class ParallelCPUBenchmark {
 	}
 
 	destroy() {
-		for (const chunk of this.scheduleQuery.iter()) {
+		for (const chunk of this.query.iter()) {
 			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
 		}
 	}

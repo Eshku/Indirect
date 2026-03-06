@@ -30,6 +30,8 @@ const benchmarkConfig = {
 	},
 }
 
+const { position, velocity, componentA, componentB, commandBufferBenchmarkTag } = ecs.getTypeIDs()
+
 /**
  * A system to benchmark the raw throughput of the CommandBuffer for various operations.
  * This measures the time to both record commands and for the CommandBufferExecutor to process them.
@@ -40,13 +42,11 @@ export class CommandBufferBenchmarkSystem {
 			// This system reads from multiple queries to find entities to modify via commands.
 			// We must declare all components it could possibly read to ensure it runs after
 			// they have been written to by other systems.
-			reads: ['commandBufferBenchmarkTag', 'componentA', 'componentB', 'position'],
+
+			reads: [commandBufferBenchmarkTag, componentA, componentB, position],
 		},
 	}
 	constructor() {
-		const { position, velocity, componentA, componentB, commandBufferBenchmarkTag } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity, componentA, componentB, commandBufferBenchmarkTag })
-
 		// --- Queries ---
 		this.benchmarkQuery = queryManager.getQuery({ with: [commandBufferBenchmarkTag] })
 		this.addQuery = queryManager.getQuery({ with: [commandBufferBenchmarkTag, componentA], without: [componentB] })
@@ -60,10 +60,10 @@ export class CommandBufferBenchmarkSystem {
 			velocity: { x: 3, y: 4 },
 		}).payload
 
-		this.addComponentPayload = payloadCompiler.compileComponent(this.componentB, {}).payload
+		this.addComponentPayload = payloadCompiler.compileComponent(componentB, {}).payload
 
 		// 'set' payload is also pre-compiled. We will use its mutators in the loop.
-		const { payload, mutators } = payloadCompiler.compileComponent(this.position, { x: 99, y: 99 })
+		const { payload, mutators } = payloadCompiler.compileComponent(position, { x: 99, y: 99 })
 		this.setComponentPayload = payload
 		this.setComponentMutators = mutators
 
@@ -78,7 +78,7 @@ export class CommandBufferBenchmarkSystem {
 		}
 	}
 
-	update({deltaTime, currentTick}) {
+	update({ deltaTime, currentTick }) {
 		switch (benchmarkConfig.activeBenchmark) {
 			case 'creation':
 				this._updateCreation()
@@ -101,7 +101,8 @@ export class CommandBufferBenchmarkSystem {
 		for (const chunk of this.benchmarkQuery.iter()) {
 			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
 		}
-		for (let i = 0; i < config.batchSize; i++) { // This part remains the same
+		for (let i = 0; i < config.batchSize; i++) {
+			// This part remains the same
 			this.commands.createEntity(this.creationPayload)
 		}
 	}
@@ -112,7 +113,7 @@ export class CommandBufferBenchmarkSystem {
 		this.commands.createEntities(this.creationPayload, config.batchSize)
 
 		let destroyedCount = 0
-		for (const chunk of this.benchmarkQuery.iter()) { 
+		for (const chunk of this.benchmarkQuery.iter()) {
 			for (let i = 0; i < chunk.size; i++) {
 				if (destroyedCount >= config.batchSize) break
 				this.commands.destroyEntity(chunk.entities[i])
@@ -126,7 +127,7 @@ export class CommandBufferBenchmarkSystem {
 		const config = benchmarkConfig.structuralChange
 		if (this.isAdding) {
 			let processedCount = 0
-			for (const chunk of this.addQuery.iter()) { 
+			for (const chunk of this.addQuery.iter()) {
 				for (let i = 0; i < chunk.size; i++) {
 					if (processedCount >= config.batchSize) break
 					this.commands.addComponent(chunk.entities[i], this.addComponentPayload)
@@ -140,10 +141,10 @@ export class CommandBufferBenchmarkSystem {
 			}
 		} else {
 			let processedCount = 0
-			for (const chunk of this.removeQuery.iter()) { 
+			for (const chunk of this.removeQuery.iter()) {
 				for (let i = 0; i < chunk.size; i++) {
 					if (processedCount >= config.batchSize) break
-					this.commands.removeComponent(chunk.entities[i], this.componentB)
+					this.commands.removeComponent(chunk.entities[i], componentB)
 					processedCount++
 				}
 				if (processedCount >= config.batchSize) break
@@ -163,7 +164,7 @@ export class CommandBufferBenchmarkSystem {
 		this.setComponentMutators.position.y[0] = Math.random() * 100
 
 		let processedCount = 0
-		for (const chunk of this.benchmarkQuery.iter()) { 
+		for (const chunk of this.benchmarkQuery.iter()) {
 			for (let i = 0; i < chunk.size; i++) {
 				if (processedCount >= config.batchSize) break
 				this.commands.setComponentData(chunk.entities[i], this.setComponentPayload)

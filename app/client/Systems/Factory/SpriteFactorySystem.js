@@ -34,6 +34,7 @@ export class SpriteFactorySystem {
 
 	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.initializationQuery.iter()) {
+
 			const descriptorArrays = chunk.componentData[this.spriteDescriptor]
 			const viewableArrays = chunk.componentData[this.viewable]
 

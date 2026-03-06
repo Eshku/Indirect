@@ -1,15 +1,19 @@
 const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
+const { extensions: systemExtensions } = await import('../../Core/Extends/systemExtends.js')
 const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
 
 import { GameLoop } from './GameLoop.js'
 import { loadAllSystems } from './systemLoader.js'
+import { loadAllKernels } from './kernelLoader.js'
+import { kernelRegistry } from './KernelRegistry.js'
 import { systemRegistry } from './SystemRegistry.js'
 
 import { releaseSystemQueries } from './systemUtils.js'
+import { toCamelCase } from '../../Core/utils/stringUtils.js'
 
 import { systemSchedule } from './systemConfig.js'
 import { importFromString } from '../../Core/utils/blob.js'
-import { CommandBuffer } from './CommandBuffer.js'
+import { commandBuffer } from './CommandBuffer.js'
 import { CommandBufferExecutor } from './CommandBufferExecutor.js'
 import { payloadCompiler } from './PayloadCompiler.js'
 
@@ -36,11 +40,12 @@ export class SystemManager {
 
 		this.prefabManager = null
 
-		this.commandBuffer = null
+		this.commandBuffer = commandBuffer
 
 		this.commandBufferExecutor = null
 
 		this.systemTimings = {}
+		this.isPerformanceMonitoringEnabled = false
 
 		// A flat list of all system names to be managed, derived from systemConfig.js.
 		this._systemList = new Sequence()
@@ -59,14 +64,15 @@ export class SystemManager {
 
 		this.hmrListenerId = null
 
-		// Holds the system instances, categorized by their update group.
 		this.updateGroups = {
 			// Runs first for low-latency user input.
-			input: { name: 'input', systems: [], lastTick: -1 },
+			input: { name: 'input', systems: [], lastTick: 0 },
 			// Runs on a fixed, deterministic timer for core gameplay logic and physics.
-			logic: { name: 'logic', systems: [], lastTick: -1 },
+			logic: { name: 'logic', systems: [], lastTick: 0 },
 			// Runs once per visual frame for rendering, interpolation, and UI.
-			visuals: { name: 'visuals', systems: [], lastTick: -1 },
+			visuals: { name: 'visuals', systems: [], lastTick: 0 },
+
+			//placeholder, last tick will be synced with GameLoop
 		}
 	}
 
@@ -95,6 +101,14 @@ export class SystemManager {
 	async init(ecs) {
 		this.gameLoop = new GameLoop()
 
+		// Sync the initial lastTick for all predefined groups from the GameLoop.
+		// This ensures a single source of truth for starting tick values.
+		for (const groupName in this.updateGroups) {
+			if (Object.prototype.hasOwnProperty.call(this.updateGroups, groupName)) {
+				this.updateGroups[groupName].lastTick = this.gameLoop.lastTick
+			}
+		}
+
 		// Get our manager dependencies from the ECS instance.
 		this.entityManager = ecs.entityManager
 		this.archetypeManager = ecs.archetypeManager
@@ -103,23 +117,44 @@ export class SystemManager {
 		this.prefabManager = ecs.prefabManager
 		this.workerManager = ecs.engine.workerManager
 
-		// --- HMR Listener Fix ---
 		// Ensure we only ever have one listener attached, even if init() is called multiple times.
 		if (!this.hmrListenerId) {
 			this.hmrListenerId = eventEmitter.on('hmr:system-update', data => this.hotSwapModule(data.path, data.code))
 		}
 
-		const systemModules = await loadAllSystems()
-
 		this.app = gameManager.getApp()
 		this.renderer = this.app.renderer
 		this.ticker = this.app.ticker
 
-		this.commandBuffer = new CommandBuffer()
-
 		this.commandBufferExecutor = new CommandBufferExecutor()
 
+		// --- Phase 1: Discovery & ID Assignment (No Imports) ---
+		const [systemFileTree, kernelFileTree] = await Promise.all([
+			window.electronAPI.getSystemTree(),
+			window.electronAPI.getKernelTree(),
+		])
+
+		const systemNames = Object.values(systemFileTree).flat()
+		const kernelFileNames = kernelFileTree || []
+		const kernelNames = kernelFileNames.map(fileName => toCamelCase(fileName.replace('.js', '')))
+
+		this._assignAllIdsFromNames(systemNames, kernelNames)
+		this._createHonestIdObjects()
+
+		// --- Phase 2: Module Loading & Registration ---
+		const systemModules = new Map()
+		for (const category in systemFileTree) {
+			for (const moduleName of systemFileTree[category]) {
+				const modulePath = `${PATH_SYSTEMS}/${category}/${moduleName}.js`
+				const module = await import(modulePath)
+				systemModules.set(moduleName, module)
+			}
+		}
+
+		const { loadedModules: kernelModules, kernelCode } = await loadAllKernels(kernelFileTree)
+
 		systemRegistry.registerSystemClasses(systemModules)
+		kernelRegistry.registerKernelModules(kernelModules, kernelCode)
 
 		// --- Analysis Step ---
 		this._analyzeAndCacheSystems()
@@ -143,7 +178,11 @@ export class SystemManager {
 		for (const systemName of this._systemList) {
 			const systemInstance = systemRegistry.instantiateSystem(systemName)
 			if (systemInstance) {
-				systemInstance.commands = this.commandBuffer
+				// Assign custom user-defined extensions from systemExtends.js.
+				for (const key in systemExtensions) {
+					systemInstance[key] = systemExtensions[key]
+				}
+
 				await systemInstance.init?.()
 			} else {
 				// This might happen if a system is in the order but fails to load/register.
@@ -161,6 +200,50 @@ export class SystemManager {
 		this.workerManager.broadcastInitialSystemContexts()
 	}
 
+	enablePerformanceTimings() {
+		this.isPerformanceMonitoringEnabled = true
+	}
+
+	disablePerformanceTimings() {
+		this.isPerformanceMonitoringEnabled = false
+	}
+
+	/**
+	 * Retrieves an object mapping all registered system names to their numeric IDs.
+	 * This is ideal for destructuring in a system's static properties for clean, cached access.
+	 * @returns {Object.<string, number>} An object mapping system names to their IDs.
+	 */
+	getSystemIds() {
+		return this._systemIdObject
+	}
+
+	/**
+	 * Retrieves an object mapping all registered kernel names to their numeric IDs.
+	 * @returns {Object.<string, number>} An object mapping kernel names to their IDs.
+	 */
+	getKernelIds() {
+		return kernelRegistry.getKernelIds() // Delegate to the registry
+	}
+
+	/**
+	 * Creates the final, "honest" frozen objects for ID access.
+	 * This is called after all IDs have been assigned from filenames.
+	 * @private
+	 */
+	_createHonestIdObjects() {
+		const systemIdObject = {}
+		for (const [name, id] of this.systemNameToId.entries()) {
+			systemIdObject[name] = id
+		}
+		this._systemIdObject = Object.freeze(systemIdObject)
+
+		// Also trigger the creation in the kernel registry
+		const kernelIdObject = {}
+		for (const [name, id] of kernelRegistry.kernelNameToId.entries()) {
+			kernelIdObject[name] = id
+		}
+		kernelRegistry.setKernelIdObject(kernelIdObject)
+	}
 	/**
 	 * Clears the system timings object. Called by the GameLoop once per frame.
 	 */
@@ -214,23 +297,30 @@ export class SystemManager {
 	 * @private
 	 */
 	_analyzeAndCacheSystems() {
+		// This method is now simpler as it doesn't need to assign IDs.
 		this.systemMetadataCache.clear()
-		this._assignAllSystemIds()
 		this._buildInitialMetadata()
 		this._resolveAndValidateControlFlow()
 	}
 
 	/**
-	 * First analysis pass: Assigns a persistent, unique integer ID to every registered system class.
+	 * Assigns persistent, unique integer IDs to every system and kernel NAME.
+	 * This is the core of the new "no-magic" loading strategy.
+	 * @param {string[]} systemNames
+	 * @param {string[]} kernelNames
 	 * @private
 	 */
-	_assignAllSystemIds() {
+	_assignAllIdsFromNames(systemNames, kernelNames) {
 		// Re-populate the maps from the canonical registry.
 		this.systemIdCounter = 0
 		this.systemNameToId.clear()
 		this.idToSystemName.clear()
-		for (const systemName of systemRegistry.systemClasses.keys()) {
+		for (const systemName of systemNames) {
 			this._assignSystemId(systemName)
+		}
+
+		for (const kernelName of kernelNames) {
+			kernelRegistry.assignKernelId(kernelName)
 		}
 	}
 
@@ -240,20 +330,18 @@ export class SystemManager {
 	 * @private
 	 */
 	_buildInitialMetadata() {
-		const typeIDs = this.componentManager.getTypeIDs() // Hoisted out of the loop for efficiency.
 		for (const [systemName, SystemClass] of systemRegistry.systemClasses.entries()) {
 			const metadata = {
 				id: this.systemNameToId.get(systemName),
 				name: systemName,
-				hasUpdate: !!SystemClass.prototype.update,
+				// The 'schedule' method is now exclusively for creating jobs (the "Job Factory").
 				hasSchedule: !!SystemClass.prototype.schedule,
+				hasUpdate: !!SystemClass.prototype.update,
 				hasProcess: !!SystemClass.prototype.process,
-				dependencies: this._extractAndTranslateDataDependencies(SystemClass, systemName, typeIDs),
-				// Store raw names for the resolution pass.
-				_runsAfterRaw: SystemClass.runsAfter || [],
-				_runsBeforeRaw: SystemClass.runsBefore || [],
+				dependencies: this._analyzeSystemDependencies(SystemClass, systemName),
+				runsAfter: SystemClass.runsAfter || [],
+				runsBefore: SystemClass.runsBefore || [],
 				// Final ID arrays will be populated in the next pass.
-				runsAfter: [],
 			}
 			this.systemMetadataCache.set(systemName, metadata)
 		}
@@ -262,48 +350,73 @@ export class SystemManager {
 	/**
 	 * Extracts and translates `reads`/`writes` component dependencies from a system class into type IDs.
 	 * This is a helper method for the analysis pass.
-	 * @param {Function} SystemClass - The system class to analyze.
-	 * @param {string} systemName - The name of the system for logging.
-	 * @param {Object<string, number>} typeIDs - The map of component names to type IDs.
+	 * @param {Function} SystemClass The system class to analyze.
+	 * @param {string} systemName The name of the system for logging.
 	 * @returns {object} The structured dependency object with sets of component IDs.
 	 * @private
 	 */
-	_extractAndTranslateDataDependencies(SystemClass, systemName, typeIDs) {
-		const systemDependencies = {
-			update: { reads: new Set(), writes: new Set() },
-			schedule: { reads: new Set(), writes: new Set() },
-			process: { reads: new Set(), writes: new Set() },
-		}
+	_analyzeSystemDependencies(SystemClass, systemName) {
+		const finalDependencies = {}
 
 		const dependencies = SystemClass.dependencies
 		if (dependencies) {
-			for (const method of ['update', 'schedule', 'process']) {
-				const methodDeps = dependencies[method]
-				if (!methodDeps) continue
+			// Iterate over all declared dependency keys (e.g., 'update', 'process', 'myKernel').
+			for (const methodName in dependencies) {
+				const methodDeps = dependencies[methodName]
 
-				methodDeps.reads?.forEach(name => {
-					const id = typeIDs[name]
-					if (Number.isInteger(id)) {
-						systemDependencies[method].reads.add(id)
+				// --- DX Improvement: Normalize single values to arrays ---
+				const reads = methodDeps.reads ? (Array.isArray(methodDeps.reads) ? methodDeps.reads : [methodDeps.reads]) : []
+				const writes = methodDeps.writes
+					? Array.isArray(methodDeps.writes)
+						? methodDeps.writes
+						: [methodDeps.writes]
+					: []
+
+				const newMethodDeps = {
+					reads: new Set(),
+					writes: new Set(),
+				}
+
+				reads.forEach(typeId => {
+					if (Number.isInteger(typeId)) {
+						newMethodDeps.reads.add(typeId)
 					} else {
 						console.warn(
-							`[SystemManager] System "${systemName}" has a read dependency in method "${method}" on an unknown component "${name}".`,
+							`[SystemManager] System "${systemName}" has a non-numeric read dependency in method "${methodName}": ${typeId}. Dependencies must be numeric component TypeIDs.`,
 						)
 					}
 				})
-				methodDeps.writes?.forEach(name => {
-					const id = typeIDs[name]
-					if (Number.isInteger(id)) {
-						systemDependencies[method].writes.add(id)
+
+				writes.forEach(typeId => {
+					if (Number.isInteger(typeId)) {
+						newMethodDeps.writes.add(typeId)
 					} else {
 						console.warn(
-							`[SystemManager] System "${systemName}" has a write dependency in method "${method}" on an unknown component "${name}".`,
+							`[SystemManager] System "${systemName}" has a non-numeric write dependency in method "${methodName}": ${typeId}. Dependencies must be numeric component TypeIDs.`,
 						)
 					}
 				})
+
+				if (methodDeps.context) {
+					const contextDef = methodDeps.context
+					// Validate that the context is a plain object. The function-based "Context Factory"
+					// and legacy array-based patterns are now deprecated and will be caught here.
+					if (typeof contextDef !== 'object' || contextDef === null || Array.isArray(contextDef)) {
+						console.error(
+							`[SystemManager] System "${systemName}" method/kernel "${methodName}" has an invalid context definition. ` +
+								`Context must be a plain object. Function and array formats are no longer supported.`,
+						)
+						// Assign an empty context to prevent further errors down the line.
+						newMethodDeps.context = {}
+					} else {
+						newMethodDeps.context = contextDef
+					}
+				}
+
+				finalDependencies[methodName] = newMethodDeps
 			}
 		}
-		return systemDependencies
+		return finalDependencies
 	}
 
 	/**
@@ -313,24 +426,28 @@ export class SystemManager {
 	 * @private
 	 */
 	_resolveAndValidateControlFlow() {
-		// First, translate all raw string names to IDs for easier processing.
-		for (const [sourceSystemName, sourceMetadata] of this.systemMetadataCache.entries()) {
-			// Translate runsAfter
-			sourceMetadata.runsAfter = sourceMetadata._runsAfterRaw
-				.map(name => this.systemNameToId.get(name))
-				.filter(id => id !== undefined)
-
-			// Translate runsBefore and store temporarily
-			sourceMetadata._runsBeforeIds = sourceMetadata._runsBeforeRaw
-				.map(name => this.systemNameToId.get(name))
-				.filter(id => id !== undefined)
+		// This is now much simpler as it only deals with real numeric IDs.
+		const resolveId = id => {
+			// The ID is already a real number, so we just return it.
+			// This check is for robustness in case a non-ID gets through.
+			if (typeof id !== 'number') {
+				console.warn(`[SystemManager] Invalid value found in a 'runsAfter' or 'runsBefore' declaration:`, id)
+				return undefined
+			}
+			return id
 		}
 
-		// Now, process `runsBefore` and check for conflicts.
-		for (const [sourceSystemName, sourceMetadata] of this.systemMetadataCache.entries()) {
-			if (sourceMetadata._runsBeforeIds.length === 0) continue
+		// First pass: resolve all placeholder IDs in-place within the cached metadata.
+		for (const metadata of this.systemMetadataCache.values()) {
+			metadata.runsAfter = (metadata.runsAfter || []).map(resolveId).filter(id => id !== undefined)
+			metadata.runsBefore = (metadata.runsBefore || []).map(resolveId).filter(id => id !== undefined)
+		}
 
-			for (const targetSystemId of sourceMetadata._runsBeforeIds) {
+		// Second pass: process `runsBefore` and check for conflicts, now with real IDs.
+		for (const [sourceSystemName, sourceMetadata] of this.systemMetadataCache.entries()) {
+			if (sourceMetadata.runsBefore.length === 0) continue
+
+			for (const targetSystemId of sourceMetadata.runsBefore) {
 				const targetSystemName = this.idToSystemName.get(targetSystemId)
 				const targetMetadata = this.systemMetadataCache.get(targetSystemName)
 
@@ -343,7 +460,7 @@ export class SystemManager {
 					}
 
 					// CONFLICT CHECK 2: A runsBefore B, but also B runsBefore A.
-					if (targetMetadata._runsBeforeIds.includes(sourceMetadata.id)) {
+					if (targetMetadata.runsBefore.includes(sourceMetadata.id)) {
 						throw new Error(
 							`[SystemManager] Circular dependency detected: "${sourceSystemName}" runs BEFORE "${targetSystemName}", and "${targetSystemName}" runs BEFORE "${sourceSystemName}".`,
 						)
@@ -355,17 +472,12 @@ export class SystemManager {
 					}
 				} else {
 					console.warn(
-						`[SystemManager] System "${sourceSystemName}" has a 'runsBefore' dependency on an unknown system "${targetSystemName}".`,
+						`[SystemManager] System "${sourceSystemName}" has a 'runsBefore' dependency on an unknown system ID "${targetSystemId}".`,
 					)
 				}
 			}
-		}
-
-		// Final cleanup of temporary properties.
-		for (const metadata of this.systemMetadataCache.values()) {
-			delete metadata._runsAfterRaw
-			delete metadata._runsBeforeRaw
-			delete metadata._runsBeforeIds
+			// After processing, we can clear the runsBefore array as it's been merged.
+			sourceMetadata.runsBefore = []
 		}
 	}
 
@@ -512,7 +624,7 @@ export class SystemManager {
 				systems: [],
 				interval: 1 / fps,
 				accumulator: 0,
-				lastTick: -1,
+				lastTick: this.gameLoop.lastTick,
 			}
 			this.updateGroups[groupName] = newGroup
 		}
@@ -842,7 +954,13 @@ export class SystemManager {
 			this.gameLoop.resume()
 			return
 		}
-		newInstance.commands = this.commandBuffer
+
+		// --- Extend New System Instance ---
+		// Assign core engine properties and custom user-defined extensions.
+		for (const key in systemExtensions) {
+			newInstance[key] = systemExtensions[key]
+		}
+
 		await newInstance.init?.()
 
 		// Broadcast the new context to workers to handle changes in constructor-defined properties.
@@ -905,6 +1023,8 @@ export class SystemManager {
 	 * @param {number} duration - The execution time in milliseconds.
 	 */
 	recordSystemTiming(systemName, jobType, duration) {
+		if (!this.isPerformanceMonitoringEnabled) return
+
 		const timings = this.systemTimings[systemName] || { update: 0, schedule: 0, process: 0, total: 0 }
 
 		// If jobType is a number from the JOB_TYPE enum, record it in the specific phase.
@@ -936,6 +1056,7 @@ export class SystemManager {
 		this.gameLoop.destroy()
 
 		systemRegistry.clear()
+		kernelRegistry.clear()
 		this.updateGroups = {}
 		this._systemConfig.clear()
 

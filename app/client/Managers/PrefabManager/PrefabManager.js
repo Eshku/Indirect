@@ -46,7 +46,6 @@ export class PrefabManager {
 		// --- Permanent Caches for Prefab Templates ---
 		// These store the canonical, processed data for prefabs defined in files.
 		// They are now stored in arrays, indexed by a numeric prefab ID for O(1) access.
-		this.preprocessedIdMaps = []
 		this.processedPrefabCache = []
 		this.processedChildrenCache = []
 		// Cache for raw data from files to avoid repeated file system access.
@@ -122,18 +121,6 @@ export class PrefabManager {
 			return null
 		}
 		return this.getPrefabDataById(id)
-	}
-
-	/**
-	 * Synchronously retrieves a pre-processed Map of componentTypeID -> data for a prefab.
-	 * This is a significant optimization for `instantiate` as it avoids re-processing the
-	 * high-level component object on every call.
-	 * @param {string} prefabName - The name of the prefab from the manifest.
-	 * @returns {Map<number, object> | null} The cached ID map or null if not found/preloaded.
-	 */
-	getPreprocessedIdMap(prefabName) {
-		const id = this.getPrefabId(prefabName)
-		return this.preprocessedIdMaps[id] // Returns the map or undefined if id is not found.
 	}
 
 	/**
@@ -257,8 +244,6 @@ export class PrefabManager {
 		// Automatically add the Prefab component to the root entity's data.
 		// This ensures every instantiated entity knows its numeric prefab ID.
 		mergedComponents.Prefab = { id: id }
-
-		// The preprocessedIdMaps cache is now obsolete and can be removed.
 
 		this.processedPrefabCache[id] = mergedComponents
 		this.processedChildrenCache[id] = finalChildren

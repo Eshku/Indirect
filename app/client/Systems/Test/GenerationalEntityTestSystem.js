@@ -1,8 +1,11 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, testManager } = engine.getManagers()
-const { entityManager, systemManager } = ecs
+const { entityManager } = ecs
 
 const { describe, it, expect } = await import(`${PATH_MANAGERS}/TestManager/TestAPI.js`)
+
+// Import component type IDs for clarity and consistency, even if not used directly as variables.
+const { position } = ecs.getTypeIDs()
 
 /**
  * A utility function to deconstruct and log an entity ID for human-readable validation.

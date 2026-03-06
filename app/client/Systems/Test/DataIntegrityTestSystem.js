@@ -1,7 +1,7 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager, payloadCompiler } = ecs
-
+const { churnTag, churnData, verification } = ecs.getTypeIDs()
+const { dataIntegrity } = ecs.getKernelIDs()
 /**
  * A critical data integrity test system designed to detect stale data and memory corruption
  * bugs within the ECS core, particularly those related to chunk memory recycling.
@@ -26,21 +26,20 @@ const { queryManager, payloadCompiler } = ecs
 export class DataIntegrityTestSystem {
 	// --- System Dependencies for the Scheduler ---
 	static dependencies = {
-		schedule: {
-			reads: ['churnData', 'verification'],
-			writes: ['churnData', 'verification'],
+		dataIntegrity: {
+			reads: [churnData, verification],
+			writes: [churnData, verification],
+			context: {
+				churnData,
+				verification,
+			},
 		},
 		process: {
-			reads: ['verification', 'churnData'],
+			reads: [verification, churnData],
 		},
 	}
 
 	constructor() {
-		// --- Component Caching ---
-		// Get component type IDs from the ECS. These components are defined in their own files.
-		const { position, churnTag, churnData, verification } = ecs.getTypeIDs()
-		Object.assign(this, { churnTag, churnData, verification })
-
 		// --- Test Configuration ---
 		this.maxEntities = 2000
 		this.creationBatchSize = 100
@@ -50,17 +49,15 @@ export class DataIntegrityTestSystem {
 		this.destructionPhaseDuration = 0.5 // seconds
 		this.phaseTimer = this.creationPhaseDuration
 		this.isCreationPhase = true
+	}
 
+	init() {
 		// --- Queries ---
-		// Query for counting entities and driving the destruction phase.
-		this.churnQuery = queryManager.getQuery({ with: [churnTag] })
-		// Query for the main-thread `process` method to report verification failures.
-		this.verificationQuery = queryManager.getQuery({ with: [churnTag, verification, churnData] })
-		// This query MUST be named `scheduleQuery` for the scheduler to create parallel jobs.
-		this.scheduleQuery = queryManager.getQuery({ with: [churnTag, churnData, verification] })
+		this.churnQuery = this.getQuery({ with: [churnTag] })
+		this.query = this.getQuery({ with: [churnTag, churnData, verification] })
 
-		// --- Payload for Entity Creation ---
-		const { payload, mutators } = payloadCompiler.compileEntity({
+		// --- Payloads ---
+		const { payload, mutators } = this.compiler.compileEntity({
 			churnTag: {},
 			churnData: { creationTick: 0, entityId: 0n }, // Initialize entityId to 0
 			verification: { status: 0 }, // 0: unchecked, 1: ok, -1: fail, 2: logged
@@ -68,16 +65,12 @@ export class DataIntegrityTestSystem {
 		this.creationPayload = payload
 		this.creationMutators = mutators
 
-		// --- Payload for updating verification status ---
-		// Pre-compile the payload for setting the verification status to "logged".
-		const { payload: verificationPayload } = payloadCompiler.compileComponent(
-			this.verification,
+		const { payload: verificationPayload } = this.compiler.compileComponent(
+			verification,
 			{ status: 2 }, // The data we want to set
 		)
 		this.verificationUpdatePayload = verificationPayload
-	}
 
-	init() {
 		console.log('[ChurnTest] System initialized. Starting in Creation phase.')
 	}
 
@@ -119,32 +112,17 @@ export class DataIntegrityTestSystem {
 		}
 	}
 
-	// Runs in parallel on workers. Verifies the integrity of the "magic number".
-	schedule(chunk, context) {
-		const { currentTick } = context
-		const entities = chunk.entities
-		const churnData = chunk.componentData[this.churnData]
-		const verifications = chunk.componentData[this.verification]
+	schedule() {
+		const jobs = []
+		const chunkIds = this.query.getChunks()
 
-		for (let i = 0; i < chunk.size; i++) {
-			// Only process entities that haven't already failed verification.
-			if (verifications.status[i] === -1) continue
-
-			const storedEntityId = churnData.entityId[i]
-			const actualEntityId = entities[i]
-
-			if (storedEntityId === 0n) {
-				// Prime the entity with its actual ID.
-				churnData.entityId[i] = actualEntityId
-				chunk.markEntityDirty(this.churnData, i, currentTick)
-				verifications.status[i] = 1 // Mark as OK for now.
-				chunk.markEntityDirty(this.verification, i, currentTick)
-			} else if (storedEntityId !== actualEntityId) {
-				// Stored ID doesn't match the entity in this slot. Corruption!
-				verifications.status[i] = -1
-				chunk.markEntityDirty(this.verification, i, currentTick)
-			}
+		for (const chunkId of chunkIds) {
+			jobs.push({
+				kernel: dataIntegrity,
+				payload: chunkId,
+			})
 		}
+		return jobs
 	}
 
 	// Runs on the main thread after parallel jobs. Reports any detected corruption.
@@ -152,9 +130,9 @@ export class DataIntegrityTestSystem {
 		// Only run the check periodically to avoid log spam.
 		if (currentTick % 60 !== 0) return
 
-		for (const chunk of this.verificationQuery.iter()) {
-			const verifications = chunk.componentData[this.verification]
-			const churnDataComponent = chunk.componentData[this.churnData]
+		for (const chunk of this.query.iter()) {
+			const verifications = chunk.componentData[verification]
+			const churnDataComponent = chunk.componentData[churnData]
 			const entities = chunk.entities
 
 			for (let i = 0; i < chunk.size; i++) {

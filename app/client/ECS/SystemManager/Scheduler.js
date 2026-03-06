@@ -1,5 +1,6 @@
 import { ChunkView } from '../../Managers/QueryManager/ChunkView.js'
 import { entityStore } from '../EntityManager/EntityManager.js'
+import { kernelRegistry } from './KernelRegistry.js'
 import { MPSCQueue, MPSC_QUEUE_CAPACITY } from '../../Core/Algorithms/MPSCQueue.js'
 import { WorkStealingDeque, NO_JOB_AVAILABLE, DEQUE_CAPACITY } from '../../Core/Algorithms/WorkStealingDeque.js'
 import {
@@ -13,6 +14,7 @@ import {
 	JOB_DEP_LIST_START_OFFSET,
 	JOB_DEP_LIST_COUNT_OFFSET,
 	JOB_SYSTEM_ID_OFFSET,
+	JOB_KERNEL_ID_OFFSET,
 	JOB_DEP_COUNTER_OFFSET,
 	JOB_TYPE,
 	JOB_AFFINITY,
@@ -36,7 +38,7 @@ import {
 /**
  * Maps JOB_TYPE enum to method names for dependency lookups.
  */
-const JOB_TYPE_TO_METHOD_NAME = ['update', 'schedule', 'process']
+const JOB_TYPE_TO_METHOD_NAME = ['update', null, 'process']
 
 /**
  * --- ARCHITECTURAL NOTE on Private LIFO Buffers ---
@@ -81,8 +83,6 @@ export class Scheduler {
 		this.jobCounter = 0
 		this.dependentsCounter = 0
 		this.perFrameContext = null
-		this.systemContexts = {}
-		this.finalSystemContexts = {} // For main-thread job execution
 		this.nextDistributeThread = 1 // For round-robin distribution, starts at worker 1.
 		this.hasParallelJobs = false // Per-execution flag
 	}
@@ -161,42 +161,14 @@ export class Scheduler {
 		this._reset()
 
 		// Store the context for this specific execution.
-		this.perFrameContext = perFrameContext
+		this.perFrameContext = { ...perFrameContext }
 
 		// 2. Build the Job Graph (as internal data structures)
 		this._buildGraph(systems, perFrameContext)
 
 		// Check if any parallel jobs were created.
-		this.hasParallelJobs = this.jobs.some(job => job.type === JOB_TYPE.SCHEDULE)
+		this.hasParallelJobs = this.jobs.some(job => job.type === JOB_TYPE.KERNEL)
 
-		// 2.5. Collect system-specific contexts for workers
-		// This is done on the main thread to be sent to workers.
-		this.systemContexts = {}
-		const currentSystemsInGroup = new Set()
-
-		for (const system of systems) {
-			const systemName = system.constructor.name
-			currentSystemsInGroup.add(systemName)
-
-			const metadata = this.systemManager.systemMetadataCache.get(systemName)
-			if (metadata?.hasSchedule) {
-				const systemContext = this.workerManager.getSystemContext(systemName, system)
-				this.systemContexts[systemName] = systemContext
-
-				// Pre-build/update the context for main-thread execution, reusing objects to prevent memory leaks.
-				if (!this.finalSystemContexts[systemName]) {
-					this.finalSystemContexts[systemName] = {}
-				}
-				Object.assign(this.finalSystemContexts[systemName], this.perFrameContext, systemContext)
-			}
-		}
-
-		// Clean up contexts for systems that are no longer in this execution group (e.g., after HMR).
-		for (const systemName in this.finalSystemContexts) {
-			if (!currentSystemsInGroup.has(systemName)) {
-				delete this.finalSystemContexts[systemName]
-			}
-		}
 		// 3. Write the graph data to the SharedArrayBuffers.
 		this._writeGraphToSAB()
 
@@ -227,7 +199,6 @@ export class Scheduler {
 		this.jobCounter = 0
 		this.dependentsCounter = 0
 		this.perFrameContext = null
-		this.systemContexts = {}
 		this.inboxDrainSize = 0
 		this.inboxDrainIndex = 0
 		this.hasParallelJobs = false
@@ -312,28 +283,48 @@ export class Scheduler {
 				jobIdsForSystem.push(jobId)
 			}
 
-			// B. Create SCHEDULE jobs (if schedule() exists)
+			// B. Create KERNEL jobs (if schedule() exists)
 			if (metadata.hasSchedule) {
-				const query = system.scheduleQuery
+				const scheduleStartTime = performance.now()
+				const jobDefinitions = system.schedule(perFrameContext) || []
+				const scheduleEndTime = performance.now()
+				// Record the time it took to create the job definitions.
+				// This re-purposes the 'schedule' timing bucket in the PerformanceMonitor
+				// to measure job creation cost, not execution.
+				this.systemManager.recordSystemTiming(systemName, JOB_TYPE.KERNEL, scheduleEndTime - scheduleStartTime)
 
-				if (query) {
-					for (const chunk of query.iter()) {
-						const jobId = this.jobCounter++
-						this.jobs[jobId] = {
-							id: jobId,
-							systemName: systemName,
-							type: JOB_TYPE.SCHEDULE,
-							chunkId: chunk.chunkId,
-							dependencyCounter: 0,
-							affinity: JOB_AFFINITY.ANY_WORKER,
-							dependents: [],
-						}
-						jobIdsForSystem.push(jobId)
+				for (const jobDef of jobDefinitions) {
+					const { kernel: kernelId, payload } = jobDef
+					if (kernelId === undefined || payload === undefined) {
+						console.warn(`[Scheduler] System "${systemName}" returned an invalid job definition:`, jobDef)
+						continue
 					}
-				} else {
-					console.warn(
-						`[Scheduler] System "${systemName}" has a 'schedule' method but no queries. No parallel jobs will be created.`,
-					)
+
+					// Get kernel metadata to find its name for dependency lookup
+					const kernelMeta = kernelRegistry.kernelMetadata.get(kernelId)
+					if (!kernelMeta) {
+						console.warn(`[Scheduler] Could not find metadata for kernel with ID ${kernelId}.`)
+						continue
+					}
+					const kernelName = kernelMeta.name
+
+					if (this.jobCounter >= MAX_JOBS) {
+						throw new Error(`[Scheduler] Exceeded MAX_JOBS. Increase MAX_JOBS constant.`)
+					}
+
+					this.jobs[this.jobCounter] = {
+						id: this.jobCounter,
+						systemName: systemName,
+						type: JOB_TYPE.KERNEL,
+						kernelId: kernelId,
+						kernelName: kernelName, // Store for dependency resolution
+						payload: payload,
+						dependencyCounter: 0,
+						affinity: JOB_AFFINITY.ANY_WORKER,
+						dependents: [],
+					}
+					jobIdsForSystem.push(this.jobCounter)
+					this.jobCounter++
 				}
 			}
 
@@ -364,7 +355,7 @@ export class Scheduler {
 		// We will add dependencies in stages.
 
 		// 1. Resolve `runsAfter` (Control-flow) dependencies. (Highest Priority)
-		this._resolveControlFlowDependencies(systems)
+		this._resolveControlFlowDependencies(systems)		
 
 		// 2. Resolve local phase (`update`->`schedule`->`process`) dependencies.
 		this._resolveLocalPhaseDependencies()
@@ -389,8 +380,9 @@ export class Scheduler {
 		for (const job of this.jobs) {
 			const systemId = this.systemManager.getSystemId(job.systemName)
 
-			// Pack job type and chunk ID into a single 32-bit integer.
-			const jobPayload = (job.type << 24) | (job.chunkId || 0)
+			// Pack job type and payload into a single 32-bit integer.
+			// For KERNEL jobs, job.payload is the payload. For others, it's 0.
+			const jobPayload = (job.type << 24) | (job.payload || 0)
 
 			// Write the job's dependents to the flat dependents list.
 			const depListStart = this.dependentsCounter
@@ -412,9 +404,15 @@ export class Scheduler {
 			jobsView[jobOffset + JOB_PAYLOAD_OFFSET] = jobPayload
 			jobsView[jobOffset + JOB_DEP_LIST_START_OFFSET] = depListStart
 			jobsView[jobOffset + JOB_DEP_LIST_COUNT_OFFSET] = depListCount
+			jobsView[jobOffset + JOB_SYSTEM_ID_OFFSET] = systemId
+
+			if (job.type === JOB_TYPE.KERNEL) {
+				jobsView[jobOffset + JOB_KERNEL_ID_OFFSET] = job.kernelId
+			} else {
+				jobsView[jobOffset + JOB_KERNEL_ID_OFFSET] = 0 // Sentinel for non-kernel jobs
+			}
 			// The dependency counter is the most frequently updated part, so it's written last.
 			jobsView[jobOffset + JOB_DEP_COUNTER_OFFSET] = job.dependencyCounter
-			jobsView[jobOffset + JOB_SYSTEM_ID_OFFSET] = systemId
 		}
 
 		// --- Final Step: Signal to workers that the graph is ready ---
@@ -685,7 +683,7 @@ export class Scheduler {
 
 		const system = this.systemManager.getSystemById(systemId)
 		const jobType = jobPayload >> 24
-		const chunkId = jobPayload & 0x00ffffff
+		const payload = jobPayload & 0x00ffffff
 
 		const systemName = system?.constructor.name // For logging and timing
 
@@ -701,17 +699,31 @@ export class Scheduler {
 				case JOB_TYPE.UPDATE:
 					await system.update(this.perFrameContext)
 					break
-				case JOB_TYPE.SCHEDULE:
-					const scheduleLogic = this.workerManager.getSystemLogic(systemName)
+				case JOB_TYPE.KERNEL: {
+					const oldFrameContext = self.frameContext
+					self.frameContext = this.perFrameContext // Make it global for the kernel
 
-					if (scheduleLogic) {
-						// Use the pre-built context object to avoid per-job allocation.
-						const scheduleContext = this.finalSystemContexts[systemName] || this.perFrameContext
-						this.mainThreadChunkView.setChunk(chunkId)
-						// Execute the transpiled schedule logic.
-						await scheduleLogic(this.mainThreadChunkView, scheduleContext)
+					const kernelId = jobsView[jobOffset + JOB_KERNEL_ID_OFFSET]
+					const kernelFn = kernelRegistry.idToKernel.get(kernelId)
+					if (!kernelFn) {
+						console.error(`[Scheduler] Main thread could not find kernel function for ID ${kernelId}`)
+						break
 					}
+
+					const kernelMeta = kernelRegistry.kernelMetadata.get(kernelId)
+					const kernelName = kernelMeta.name
+					const systemContext = this.workerManager.getSystemContext(system, kernelName)
+
+					const kernelContext = {
+						getChunkView: chunkId => {
+							this.mainThreadChunkView.setChunk(chunkId)
+							return this.mainThreadChunkView
+						},
+					}
+					await kernelFn(payload, systemContext, kernelContext)
+					self.frameContext = oldFrameContext // Restore global context
 					break
+				}
 				case JOB_TYPE.PROCESS:
 					await system.process(this.perFrameContext)
 					break
@@ -722,7 +734,16 @@ export class Scheduler {
 
 		const endTime = performance.now()
 		const duration = endTime - startTime
-		this.systemManager.recordSystemTiming(systemName, jobType, duration)
+
+		if (jobType === JOB_TYPE.KERNEL) {
+			// The 'schedule' time now measures job creation (in _buildGraph). We still need to add the
+			// execution time of any main-thread kernels to the system's total for an accurate picture.
+			// We pass a non-numeric type to only update the total.
+			this.systemManager.recordSystemTiming(systemName, 'total_only', duration)
+		} else {
+			// For UPDATE and PROCESS, record the specific phase time.
+			this.systemManager.recordSystemTiming(systemName, jobType, duration)
+		}
 
 		// After "execution", process the job's dependents.
 		this._processDependents(jobId, threadId, frameId)
@@ -848,7 +869,7 @@ export class Scheduler {
 			}
 
 			const updateJobs = []
-			const scheduleJobs = []
+			const kernelJobs = []
 			const processJobs = []
 
 			// Categorize jobs by type for this system
@@ -856,8 +877,8 @@ export class Scheduler {
 				const job = this.jobs[jobId]
 				if (job.type === JOB_TYPE.UPDATE) {
 					updateJobs.push(job)
-				} else if (job.type === JOB_TYPE.SCHEDULE) {
-					scheduleJobs.push(job)
+				} else if (job.type === JOB_TYPE.KERNEL) {
+					kernelJobs.push(job)
 				} else if (job.type === JOB_TYPE.PROCESS) {
 					processJobs.push(job)
 				}
@@ -867,23 +888,22 @@ export class Scheduler {
 			const updateJob = updateJobs[0]
 			const processJob = processJobs[0]
 
-			// Create `update` -> `schedule` dependencies
-			if (updateJob && scheduleJobs.length > 0) {
-				for (const scheduleJob of scheduleJobs) {
-					this._addDependency(updateJob, scheduleJob)
+			// Create `update` -> `kernel` dependencies. All kernels must wait for the update phase.
+			if (updateJob && kernelJobs.length > 0) {
+				for (const kernelJob of kernelJobs) {
+					this._addDependency(updateJob, kernelJob)
 				}
 			}
 
-			// Create `schedule` -> `process` dependencies
-			if (processJob && scheduleJobs.length > 0) {
-				for (const scheduleJob of scheduleJobs) {
-					this._addDependency(scheduleJob, processJob)
-				}
-			}
-
-			// Create `update` -> `process` dependency (for the anti-pattern case)
-			if (updateJob && processJob && scheduleJobs.length === 0) {
+			// The `process` job is a finalizer and must run after all other jobs for the system.
+			if (processJob && updateJob) {
 				this._addDependency(updateJob, processJob)
+			}
+			// Create `kernel` -> `process` dependencies
+			if (processJob && kernelJobs.length > 0) {
+				for (const kernelJob of kernelJobs) {
+					this._addDependency(kernelJob, processJob)
+				}
 			}
 		}
 	}
@@ -902,8 +922,14 @@ export class Scheduler {
 		const getJobDependencies = job => {
 			const metadata = this.systemManager.systemMetadataCache.get(job.systemName)
 			if (!metadata) return { reads: new Set(), writes: new Set() }
-			const methodName = JOB_TYPE_TO_METHOD_NAME[job.type]
-			return metadata.dependencies[methodName]
+
+			let methodName
+			if (job.type === JOB_TYPE.KERNEL) {
+				methodName = job.kernelName
+			} else {
+				methodName = JOB_TYPE_TO_METHOD_NAME[job.type]
+			}
+			return metadata.dependencies[methodName] || { reads: new Set(), writes: new Set() }
 		}
 
 		for (const job of this.jobs) {
@@ -919,8 +945,8 @@ export class Scheduler {
 					// The special rule: do not create dependencies between parallel jobs of the same system.
 					if (
 						!(
-							job.type === JOB_TYPE.SCHEDULE &&
-							prereqJob.type === JOB_TYPE.SCHEDULE &&
+							job.type === JOB_TYPE.KERNEL &&
+							prereqJob.type === JOB_TYPE.KERNEL &&
 							job.systemName === prereqJob.systemName
 						)
 					) {
@@ -934,8 +960,8 @@ export class Scheduler {
 						const prereqJob = this.jobs[readerJobId]
 						if (
 							!(
-								job.type === JOB_TYPE.SCHEDULE &&
-								prereqJob.type === JOB_TYPE.SCHEDULE &&
+								job.type === JOB_TYPE.KERNEL &&
+								prereqJob.type === JOB_TYPE.KERNEL &&
 								job.systemName === prereqJob.systemName
 							)
 						) {
@@ -958,8 +984,8 @@ export class Scheduler {
 					const prereqJob = this.jobs[lastWriter.get(typeId)]
 					if (
 						!(
-							job.type === JOB_TYPE.SCHEDULE &&
-							prereqJob.type === JOB_TYPE.SCHEDULE &&
+							job.type === JOB_TYPE.KERNEL &&
+							prereqJob.type === JOB_TYPE.KERNEL &&
 							job.systemName === prereqJob.systemName
 						)
 					) {
@@ -980,6 +1006,12 @@ export class Scheduler {
 	 * @private
 	 */
 	_addDependency(prereqJob, dependentJob) {
+		// Prevent a job from depending on itself. This is a valid scenario for a single
+		// job that reads from and writes to the same component (a Read-Modify-Write pattern).
+		if (prereqJob.id === dependentJob.id) {
+			return
+		}
+
 		// Prevent adding the same dependency twice. This can happen when both
 		// local phase resolution and data-flow resolution identify the same dependency.
 		if (prereqJob.dependents.includes(dependentJob.id)) {
@@ -1070,11 +1102,13 @@ export class Scheduler {
 
 		// Unpack the data into a human-readable format.
 		const systemName = this.systemManager.getSystemNameById(systemId)
-		const jobType = jobPayload >> 24
-		const chunkId = jobPayload & 0x00ffffff
+		const jobTypeNum = jobPayload >> 24
+		const payload = jobPayload & 0x00ffffff
 
-		const info = { jobId, systemName, jobType: JOB_TYPE_TO_METHOD_NAME[jobType] }
-		if (jobType === JOB_TYPE.SCHEDULE) info.chunkId = chunkId
+		const jobTypeName =
+			jobTypeNum === JOB_TYPE.KERNEL ? 'kernel' : JOB_TYPE_TO_METHOD_NAME[jobTypeNum] || 'unknown'
+		const info = { jobId, systemName, jobType: jobTypeName }
+		if (jobTypeNum === JOB_TYPE.KERNEL) info.payload = payload
 		return info
 	}
 }

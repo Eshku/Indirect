@@ -1,7 +1,7 @@
 import { OpCodes } from './CommandOpcodes.js'
 import { CommandBufferReader } from './CommandBufferReader.js'
 import * as Schema from '../ComponentManager/ComponentSchema.js'
-import { entityStore } from '../EntityManager/EntityManager.js'
+import { entityStore, MASK_PARTS } from '../EntityManager/EntityManager.js'
 
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 /**
@@ -282,16 +282,18 @@ export class CommandBufferExecutor {
 	_buildAndExecuteMoveBatches(modifications, reader, currentTick) {
 		// --- 1. Gather & Consolidate Pass ---
 		// First, determine the net structural change for each unique entity.
-		const entityTransitions = new Map() // Map<entityId, { sourceArchetypeId: number, targetMask: bigint, componentsToAdd: Map<typeId, {dataOffset, dataLength}> }>
+		const entityTransitions = new Map() // Map<entityId, { sourceArchetypeId: number, targetMask: BigUint64Array, componentsToAdd: Map<typeId, {dataOffset, dataLength}> }>
 
 		// Helper to ensure an entity is in the transition map before processing a modification for it.
 		const ensureTransition = entityId => {
 			if (!entityTransitions.has(entityId)) {
 				const sourceArchetypeId = this.entityManager.getArchetypeForEntity(entityId)
 				if (sourceArchetypeId === undefined) return null // Entity might have been destroyed
+				const maskOffset = sourceArchetypeId * MASK_PARTS
+				const sourceMask = entityStore.archetypeMasks.subarray(maskOffset, maskOffset + MASK_PARTS)
 				entityTransitions.set(entityId, {
 					sourceArchetypeId,
-					targetMask: entityStore.archetypeMasks[sourceArchetypeId],
+					targetMask: new BigUint64Array(sourceMask), // Clone the mask
 					componentsToAdd: new Map(),
 				})
 			}
@@ -300,13 +302,14 @@ export class CommandBufferExecutor {
 
 		// Process Additions
 		for (const [componentTypeID, addBatch] of modifications.add.entries()) {
-			const bitflag = Schema.componentBitFlags[componentTypeID]
+			const partIndex = Math.floor(componentTypeID / 64)
+			const bitInPart = 1n << BigInt(componentTypeID % 64)
 			for (let i = 0; i < addBatch.entityIds.length; i++) {
 				const entityId = addBatch.entityIds[i]
 				const transition = ensureTransition(entityId)
 				if (!transition) continue
 
-				transition.targetMask |= bitflag
+				transition.targetMask[partIndex] |= bitInPart
 				transition.componentsToAdd.set(componentTypeID, {
 					dataOffset: addBatch.dataOffsets[i],
 					dataLength: addBatch.dataLengths[i],
@@ -316,11 +319,12 @@ export class CommandBufferExecutor {
 
 		// Process Removals
 		for (const [componentTypeID, entityIds] of modifications.remove.entries()) {
-			const bitflag = Schema.componentBitFlags[componentTypeID]
+			const partIndex = Math.floor(componentTypeID / 64)
+			const bitInPart = 1n << BigInt(componentTypeID % 64)
 			for (const entityId of entityIds) {
 				const transition = ensureTransition(entityId)
 				if (!transition) continue
-				transition.targetMask &= ~bitflag
+				transition.targetMask[partIndex] &= ~bitInPart
 			}
 		}
 
@@ -369,23 +373,36 @@ export class CommandBufferExecutor {
 		}
 
 		// --- 3. Blit Pass (Execution) ---
+		const removalsByArchetype = new Map() // Map<sourceArchetypeId, entityId[]>
+
+		// --- Pass 3a: All Additions & Copies ---
 		for (const [sourceChunkId, targets] of movesByChunk.entries()) {
 			for (const [targetArchetypeId, moveBatch] of targets.entries()) {
 				const { entityIds, sourceLocations, componentsToAssign } = moveBatch
 				const sourceArchetypeId = entityStore.chunkArchetypeIds[sourceChunkId]
 
-				this.entityManager._addEntitiesByCopyingBatch(
+				this.entityManager._addEntitiesByCopyingBatch( // This copies data to the new location
 					targetArchetypeId,
 					sourceArchetypeId,
 					sourceLocations,
 					entityIds,
 					componentsToAssign,
 					reader,
-					currentTick
+					currentTick,
 				)
-				// This can now safely remove the batch of entities from their original archetype
-				this.entityManager._removeEntitiesBatch(sourceArchetypeId, entityIds)
+
+				// Defer the removal by adding the entities to a final removal batch.
+				if (!removalsByArchetype.has(sourceArchetypeId)) {
+					removalsByArchetype.set(sourceArchetypeId, [])
+				}
+				removalsByArchetype.get(sourceArchetypeId).push(...entityIds)
 			}
+		}
+
+		// --- Pass 3b: All Removals ---
+		// Now that all data has been safely copied, execute the batched removals.
+		for (const [sourceArchetypeId, entityIdsToRemove] of removalsByArchetype.entries()) {
+			this.entityManager._removeEntitiesBatch(sourceArchetypeId, entityIdsToRemove)
 		}
 	}
 

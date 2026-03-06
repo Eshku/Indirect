@@ -1,6 +1,7 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager } = ecs
+
+const { velocity, speed, movementIntent } = ecs.getTypeIDs()
 
 /**
  * This system is responsible for character movement based on their `MovementIntent`.
@@ -8,22 +9,18 @@ const { queryManager } = ecs
  * which is then used by `ApplyVelocity` to update the entity's position.
  */
 export class MovementSystem {
-	constructor() {
-		
-		const { velocity, speed, movementIntent } = ecs.getTypeIDs()
-		Object.assign(this, { velocity, speed, movementIntent })
-
-		this.query = queryManager.getQuery({
+	init() {
+		this.query = this.getQuery({
 			with: [velocity, speed, movementIntent],
 		})
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.query.iter()) {
-			const velocityArrays = chunk.componentData[this.velocity]
-			const intentArrays = chunk.componentData[this.movementIntent]
-			const speedArrays = chunk.componentData[this.speed]
-			const velocityDirtyTicks = chunk.dirtyTicks[this.velocity]
+			const velocityArrays = chunk.componentData[velocity]
+			const intentArrays = chunk.componentData[movementIntent]
+			const speedArrays = chunk.componentData[speed]
+			const velocityDirtyTicks = chunk.dirtyTicks[velocity]
 
 			const velX = velocityArrays.x
 			const velY = velocityArrays.y
@@ -45,7 +42,7 @@ export class MovementSystem {
 				}
 			}
 
-			if (wasModified) chunk.markChunkDirty(this.velocity, currentTick)
+			if (wasModified) chunk.markChunkDirty(velocity, currentTick)
 		}
 	}
 

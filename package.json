@@ -1,12 +1,11 @@
 {
   "name": "indirect-engine",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "main": "./app/app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "npm run build:systems && set NODE_ENV=development&& node ./app/hmr/supervisor.js",
+    "start": "set NODE_ENV=development&& node ./app/hmr/supervisor.js",
     "build": "set NODE_ENV=production&& electron-builder --win",
-    "build:systems": "node app/scripts/transpileSystems.js",
     "bundle": "echo \"Error: no bundle specified\" && exit 1"
   },
   "author": "",

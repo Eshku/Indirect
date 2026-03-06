@@ -3,6 +3,8 @@ const { ecs } = engine.getManagers()
 const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
+const { position, velocity, cpuTag } = ecs.getTypeIDs()
+
 /**
  * A single-threaded, purely CPU-bound benchmark.
  * This system performs the same calculations as ParallelCPUBenchmark but runs
@@ -12,15 +14,12 @@ const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompi
 export class CPUBenchmark {
 	static dependencies = {
 		update: {
-			reads: ['velocity'],
-			writes: ['position'],
+			reads: [velocity],
+			writes: [position],
 		},
 	}
 
 	constructor() {
-		const { position, velocity, cpuTag } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity, cpuTag })
-
 		this.query = queryManager.getQuery({
 			with: [position, velocity, cpuTag],
 		})
@@ -42,8 +41,8 @@ export class CPUBenchmark {
 
 	update(context) {
 		for (const chunk of this.query.iter()) {
-			const positions = chunk.componentData[this.position]
-			const velocities = chunk.componentData[this.velocity]
+			const positions = chunk.componentData[position]
+			const velocities = chunk.componentData[velocity]
 
 			for (let i = 0; i < chunk.size; i++) {
 				// Read initial state once
@@ -61,7 +60,7 @@ export class CPUBenchmark {
 				// Write the final result once
 				positions.x[i] = x
 			}
-			chunk.markAllDirty(this.position, context.currentTick)
+			chunk.markAllDirty(position, context.currentTick)
 		}
 	}
 

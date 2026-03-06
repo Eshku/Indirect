@@ -20,6 +20,7 @@ class WorkerEntry {
 		this.JOB_DEP_LIST_START_OFFSET = 0
 		this.JOB_DEP_LIST_COUNT_OFFSET = 0
 		this.JOB_SYSTEM_ID_OFFSET = 0
+		this.JOB_KERNEL_ID_OFFSET = 0
 		this.JOB_DEP_COUNTER_OFFSET = 0
 		this.JOB_TYPE = {}
 		this.JOB_AFFINITY = {}
@@ -60,9 +61,9 @@ class WorkerEntry {
 		this.currentFrameId = -1
 		this.currentTick = -1
 
-		this.perFrameContext = null
+		// This is now a global, read-only object for kernels.
+		self.frameContext = {}
 		this.systemContexts = {} // Static, system-specific contexts.
-		this.perFrameSystemContexts = {} // Pre-merged contexts to avoid per-job allocation.
 
 		self.onmessage = this.handleMessage.bind(this)
 	}
@@ -83,7 +84,8 @@ class WorkerEntry {
 			dequeBuffers,
 			spatialHashGridSABs,
 			sharedData,
-			prebuiltLogics,
+			kernelCode,
+			kernelMetadata,
 			initialChunks,
 			systemIdMap,
 			totalThreads,
@@ -93,14 +95,24 @@ class WorkerEntry {
 		self.id = payload.workerId
 
 		// These are the raw, empty container arrays. They will be populated by syncChunks.
+		entityStore.archetypeMasks = new BigUint64Array(sharedData.archetypeMasks)
+		entityStore.archetypeComponentCounts = new Uint16Array(sharedData.archetypeComponentCounts)
+		entityStore.archetypeChunkCounts = new Uint16Array(sharedData.archetypeChunkCounts)
+		entityStore.archetypeHeadChunkIds = new Uint16Array(sharedData.archetypeHeadChunkIds)
+		entityStore.archetypeTailChunkIds = new Uint16Array(sharedData.archetypeTailChunkIds)
+		entityStore.archetypeLastNonFullChunkId = new Uint16Array(sharedData.archetypeLastNonFullChunkId)
+		entityStore.archetypeComponentListStartIndices = new Uint32Array(sharedData.archetypeComponentListStartIndices)
+		entityStore.packedComponentIdPages = sharedData.packedComponentIdPageSABs.map(sab => new Uint16Array(sab))
+
 		entityStore.chunkComponentData = new Array(sharedData.MAX_CHUNKS)
 		entityStore.chunkDirtyTicks = new Array(sharedData.MAX_CHUNKS)
 		entityStore.chunkArchetypeDirtyTicks = sharedData.chunkArchetypeDirtyTicks
 		entityStore.chunkArchetypeIds = new Uint16Array(sharedData.chunkArchetypeIds)
 		entityStore.chunkSizes = new Uint16Array(sharedData.chunkSizes)
 		entityStore.chunkCapacities = new Uint16Array(sharedData.chunkCapacities)
+		entityStore.chunkPrevInArchetype = new Uint16Array(sharedData.chunkPrevInArchetype)
+		entityStore.chunkNextInArchetype = new Uint16Array(sharedData.chunkNextInArchetype)
 
-		entityStore.archetypeComponentTypeIDArrays = sharedData.archetypeComponentTypeIDArrays
 
 		this.syncChunkDeltas({ newChunks: initialChunks })
 
@@ -119,6 +131,7 @@ class WorkerEntry {
 			this.idToSystemName[id] = name
 		}
 
+		this.kernelMetadata = kernelMetadata
 		const jobLayoutModuleUrl = new URL('../../ECS/SystemManager/JobLayout.js', baseUrl)
 		const frameStateLayoutModuleUrl = new URL('../../ECS/SystemManager/FrameStateLayout.js', baseUrl)
 
@@ -153,7 +166,7 @@ class WorkerEntry {
 			Object.assign(this, frameStateLayoutModule)
 
 			// Quick verification
-			if (this.JOB_TYPE.SCHEDULE === undefined) {
+			if (this.JOB_TYPE.KERNEL === undefined) {
 				throw new Error('Failed to load JobLayout constants.')
 			}
 			if (this.FRAME_STATE_TOTAL_JOBS_OFFSET === undefined) {
@@ -174,8 +187,12 @@ class WorkerEntry {
 			this.NO_JOB_AVAILABLE = NO_JOB_AVAILABLE
 
 			// Now that imports are confirmed, proceed with initialization.
-			for (const systemName in prebuiltLogics) {
-				await this.loadScheduleLogic({ systemName, ...prebuiltLogics[systemName] })
+			// Load all kernel modules.
+			for (const moduleName in kernelCode) {
+				const code = kernelCode[moduleName]
+				// Use importFromString to load the module from its source code string.
+				const kernelModule = await this.importFromString(code)
+				this.logicRegistry[moduleName] = kernelModule
 			}
 
 			this.chunkViewInstance = new this.ChunkView(entityStore)
@@ -184,6 +201,12 @@ class WorkerEntry {
 			this.spatialHashGrid = new SpatialHashGrid(spatialHashGridSABs)
 			// Make it available on the global worker scope so schedule functions can access it.
 			self.spatialHashGrid = this.spatialHashGrid
+			// Make a helper for getting a chunk view available globally.
+			// This will be part of the kernelContext object passed to kernels.
+			self.getChunkView = chunkId => {
+				this.chunkViewInstance.setChunk(chunkId)
+				return this.chunkViewInstance
+			}
 
 			// All workers get a handle to the same MPSC queue to send jobs to the main thread.
 			this.mainThreadInbox = new MPSCQueue(mainThreadInbox)
@@ -216,45 +239,22 @@ class WorkerEntry {
 			frameGeneration = Atomics.load(this.frameState, this.FRAME_STATE_FRAME_GENERATION_OFFSET)
 
 			// Read the new context data from the shared buffer.
-			this._readSharedFrameContext()
-
-			// Pre-build the per-system contexts for this frame.
-			this._buildPerFrameSystemContexts()
+			this._updateSharedFrameContext()
 
 			// Process all jobs for this frame.
 			await this.processFrame()
 		}
 	}
 
-	_readSharedFrameContext() {
+	_updateSharedFrameContext() {
 		this.currentFrameId = Number(this.frameContextI64View[this.FRAME_CONTEXT_FRAME_ID_OFFSET])
+		this.currentTick = Number(this.frameContextI64View[this.FRAME_CONTEXT_CURRENT_TICK_OFFSET])
 
-		// Re-create the perFrameContext object for this frame from the shared buffer.
-		// This is cheap and ensures immutability between frames.
-		this.perFrameContext = {
-			currentTick: Number(this.frameContextI64View[this.FRAME_CONTEXT_CURRENT_TICK_OFFSET]),
-			lastTick: Number(this.frameContextI64View[this.FRAME_CONTEXT_LAST_TICK_OFFSET]),
-			deltaTime: this.frameContextF64View[this.FRAME_CONTEXT_DELTA_TIME_OFFSET],
-			alpha: this.frameContextF64View[this.FRAME_CONTEXT_ALPHA_OFFSET],
-		}
-
-		this.currentTick = this.perFrameContext.currentTick
-	}
-
-	_buildPerFrameSystemContexts() {
-		const sContexts = this.systemContexts || {}
-		const context = this.perFrameContext
-
-		// Update or create contexts for the current frame.
-		for (const systemName in sContexts) {
-			const mergedContext = Object.assign({}, context, sContexts[systemName])
-			Object.freeze(mergedContext)
-			this.perFrameSystemContexts[systemName] = mergedContext
-		}
-		// Clean up contexts for systems that are no longer running.
-		for (const systemName in this.perFrameSystemContexts) {
-			if (!sContexts[systemName]) delete this.perFrameSystemContexts[systemName]
-		}
+		// Update the global frameContext object that kernels will access.
+		self.frameContext.currentTick = this.currentTick
+		self.frameContext.lastTick = Number(this.frameContextI64View[this.FRAME_CONTEXT_LAST_TICK_OFFSET])
+		self.frameContext.deltaTime = this.frameContextF64View[this.FRAME_CONTEXT_DELTA_TIME_OFFSET]
+		self.frameContext.alpha = this.frameContextF64View[this.FRAME_CONTEXT_ALPHA_OFFSET]
 	}
 
 	async handleMessage(event) {
@@ -277,21 +277,24 @@ class WorkerEntry {
 					// This message contains the initial static context for all parallel systems.
 					this.systemContexts = payload.systemContexts || {}
 					return
-				case 'hmr-schedule-update':
-					await this.loadScheduleLogic(payload)
+				case 'hmr-kernel-update':
+					// Future: Implement HMR for kernel modules.
+					// await this.loadKernelModule(payload)
 					return
 				case 'hmr-context-update':
-					// A single system's static context has been updated via HMR.
-					this.systemContexts[payload.systemName] = payload.context
-					// If a frame is active, we need to update the merged per-frame context as well.
-					if (this.perFrameContext && this.perFrameSystemContexts[payload.systemName]) {
-						const finalContext = Object.assign({}, this.perFrameContext, payload.context)
-						Object.freeze(finalContext)
-						this.perFrameSystemContexts[payload.systemName] = finalContext
+					// A single kernel's static context has been updated via HMR.
+					if (!this.systemContexts[payload.systemName]) {
+						this.systemContexts[payload.systemName] = {}
 					}
+					this.systemContexts[payload.systemName][payload.kernelName] = payload.context
 					return
 				case 'sync-chunk-deltas':
 					this.syncChunkDeltas(payload)
+					return
+				case 'sync-archetype-store-pages':
+					for (const pageSAB of payload.pages) {
+						entityStore.packedComponentIdPages.push(new Uint16Array(pageSAB))
+					}
 					return
 				default:
 					throw new Error(`[Worker] Unknown job type: ${type}`)
@@ -460,20 +463,31 @@ class WorkerEntry {
 		const jobOffset = jobId * this.JOB_STRIDE_IN_U32
 		const systemId = jobsView[jobOffset + this.JOB_SYSTEM_ID_OFFSET]
 		const jobPayload = jobsView[jobOffset + this.JOB_PAYLOAD_OFFSET]
+
 		const jobType = jobPayload >> 24
-		const chunkId = jobPayload & 0x00ffffff
-
+		const payload = jobPayload & 0x00ffffff
 		const systemName = this.idToSystemName[systemId]
-		const scheduleLogic = this.logicRegistry[systemName]?.logic
 
-		if (jobType === this.JOB_TYPE.SCHEDULE && scheduleLogic) {
-			try {
-				this.chunkViewInstance.setChunk(chunkId)
-				// Use the pre-built context object to avoid per-job allocation.
-				const context = this.perFrameSystemContexts[systemName] || this.perFrameContext
-				await scheduleLogic(this.chunkViewInstance, context)
-			} catch (error) {
-				console.error(`[Worker ${self.id}] Error in schedule job for ${systemName}:`, error)
+		if (jobType === this.JOB_TYPE.KERNEL) {
+			const kernelId = jobsView[jobOffset + this.JOB_KERNEL_ID_OFFSET]
+			const kernelMeta = this.kernelMetadata.get(kernelId)
+			if (!kernelMeta) {
+				console.error(`[Worker ${self.id}] Could not find metadata for kernel ID ${kernelId}.`)
+			} else {
+				const { name: kernelName, moduleName } = kernelMeta
+				const kernelFn = this.logicRegistry[moduleName]?.[kernelName]
+				const systemContext = this.systemContexts[systemName]?.[kernelName]
+
+				if (kernelFn) {
+					try {
+						const kernelContext = { getChunkView: self.getChunkView }
+						await kernelFn(payload, systemContext, kernelContext)
+					} catch (error) {
+						console.error(`[Worker ${self.id}] Error in kernel job for ${systemName}.${kernelName}:`, error)
+					}
+				} else {
+					console.error(`[Worker ${self.id}] Could not find kernel function "${kernelName}" in module "${moduleName}".`)
+				}
 			}
 		}
 
@@ -538,24 +552,8 @@ class WorkerEntry {
 			this.wakeIdleThreads()
 		}
 	}
-	async loadScheduleLogic(hmrData) {
-		const { systemName, dependencies, code } = hmrData
-		try {
-			const newModule = await this.importFromString(code)
-			if (!newModule.schedule) {
-				throw new Error(`Transpiled module for "${systemName}" did not export a "schedule" function.`)
-			}
-			this.logicRegistry[systemName] = {
-				logic: newModule.schedule,
-				dependencies: dependencies,
-			}
-		} catch (error) {
-			console.error(`[Worker] Failed to load schedule logic for ${systemName}:`, error)
-			throw error
-		}
-	}
 
-	syncChunkDeltas({ newChunks, destroyedChunks, newArchetypes }) {
+	syncChunkDeltas({ newChunks, destroyedChunks }) {
 		if (destroyedChunks) {
 			for (const chunkId of destroyedChunks) {
 				entityStore.chunkComponentData[chunkId] = undefined
@@ -569,11 +567,6 @@ class WorkerEntry {
 				entityStore.chunkComponentData[chunkId] = chunkSyncData.data
 				entityStore.chunkDirtyTicks[chunkId] = chunkSyncData.ticks
 				entityStore.chunkArchetypeDirtyTicks[chunkId] = chunkSyncData.archetypeTicks
-			}
-		}
-		if (newArchetypes) {
-			for (const archetype of newArchetypes) {
-				entityStore.archetypeComponentTypeIDArrays[archetype.id] = archetype.componentIdArray
 			}
 		}
 	}

@@ -35,6 +35,8 @@ module.exports = {
 	// 7. Resume loop as if nothing hapenned.
 
 	// should still be relatively fast for humans.
+	//____
+	// ^ transpiler no longer a thing.
 
 	/**
 	 * If true, system file changes will trigger a hot-swap.

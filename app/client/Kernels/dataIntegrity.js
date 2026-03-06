@@ -1,0 +1,37 @@
+/**
+ * A kernel for the DataIntegrityTestSystem.
+ * It verifies that the entity ID stored in a component matches the actual entity ID
+ * for that slot, detecting stale data from recycled chunks.
+ * @param {number} payload - For this kernel, the payload is the chunkId to process.
+ * @param {object} systemContext - A read-only object with properties from the main-thread System instance.
+ * @param {object} kernelContext - An object with thread-specific helpers, like getChunkView.
+ */
+export function dataIntegrity(payload, systemContext, kernelContext) {
+	const { currentTick } = frameContext
+	const { churnData, verification } = systemContext
+
+	const chunk = kernelContext.getChunkView(payload)
+	const entities = chunk.entities
+	const churnDataArr = chunk.componentData[churnData]
+	const verifications = chunk.componentData[verification]
+
+	for (let i = 0; i < chunk.size; i++) {
+		// Only process entities that haven't already failed verification.
+		if (verifications.status[i] === -1) continue
+
+		const storedEntityId = churnDataArr.entityId[i]
+		const actualEntityId = entities[i]
+
+		if (storedEntityId === 0n) {
+			// Prime the entity with its actual ID.
+			churnDataArr.entityId[i] = actualEntityId
+			chunk.markEntityDirty(churnData, i, currentTick)
+			verifications.status[i] = 1
+			chunk.markEntityDirty(verification, i, currentTick)
+		} else if (storedEntityId !== actualEntityId) {
+			// Stored ID doesn't match the entity in this slot. Corruption!
+			verifications.status[i] = -1
+			chunk.markEntityDirty(verification, i, currentTick)
+		}
+	}
+}

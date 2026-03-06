@@ -19,20 +19,24 @@
 
 import * as Schema from '../../ECS/ComponentManager/ComponentSchema.js'
 import { ChunkView } from './ChunkView.js'
+import { NULL_CHUNK_ID, MAX_COMPONENTS, MASK_PARTS } from '../../ECS/EntityManager/EntityManager.js'
 import { entityStore } from '../../ECS/EntityManager/EntityManager.js'
 
 export class Query {
 	static _createSimpleMask(componentTypeIDs, categoryName) {
-		let mask = 0n
+		const mask = new BigUint64Array(MASK_PARTS)
 		for (const typeID of componentTypeIDs) {
 			if (typeof typeID !== 'number') {
 				throw new Error(`Query: ${categoryName} component identifier must be a numeric typeID. Received: ${typeID}`)
 			}
-			const bitFlag = Schema.componentBitFlags[typeID]
-			if (bitFlag === undefined) {
-				throw new Error(`Query: ${categoryName} component with typeID "${typeID}" does not have a valid bitflag.`)
+			if (typeID >= MAX_COMPONENTS) {
+				throw new Error(
+					`Query: ${categoryName} component with typeID "${typeID}" exceeds MAX_COMPONENTS (${MAX_COMPONENTS}).`,
+				)
 			}
-			mask |= bitFlag
+			const partIndex = Math.floor(typeID / 64)
+			const bitInPart = typeID % 64
+			mask[partIndex] |= 1n << BigInt(bitInPart)
 		}
 		return mask
 	}
@@ -62,13 +66,17 @@ export class Query {
 		const withMask = Query._createSimpleMask(withComponents, 'With')
 		const reactMask = Query._createSimpleMask(reactComponents, 'React')
 
-		this._requiredMask = withMask | reactMask
+		this._requiredMask = new BigUint64Array(MASK_PARTS)
+		for (let i = 0; i < MASK_PARTS; i++) {
+			this._requiredMask[i] = withMask[i] | reactMask[i]
+		}
 		this._excludedMask = Query._createSimpleMask(withoutComponents, 'Without')
 		this._anyOfMask = Query._createSimpleMask(anyComponents, 'AnyOf')
 		this._reactiveMask = reactMask
 
-		this.isReactiveQuery = this._reactiveMask > 0n
-
+		this.isReactiveQuery = this._reactiveMask.some(part => part > 0n)
+		this._anyOfMaskIsNonZero = this._anyOfMask.some(part => part > 0n)
+		
 		this.matchingChunkIds = []
 		this._chunkView = new ChunkView(entityStore)
 		this.matchingArchetypeIds = new Set()
@@ -153,9 +161,11 @@ export class Query {
 		if (this.archetypeMatches(archetype)) {
 			// Ensure we don't add archetypes we already know about.
 			if (!this.matchingArchetypeIds.has(archetype)) {
-				const chunks = entityStore.archetypeChunks[archetype]
-				for (const chunkId of chunks) {
+				// Traverse the archetype's linked list of chunks and add them.
+				let chunkId = entityStore.archetypeHeadChunkIds[archetype]
+				while (chunkId !== NULL_CHUNK_ID) {
 					this.matchingChunkIds.push(chunkId)
+					chunkId = entityStore.chunkNextInArchetype[chunkId]
 				}
 				this.matchingArchetypeIds.add(archetype)
 
@@ -163,20 +173,19 @@ export class Query {
 				this.queryManager._addQueryToArchetypeIndex(this, archetype)
 
 				if (this.isReactiveQuery) {
-					// Pre-compute the indices into the chunkArchetypeDirtyTicks array for this archetype.
-					const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetype]
-					const count = componentIdArray[0]
+					const componentIdArray = this.queryManager.entityManager.getComponentTypeIDsForArchetype(archetype)
+					const count = componentIdArray.length
 					const indices = []
 
 					for (const typeId of this.react) {
 						// Perform a binary search to find the index of the component in the archetype's sorted list.
-						let low = 1
-						let high = count
+						let low = 0,
+							high = count - 1
 						while (low <= high) {
 							const mid = (low + high) >>> 1
 							const midVal = componentIdArray[mid]
 							if (midVal === typeId) {
-								indices.push(mid - 1) // The index in the dirty tick array is 0-based.
+								indices.push(mid) // The index in the dirty tick array is 0-based.
 								break
 							} else if (midVal < typeId) {
 								low = mid + 1
@@ -214,18 +223,37 @@ export class Query {
 	}
 
 	archetypeMatches(archetype) {
-		const archetypeMask = entityStore.archetypeMasks[archetype]
+		const archetypeMaskOffset = archetype * MASK_PARTS
 
-		if ((archetypeMask & this._requiredMask) !== this._requiredMask) {
-			return false
+		// Check required components
+		for (let i = 0; i < MASK_PARTS; i++) {
+			const part = entityStore.archetypeMasks[archetypeMaskOffset + i]
+			if ((part & this._requiredMask[i]) !== this._requiredMask[i]) {
+				return false
+			}
 		}
 
-		if ((archetypeMask & this._excludedMask) !== 0n) {
-			return false
+		// Check excluded components
+		for (let i = 0; i < MASK_PARTS; i++) {
+			const part = entityStore.archetypeMasks[archetypeMaskOffset + i]
+			if ((part & this._excludedMask[i]) !== 0n) {
+				return false
+			}
 		}
 
-		if (this._anyOfMask !== 0n && (archetypeMask & this._anyOfMask) === 0n) {
-			return false
+		// Check anyOf components
+		if (this._anyOfMaskIsNonZero) {
+			let hasAny = false
+			for (let i = 0; i < MASK_PARTS; i++) {
+				const part = entityStore.archetypeMasks[archetypeMaskOffset + i]
+				if ((part & this._anyOfMask[i]) !== 0n) {
+					hasAny = true
+					break
+				}
+			}
+			if (!hasAny) {
+				return false
+			}
 		}
 
 		return true
@@ -234,8 +262,13 @@ export class Query {
 	unregisterArchetype(deletedArchetype) {
 		if (this.matchingArchetypeIds.has(deletedArchetype)) {
 			// Remove the chunks associated with the deleted archetype
-			const chunksToRemove = new Set(entityStore.archetypeChunks[deletedArchetype] || [])
-			this.matchingChunkIds = this.matchingChunkIds.filter(chunkId => !chunksToRemove.has(chunkId))
+			const chunksToRemove = new Set()
+			let chunkId = entityStore.archetypeHeadChunkIds[deletedArchetype]
+			while (chunkId !== NULL_CHUNK_ID) {
+				chunksToRemove.add(chunkId)
+				chunkId = entityStore.chunkNextInArchetype[chunkId]
+			}
+			if (chunksToRemove.size > 0) this.matchingChunkIds = this.matchingChunkIds.filter(id => !chunksToRemove.has(id))
 
 			this.matchingArchetypeIds.delete(deletedArchetype)
 			// Notify the QueryManager so it can remove this query from its archetype-based index.

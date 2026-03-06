@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	saveFile: (filePath, data) => ipcRenderer.invoke('save-file', filePath, data),
 	getComponentTree: () => ipcRenderer.invoke('get-component-tree'),
 	getSystemTree: () => ipcRenderer.invoke('get-system-tree'),
+	getKernelTree: () => ipcRenderer.invoke('get-kernel-tree'),
+	getKernelSource: fileName => ipcRenderer.invoke('get-kernel-source', fileName),
 	getManagerTree: () => ipcRenderer.invoke('get-manager-tree'),
 
 	// Workers 

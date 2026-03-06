@@ -6,6 +6,7 @@ const { initPrefabAPI } = require('./prefabAPI')
 const { initComponentAPI } = require('./componentAPI')
 const { initSystemAPI } = require('./systemAPI')
 const { initManagerAPI } = require('./managerAPI')
+const { initKernelAPI } = require('./kernelAPI')
 
 module.exports = {
 	initPaths,
@@ -17,4 +18,5 @@ module.exports = {
 	initComponentAPI,
 	initSystemAPI,
 	initManagerAPI,
+	initKernelAPI,
 }

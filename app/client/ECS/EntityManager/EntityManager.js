@@ -31,14 +31,23 @@ import * as Schema from '../ComponentManager/ComponentSchema.js'
  *         optimized for fast structural changes (e.g., adding/removing components) and efficient memory pooling.
  */
 
-export const MAX_ARCHETYPES = 4096
-export const MAX_CHUNKS = 65536
+export const MAX_ARCHETYPES = 4096 // Maximum number of unique archetypes
+export const MAX_CHUNKS = 65536 // Maximum number of chunks
+export const MAX_COMPONENTS = 256 // A practical limit for component types
+export const MASK_PARTS = Math.ceil(MAX_COMPONENTS / 64) // = 4 for 256 components
+
 const TARGET_CHUNK_SIZE_BYTES = 16384 // 16KB
 
 const CACHE_LINE_SIZE = 64 // Common CPU cache line size in bytes
 const CACHE_LINE_SIZE_IN_U32 = CACHE_LINE_SIZE / Uint32Array.BYTES_PER_ELEMENT
 
 const MIN_CHUNK_CAPACITY = 16
+
+// Using 0 as a sentinel for "no chunk" or "null pointer" in linked lists.
+export const NULL_CHUNK_ID = 0
+
+const ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES = 4096 // 4KB page for component IDs
+const ARCHETYPE_STORE_PAGE_SIZE_IN_U16 = ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES / Uint16Array.BYTES_PER_ELEMENT
 
 export const entityStore = {
 	// --- Entity Management ---
@@ -48,22 +57,37 @@ export const entityStore = {
 	freeIndices: [],
 	nextEntityIndex: 1,
 
-	// --- Archetype Management ---
+	// --- Archetype Management (Main-thread only structures) ---
 	archetypeLookup: new Map(),
-	nextArchetypeId: 0,
-	archetypeMasks: new Array(MAX_ARCHETYPES),
-	// This is now pre-allocated to ensure workers can see new archetypes added at runtime.
-	archetypeComponentTypeIDArrays: new Array(MAX_ARCHETYPES),
-	archetypeChunks: new Array(MAX_ARCHETYPES),
 	archetypeTransitions: new Array(MAX_ARCHETYPES),
-	archetypeLastNonFullChunk: [],
+	// Paged buffer for component IDs. The array of pages is main-thread only.
+	// Workers receive the SABs inside and sync new pages.
+	packedComponentIdPages: [],
+	nextPackedComponentIdIndex: 0,
+
+	// --- Archetype Store (Shared) ---
+	nextArchetypeId: new Uint32Array(new SharedArrayBuffer(4)), // Atomic counter
+	archetypeMasks: new BigUint64Array(
+		new SharedArrayBuffer(MAX_ARCHETYPES * MASK_PARTS * BigUint64Array.BYTES_PER_ELEMENT),
+	),
+	archetypeComponentCounts: new Uint16Array(new SharedArrayBuffer(MAX_ARCHETYPES * Uint16Array.BYTES_PER_ELEMENT)),
+	archetypeChunkCounts: new Uint16Array(new SharedArrayBuffer(MAX_ARCHETYPES * Uint16Array.BYTES_PER_ELEMENT)),
+	archetypeHeadChunkIds: new Uint16Array(new SharedArrayBuffer(MAX_ARCHETYPES * Uint16Array.BYTES_PER_ELEMENT)),
+	archetypeTailChunkIds: new Uint16Array(new SharedArrayBuffer(MAX_ARCHETYPES * Uint16Array.BYTES_PER_ELEMENT)),
+	archetypeLastNonFullChunkId: new Uint16Array(new SharedArrayBuffer(MAX_ARCHETYPES * Uint16Array.BYTES_PER_ELEMENT)),
+	archetypeComponentListStartIndices: new Uint32Array(
+		new SharedArrayBuffer(MAX_ARCHETYPES * Uint32Array.BYTES_PER_ELEMENT),
+	),
 
 	// --- Chunk Management ---
-	nextChunkId: 0,
+	nextChunkId: 1, // Start from 1 so 0 can be NULL_CHUNK_ID
 	freeChunkIds: [],
 	chunkArchetypeIds: new Uint16Array(new SharedArrayBuffer(MAX_CHUNKS * Uint16Array.BYTES_PER_ELEMENT)),
 	chunkSizes: new Uint16Array(new SharedArrayBuffer(MAX_CHUNKS * Uint16Array.BYTES_PER_ELEMENT)),
 	chunkCapacities: new Uint16Array(new SharedArrayBuffer(MAX_CHUNKS * Uint16Array.BYTES_PER_ELEMENT)),
+	// Intrusive linked list pointers for chunks (shared)
+	chunkPrevInArchetype: new Uint16Array(new SharedArrayBuffer(MAX_CHUNKS * Uint16Array.BYTES_PER_ELEMENT)),
+	chunkNextInArchetype: new Uint16Array(new SharedArrayBuffer(MAX_CHUNKS * Uint16Array.BYTES_PER_ELEMENT)),
 
 	// These are now pre-allocated to ensure workers can see new chunks added at runtime.
 	// They are not SharedArrayBuffers themselves, but they hold SABs.
@@ -72,6 +96,14 @@ export const entityStore = {
 	chunkDirtyTicks: new Array(MAX_CHUNKS),
 	chunkArchetypeDirtyTicks: new Array(MAX_CHUNKS),
 }
+
+// Initialize atomic nextArchetypeId to 0. The first archetype will be ID 0.
+Atomics.store(entityStore.nextArchetypeId, 0, 0)
+
+
+//! xxhash for archetypes
+//TODO move store out at some point
+
 
 export class EntityManager {
 	constructor() {
@@ -87,7 +119,7 @@ export class EntityManager {
 		// Tracks chunk IDs created within a single frame for delta-syncing to workers.
 		this.newlyCreatedChunks = []
 		this.destroyedChunks = []
-		this.newlyCreatedArchetypes = []
+		this.newlyCreatedArchetypePages = []
 	}
 
 	async init(ecs) {
@@ -95,6 +127,11 @@ export class EntityManager {
 		this.componentManager = ecs.componentManager
 		this.systemManager = ecs.systemManager
 		this.prefabManager = ecs.prefabManager
+
+		// Initialize the first page for the packed component ID buffer.
+		const initialPage = new Uint16Array(new SharedArrayBuffer(ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES))
+		entityStore.packedComponentIdPages.push(initialPage)
+		this.newlyCreatedArchetypePages.push(initialPage.buffer)
 	}
 
 	/**
@@ -104,15 +141,25 @@ export class EntityManager {
 	 */
 	getSharedData() {
 		return {
+			// --- Archetype Store ---
+			nextArchetypeId: entityStore.nextArchetypeId.buffer,
+			archetypeMasks: entityStore.archetypeMasks.buffer,
+			archetypeComponentCounts: entityStore.archetypeComponentCounts.buffer,
+			archetypeChunkCounts: entityStore.archetypeChunkCounts.buffer,
+			archetypeHeadChunkIds: entityStore.archetypeHeadChunkIds.buffer,
+			archetypeTailChunkIds: entityStore.archetypeTailChunkIds.buffer,
+			archetypeLastNonFullChunkId: entityStore.archetypeLastNonFullChunkId.buffer,
+			archetypeComponentListStartIndices: entityStore.archetypeComponentListStartIndices.buffer,
+			packedComponentIdPageSABs: entityStore.packedComponentIdPages.map(p => p.buffer),
+
 			// --- Chunk Metadata ---
 			chunkArchetypeIds: entityStore.chunkArchetypeIds.buffer,
 			chunkSizes: entityStore.chunkSizes.buffer,
 			chunkCapacities: entityStore.chunkCapacities.buffer,
+			chunkPrevInArchetype: entityStore.chunkPrevInArchetype.buffer,
+			chunkNextInArchetype: entityStore.chunkNextInArchetype.buffer,
 
 			// --- Shared Data Structures ---
-			// We pass the pre-allocated container arrays directly. Workers will get a
-			// reference to these, allowing them to see new archetypes as they are added.
-			archetypeComponentTypeIDArrays: entityStore.archetypeComponentTypeIDArrays,
 			chunkArchetypeDirtyTicks: entityStore.chunkArchetypeDirtyTicks,
 
 			// --- Constants & Limits ---
@@ -126,12 +173,6 @@ export class EntityManager {
 	 * @returns {{newChunks: object | null, destroyedChunks: number[] | null}} An object containing deltas.
 	 */
 	getAndClearChunkDeltas() {
-		let newArchetypes = null
-		if (this.newlyCreatedArchetypes.length > 0) {
-			newArchetypes = [...this.newlyCreatedArchetypes]
-		}
-		this.newlyCreatedArchetypes.length = 0
-
 		let newChunks = null
 		if (this.newlyCreatedChunks.length > 0) {
 			newChunks = {}
@@ -152,7 +193,16 @@ export class EntityManager {
 		}
 		this.destroyedChunks.length = 0
 
-		return { newChunks, destroyedChunks, newArchetypes }
+		return { newChunks, destroyedChunks }
+	}
+
+	getAndClearArchetypePageDeltas() {
+		if (this.newlyCreatedArchetypePages.length > 0) {
+			const pages = [...this.newlyCreatedArchetypePages]
+			this.newlyCreatedArchetypePages.length = 0
+			return pages
+		}
+		return null
 	}
 
 	/**
@@ -231,9 +281,17 @@ export class EntityManager {
 			)
 			return false
 		}
-
-		const sourceArchetypeMask = entityStore.archetypeMasks[sourceArchetypeId]
-		const targetArchetypeMask = sourceArchetypeMask | this.componentManager.componentBitFlags[componentTypeId]
+		const sourceArchetypeMask = entityStore.archetypeMasks.subarray(
+			sourceArchetypeId * MASK_PARTS,
+			(sourceArchetypeId + 1) * MASK_PARTS,
+		)
+		const targetArchetypeMask = new BigUint64Array(sourceArchetypeMask) // Clone
+		if (componentTypeId >= MAX_COMPONENTS) {
+			throw new Error(`Component type ID ${componentTypeId} exceeds MAX_COMPONENTS (${MAX_COMPONENTS}).`)
+		}
+		const partIndex = Math.floor(componentTypeId / 64)
+		const bitInPart = componentTypeId % 64
+		targetArchetypeMask[partIndex] |= 1n << BigInt(bitInPart)
 		const targetArchetypeId = this.getArchetypeByMask(targetArchetypeMask)
 
 		const componentsToAssign = new Map([[componentTypeId, data]])
@@ -257,9 +315,20 @@ export class EntityManager {
 		if (!this.isEntityActive(entityId)) return false
 		const sourceArchetypeId = this.getArchetypeForEntity(entityId)
 		if (!this.hasComponentType(sourceArchetypeId, componentTypeId)) return false
-		const sourceArchetypeMask = entityStore.archetypeMasks[sourceArchetypeId]
-		const targetArchetypeMask = sourceArchetypeMask & ~this.componentManager.componentBitFlags[componentTypeId]
+		const sourceArchetypeMask = entityStore.archetypeMasks.subarray(
+			sourceArchetypeId * MASK_PARTS,
+			(sourceArchetypeId + 1) * MASK_PARTS,
+		)
+		const targetArchetypeMask = new BigUint64Array(sourceArchetypeMask) // Clone
+		if (componentTypeId >= MAX_COMPONENTS) {
+			// This case is handled by hasComponentType, but good to be safe.
+			return false
+		}
+		const partIndex = Math.floor(componentTypeId / 64)
+		const bitInPart = componentTypeId % 64
+		targetArchetypeMask[partIndex] &= ~(1n << BigInt(bitInPart))
 		const targetArchetypeId = this.getArchetypeByMask(targetArchetypeMask)
+
 		return this._moveEntityToNewArchetype(entityId, sourceArchetypeId, targetArchetypeId, new Map(), currentTick)
 	}
 
@@ -429,13 +498,13 @@ export class EntityManager {
 		}
 
 		// 4. Mark all components in the new location as dirty for the current tick.
-		const targetComponentIdArray = entityStore.archetypeComponentTypeIDArrays[targetArchetypeId]
-		const targetComponentCount = targetComponentIdArray[0]
+		const targetComponentIdArray = this.getComponentTypeIDsForArchetype(targetArchetypeId)
+		const targetComponentCount = targetComponentIdArray.length
 		const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[targetChunkId]
 
-		for (let i = 1; i <= targetComponentCount; i++) {
+		for (let i = 0; i < targetComponentCount; i++) {
 			const typeID = targetComponentIdArray[i]
-			const indexInArchetype = i - 1
+			const indexInArchetype = i
 
 			// Update per-entity tick
 			entityStore.chunkDirtyTicks[targetChunkId][typeID][targetIndex] = currentTick
@@ -450,7 +519,7 @@ export class EntityManager {
 		}
 
 		// 4. Remove entity from its source chunk (using swap-and-pop).
-		this._removeEntity(sourceArchetypeId, entityId)
+		this._removeEntity(sourceArchetypeId, entityId, sourceLocation)
 
 		return true
 	}
@@ -464,53 +533,74 @@ export class EntityManager {
 	}
 
 	getArchetypeByMask(archetypeMask, sortedTypeIDs) {
-		if (entityStore.archetypeLookup.has(archetypeMask)) {
-			return entityStore.archetypeLookup.get(archetypeMask)
+		// The key must be a primitive. A string is the easiest way to represent the multi-part mask.
+		const key = archetypeMask.join(',')
+		if (entityStore.archetypeLookup.has(key)) {
+			return entityStore.archetypeLookup.get(key)
 		}
 
-		const id = entityStore.nextArchetypeId++
+		const id = Atomics.add(entityStore.nextArchetypeId, 0, 1)
 		if (id >= MAX_ARCHETYPES) {
 			throw new Error(`EntityManager: Maximum number of archetypes (${MAX_ARCHETYPES}) reached.`)
 		}
 
-		if (sortedTypeIDs === undefined) {
+		if (!sortedTypeIDs) {
 			sortedTypeIDs = this.getComponentTypesFromMask(archetypeMask)
 		}
 
-		entityStore.archetypeMasks[id] = archetypeMask
-		entityStore.archetypeChunks[id] = [] // This will be an array of chunk IDs
+		// --- Write to Shared Archetype Store ---
+		entityStore.archetypeMasks.set(archetypeMask, id * MASK_PARTS)
+		entityStore.archetypeHeadChunkIds[id] = NULL_CHUNK_ID
+		entityStore.archetypeTailChunkIds[id] = NULL_CHUNK_ID
+		entityStore.archetypeLastNonFullChunkId[id] = NULL_CHUNK_ID
+		entityStore.archetypeChunkCounts[id] = 0
+		entityStore.archetypeComponentCounts[id] = sortedTypeIDs.length
+
+		// --- Write component IDs to the packed paged buffer ---
+		const requiredSpace = sortedTypeIDs.length
+		let currentPage = entityStore.packedComponentIdPages[entityStore.packedComponentIdPages.length - 1]
+		let spaceInPage = currentPage.length - (entityStore.nextPackedComponentIdIndex % ARCHETYPE_STORE_PAGE_SIZE_IN_U16)
+
+		if (requiredSpace > spaceInPage) {
+			// For simplicity, we don't split an archetype's list across pages.
+			// If it doesn't fit, start a new page.
+			const newPage = new Uint16Array(new SharedArrayBuffer(ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES))
+			entityStore.packedComponentIdPages.push(newPage)
+			this.newlyCreatedArchetypePages.push(newPage.buffer)
+			currentPage = newPage
+			// Align next index to the start of the new page
+			entityStore.nextPackedComponentIdIndex =
+				(entityStore.packedComponentIdPages.length - 1) * ARCHETYPE_STORE_PAGE_SIZE_IN_U16
+		}
+
+		entityStore.archetypeComponentListStartIndices[id] = entityStore.nextPackedComponentIdIndex
+		const pageIndex = Math.floor(entityStore.nextPackedComponentIdIndex / ARCHETYPE_STORE_PAGE_SIZE_IN_U16)
+		const indexInPage = entityStore.nextPackedComponentIdIndex % ARCHETYPE_STORE_PAGE_SIZE_IN_U16
+		entityStore.packedComponentIdPages[pageIndex].set(sortedTypeIDs, indexInPage)
+		entityStore.nextPackedComponentIdIndex += requiredSpace
+
 		entityStore.archetypeTransitions[id] = { add: {}, remove: {} }
 
-		// Create a shareable TypedArray for the component IDs of this new archetype.
-		// We add 1 to the length to store the count in the first element.
-		const componentIdBuffer = new SharedArrayBuffer((sortedTypeIDs.length + 1) * Uint16Array.BYTES_PER_ELEMENT)
-		const componentIdArray = new Uint16Array(componentIdBuffer)
-		componentIdArray[0] = sortedTypeIDs.length // Store count
-		componentIdArray.set(sortedTypeIDs, 1) // Store IDs
-		entityStore.archetypeComponentTypeIDArrays[id] = componentIdArray
-
-		entityStore.archetypeLastNonFullChunk[id] = 0
-
-		this.newlyCreatedArchetypes.push({
-			id: id,
-			componentIdArray: componentIdArray,
-		})
-
-		entityStore.archetypeLookup.set(archetypeMask, id)
+		entityStore.archetypeLookup.set(key, id)
 		this.queryManager.registerArchetype(id)
 		return id
 	}
 
 	getComponentTypesFromMask(mask) {
 		const types = []
-		for (let i = 0; i < Schema.nextComponentTypeID; i++) {
-			if ((mask & Schema.componentBitFlags[i]) !== 0n) types.push(i)
+		// We iterate up to the max number of components this mask can represent
+		for (let i = 0; i < MAX_COMPONENTS; i++) {
+			const partIndex = Math.floor(i / 64)
+			const bitInPart = i % 64
+			if ((mask[partIndex] & (1n << BigInt(bitInPart))) !== 0n) {
+				types.push(i)
+			}
 		}
 		return types
 	}
 
 	generateArchetypeMask(componentTypeIDs) {
-		let mask = 0n
+		const mask = new BigUint64Array(MASK_PARTS) // Always creates a new local array
 		for (const typeID of componentTypeIDs) {
 			if (typeID === undefined) {
 				const definedComponentNames = componentTypeIDs
@@ -523,25 +613,35 @@ export class EntityManager {
 						`Provided components: [${definedComponentNames}, undefined]`,
 				)
 			}
-			mask |= Schema.componentBitFlags[typeID]
+			if (typeID >= MAX_COMPONENTS) {
+				throw new Error(
+					`EntityManager.generateArchetypeMask: Component type ID ${typeID} exceeds the maximum of ${MAX_COMPONENTS}.`,
+				)
+			}
+			// Instead of looking up a pre-calculated multi-part flag, we can calculate it here.
+			const partIndex = Math.floor(typeID / 64)
+			const bitInPart = typeID % 64
+			mask[partIndex] |= 1n << BigInt(bitInPart)
 		}
 		return mask
 	}
 
 	hasComponentType(archetype, componentTypeID) {
-		const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetype]
-		if (!componentIdArray) return false
+		const count = entityStore.archetypeComponentCounts[archetype]
+		if (count === 0) return false
 
-		// The array format is [count, id1, id2, ...]. We search from index 1.
-		const count = componentIdArray[0]
-		let low = 1
-		let high = count
+		const globalStartIndex = entityStore.archetypeComponentListStartIndices[archetype]
+		let low = 0
+		let high = count - 1
 
 		// Perform a binary search on the sorted array of component IDs.
-		// This is O(log N), which is extremely fast and avoids a linear scan.
+		// This reads directly from the paged buffer.
 		while (low <= high) {
 			const mid = (low + high) >>> 1
-			const midVal = componentIdArray[mid]
+			const globalIndex = globalStartIndex + mid
+			const pageIndex = Math.floor(globalIndex / ARCHETYPE_STORE_PAGE_SIZE_IN_U16)
+			const indexInPage = globalIndex % ARCHETYPE_STORE_PAGE_SIZE_IN_U16
+			const midVal = entityStore.packedComponentIdPages[pageIndex][indexInPage]
 
 			if (midVal === componentTypeID) {
 				return true
@@ -559,15 +659,29 @@ export class EntityManager {
 	 * Gets the sorted array of component type IDs for a given archetype.
 	 * This is the public interface for querying an archetype's structure.
 	 * @param {number} archetypeId The ID of the archetype.
-	 * @returns {Uint16Array | undefined} A slice of the Uint16Array containing just the type IDs, or undefined if the archetype doesn't exist.
+	 * @returns {Uint16Array | undefined} A newly allocated Uint16Array containing the type IDs, or undefined if the archetype doesn't exist.
 	 */
 	getComponentTypeIDsForArchetype(archetypeId) {
-		const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetypeId]
-		if (!componentIdArray) {
-			return undefined
+		const count = entityStore.archetypeComponentCounts[archetypeId]
+		if (count === undefined || count === 0) return new Uint16Array(0)
+
+		const result = new Uint16Array(count)
+		const globalStartIndex = entityStore.archetypeComponentListStartIndices[archetypeId]
+
+		// This logic handles reads that span across page boundaries.
+		let written = 0
+		while (written < count) {
+			const globalReadIndex = globalStartIndex + written
+			const pageIndex = Math.floor(globalReadIndex / ARCHETYPE_STORE_PAGE_SIZE_IN_U16)
+			const indexInPage = globalReadIndex % ARCHETYPE_STORE_PAGE_SIZE_IN_U16
+			const page = entityStore.packedComponentIdPages[pageIndex]
+			const toRead = Math.min(count - written, ARCHETYPE_STORE_PAGE_SIZE_IN_U16 - indexInPage)
+
+			result.set(page.subarray(indexInPage, indexInPage + toRead), written)
+			written += toRead
 		}
-		// Return a slice containing only the IDs, not the count.
-		return componentIdArray.slice(1)
+
+		return result
 	}
 
 	getEntityLocation(entityId) {
@@ -585,12 +699,24 @@ export class EntityManager {
 
 	clearAllArchetypes() {
 		entityStore.archetypeLookup.clear()
-		entityStore.nextArchetypeId = 0
-		entityStore.archetypeMasks = new Array(MAX_ARCHETYPES)
-		entityStore.archetypeComponentTypeIDArrays = new Array(MAX_ARCHETYPES)
-		entityStore.archetypeChunks = new Array(MAX_ARCHETYPES)
+		Atomics.store(entityStore.nextArchetypeId, 0, 0)
+		entityStore.archetypeMasks.fill(0n)
+		entityStore.archetypeComponentCounts.fill(0)
+		entityStore.archetypeChunkCounts.fill(0)
+		entityStore.archetypeHeadChunkIds.fill(NULL_CHUNK_ID)
+		entityStore.archetypeTailChunkIds.fill(NULL_CHUNK_ID)
+		entityStore.archetypeLastNonFullChunkId.fill(NULL_CHUNK_ID)
+		entityStore.archetypeComponentListStartIndices.fill(0)
 		entityStore.archetypeTransitions = new Array(MAX_ARCHETYPES)
-		entityStore.archetypeLastNonFullChunk.length = 0
+
+		// Reset the paged buffer to its initial state with one empty page.
+		entityStore.packedComponentIdPages.length = 0 // Clear old pages
+		const initialPage = new Uint16Array(new SharedArrayBuffer(ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES))
+		entityStore.packedComponentIdPages.push(initialPage)
+		this.newlyCreatedArchetypePages.length = 0
+		this.newlyCreatedArchetypePages.push(initialPage.buffer)
+
+		entityStore.nextPackedComponentIdIndex = 0
 		entityStore.chunkArchetypeDirtyTicks = new Array(MAX_CHUNKS)
 	}
 
@@ -611,18 +737,18 @@ export class EntityManager {
 
 		// Update the per-component-type high-water mark for this chunk.
 		const archetypeId = entityStore.chunkArchetypeIds[chunkId]
-		const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetypeId]
-		const count = componentIdArray[0]
+		const componentIdArray = this.getComponentTypeIDsForArchetype(archetypeId)
+		const count = componentIdArray.length
 		let indexInArchetype = -1
 
 		// Binary search to find the component's index in the archetype's sorted list.
-		let low = 1,
-			high = count
+		let low = 0,
+			high = count - 1
 		while (low <= high) {
 			const mid = (low + high) >>> 1
 			const midVal = componentIdArray[mid]
 			if (midVal === typeID) {
-				indexInArchetype = mid - 1
+				indexInArchetype = mid
 				break
 			} else if (midVal < typeID) {
 				low = mid + 1
@@ -648,18 +774,18 @@ export class EntityManager {
 
 		// Update the per-component-type high-water mark for this chunk.
 		const archetypeId = entityStore.chunkArchetypeIds[chunkId]
-		const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetypeId]
-		const count = componentIdArray[0]
+		const componentIdArray = this.getComponentTypeIDsForArchetype(archetypeId)
+		const count = componentIdArray.length
 		let indexInArchetype = -1
 
 		// Binary search to find the component's index in the archetype's sorted list.
-		let low = 1,
-			high = count
+		let low = 0,
+			high = count - 1
 		while (low <= high) {
 			const mid = (low + high) >>> 1
 			const midVal = componentIdArray[mid]
 			if (midVal === typeID) {
-				indexInArchetype = mid - 1
+				indexInArchetype = mid
 				break
 			} else if (midVal < typeID) {
 				low = mid + 1
@@ -681,10 +807,10 @@ export class EntityManager {
 		const sourceView = new DataView(binarySoAPayload)
 		let componentBaseOffset = 0
 
-		const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetype]
-		const count = componentIdArray[0]
-		for (let i = 1; i <= count; i++) {
-			const indexInArchetype = i - 1
+		const componentIdArray = this.getComponentTypeIDsForArchetype(archetype)
+		const count = componentIdArray.length
+		for (let i = 0; i < count; i++) {
+			const indexInArchetype = i
 			const typeID = componentIdArray[i]
 			const info = Schema.componentInfo[typeID]
 			const alignment = info.alignment
@@ -729,10 +855,10 @@ export class EntityManager {
 			const aosView = new DataView(payload)
 			let aosOffset = 0
 
-			const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetype]
-			const componentCount = componentIdArray[0]
-			for (let j = 1; j <= componentCount; j++) {
-				const indexInArchetype = j - 1
+			const componentIdArray = this.getComponentTypeIDsForArchetype(archetype)
+			const componentCount = componentIdArray.length
+			for (let j = 0; j < componentCount; j++) {
+				const indexInArchetype = j
 				const typeID = componentIdArray[j]
 				const info = Schema.componentInfo[typeID]
 				if (info.byteSize === 0) continue
@@ -773,12 +899,10 @@ export class EntityManager {
 			toInitialize: [],
 		}
 
-		const targetComponentIdArray = entityStore.archetypeComponentTypeIDArrays[targetArchetypeId]
+		const targetComponentIdArray = this.getComponentTypeIDsForArchetype(targetArchetypeId)
 		if (!targetComponentIdArray) return plan
 
-		const targetComponentCount = targetComponentIdArray[0]
-		for (let i = 1; i <= targetComponentCount; i++) {
-			const typeID = targetComponentIdArray[i]
+		for (const typeID of targetComponentIdArray) {
 
 			// Use the new, fast binary search `hasComponentType`
 			if (this.hasComponentType(sourceArchetypeId, typeID)) {
@@ -863,13 +987,12 @@ export class EntityManager {
 			}
 
 			// --- Batch Update High-Water Marks ---
-			const targetComponentIdArray = entityStore.archetypeComponentTypeIDArrays[targetArchetype]
-			const targetComponentCount = targetComponentIdArray[0]
-			const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[chunkId]
+			const targetComponentIdArray = this.getComponentTypeIDsForArchetype(targetArchetype)
+			const targetComponentCount = targetComponentIdArray.length
 
 			// Update all component high-water marks for this new chunk.
-			for (let i = 1; i <= targetComponentCount; i++) {
-				const indexInArchetype = i - 1
+			for (let i = 0; i < targetComponentCount; i++) {
+				const indexInArchetype = i
 				this._updateArchetypeDirtyTick(chunkId, indexInArchetype, currentTick)
 			}
 
@@ -880,11 +1003,9 @@ export class EntityManager {
 
 	_removeEntitiesBatch(archetype, entityIds) {
 		const removalsByChunk = new Map()
-		const archetypeChunks = entityStore.archetypeChunks[archetype]
 
-		const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetype]
-		const componentCount = componentIdArray ? componentIdArray[0] : 0
-		const componentTypeIDs = componentIdArray ? componentIdArray.slice(1) : []
+		const componentTypeIDs = this.getComponentTypeIDsForArchetype(archetype)
+		const componentCount = componentTypeIDs.length
 
 		for (const entityId of entityIds) {
 			const location = entityStore.entityLocations[Number(entityId & 0xffffffffn)]
@@ -902,6 +1023,8 @@ export class EntityManager {
 		}
 
 		for (const [chunkId, indicesToRemove] of removalsByChunk.entries()) {
+			const oldSize = entityStore.chunkSizes[chunkId]
+
 			indicesToRemove.sort((a, b) => b - a)
 			const swappedMappings = this._removeEntitiesFromChunk(chunkId, indicesToRemove, componentTypeIDs, componentCount)
 
@@ -910,9 +1033,11 @@ export class EntityManager {
 				if (swappedLocation) swappedLocation.indexInChunk = newIndex
 			}
 
-			if (entityStore.chunkSizes[chunkId] === 0) {
-				const chunkIndex = archetypeChunks.indexOf(chunkId)
-				this._destroyChunk(chunkId, archetype, chunkIndex)
+			// Proactively update the non-full chunk pointer if this chunk just gained space.
+			if (entityStore.chunkCapacities[chunkId] === oldSize && entityStore.chunkSizes[chunkId] < oldSize) {
+				entityStore.archetypeLastNonFullChunkId[archetype] = chunkId
+			} else if (entityStore.chunkSizes[chunkId] === 0) {
+				this._destroyChunk(chunkId, archetype)
 			}
 		}
 	}
@@ -975,10 +1100,10 @@ export class EntityManager {
 			return
 		}
 
+		const oldSize = entityStore.chunkSizes[location.chunkId]
 		const { chunkId, indexInChunk } = location
-		const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetype]
-		const componentCount = componentIdArray ? componentIdArray[0] : 0
-		const componentTypeIDs = componentIdArray ? componentIdArray.slice(1) : []
+		const componentTypeIDs = this.getComponentTypeIDsForArchetype(archetype)
+		const componentCount = componentTypeIDs.length
 
 		const swappedMappings = this._removeEntitiesFromChunk(chunkId, [indexInChunk], componentTypeIDs, componentCount)
 
@@ -987,9 +1112,10 @@ export class EntityManager {
 			if (swappedLocation) swappedLocation.indexInChunk = newIndex
 		}
 
-		if (entityStore.chunkSizes[chunkId] === 0) {
-			const archetypeChunks = entityStore.archetypeChunks[archetype]
-			this._destroyChunk(chunkId, archetype, archetypeChunks.indexOf(chunkId))
+		if (entityStore.chunkCapacities[chunkId] === oldSize && entityStore.chunkSizes[chunkId] < oldSize) {
+			entityStore.archetypeLastNonFullChunkId[archetype] = chunkId
+		} else if (entityStore.chunkSizes[chunkId] === 0) {
+			this._destroyChunk(chunkId, archetype)
 		}
 	}
 
@@ -1008,20 +1134,21 @@ export class EntityManager {
 	 * @private
 	 */
 	_findOrCreateChunkId(archetypeId) {
-		const archetypeChunks = entityStore.archetypeChunks[archetypeId]
-		if (!archetypeChunks) return null // Archetype might not exist yet or has been cleared
-		const lastNonFullChunkIndex = entityStore.archetypeLastNonFullChunk[archetypeId] || 0
+		// --- 1. Start search from the cached, known non-full chunk ---
+		let chunkId = entityStore.archetypeLastNonFullChunkId[archetypeId]
+		if (chunkId !== NULL_CHUNK_ID && entityStore.chunkSizes[chunkId] < entityStore.chunkCapacities[chunkId]) {
+			return chunkId
+		}
 
-		// Start search from last known non-full chunk
-		if (archetypeChunks.length > 0) {
-			for (let i = 0; i < archetypeChunks.length; i++) {
-				const chunkArrayIndex = (lastNonFullChunkIndex + i) % archetypeChunks.length
-				const chunkId = archetypeChunks[chunkArrayIndex]
-				if (chunkId !== undefined && entityStore.chunkSizes[chunkId] < entityStore.chunkCapacities[chunkId]) {
-					entityStore.archetypeLastNonFullChunk[archetypeId] = chunkArrayIndex
-					return chunkId
-				}
+		// --- 2. If cached chunk is now full, traverse the linked list to find another ---
+		// Start traversal from the head of the list.
+		chunkId = entityStore.archetypeHeadChunkIds[archetypeId]
+		while (chunkId !== NULL_CHUNK_ID) {
+			if (entityStore.chunkSizes[chunkId] < entityStore.chunkCapacities[chunkId]) {
+				entityStore.archetypeLastNonFullChunkId[archetypeId] = chunkId
+				return chunkId
 			}
+			chunkId = entityStore.chunkNextInArchetype[chunkId]
 		}
 
 		// --- Chunk Pooling Logic ---
@@ -1053,8 +1180,8 @@ export class EntityManager {
 		entityStore.chunkCapacities[newChunkId] = capacity
 
 		// Initialize data structures for each component in the archetype
-		const componentIdArray = entityStore.archetypeComponentTypeIDArrays[archetypeId]
-		const componentCount = componentIdArray[0]
+		const componentIdArray = this.getComponentTypeIDsForArchetype(archetypeId)
+		const componentCount = componentIdArray.length
 
 		// Allocate the new per-component-type dirty tick buffer for this chunk.
 		const archetypeTicksBuffer = new SharedArrayBuffer(componentCount * Uint32Array.BYTES_PER_ELEMENT)
@@ -1067,8 +1194,7 @@ export class EntityManager {
 		}
 		entityStore.chunkDirtyTicks[newChunkId] = {}
 
-		for (let i = 1; i <= componentCount; i++) {
-			const typeID = componentIdArray[i]
+		for (const typeID of componentIdArray) {
 			const info = Schema.componentInfo[typeID]
 			const propArrays = {}
 			for (const propKey of info.propertyKeys) {
@@ -1082,9 +1208,20 @@ export class EntityManager {
 			)
 		}
 
-		archetypeChunks.push(newChunkId)
+		// --- Link the new chunk into the archetype's list ---
+		const tailId = entityStore.archetypeTailChunkIds[archetypeId]
+		if (tailId !== NULL_CHUNK_ID) {
+			entityStore.chunkNextInArchetype[tailId] = newChunkId
+		}
+		entityStore.chunkPrevInArchetype[newChunkId] = tailId
+		entityStore.chunkNextInArchetype[newChunkId] = NULL_CHUNK_ID // It's the new tail
+		entityStore.archetypeTailChunkIds[archetypeId] = newChunkId
+		if (entityStore.archetypeHeadChunkIds[archetypeId] === NULL_CHUNK_ID) {
+			entityStore.archetypeHeadChunkIds[archetypeId] = newChunkId
+		}
+		entityStore.archetypeChunkCounts[archetypeId]++
+		entityStore.archetypeLastNonFullChunkId[archetypeId] = newChunkId
 		this.queryManager.registerChunk(archetypeId, newChunkId)
-		entityStore.archetypeLastNonFullChunk[archetypeId] = archetypeChunks.length - 1
 
 		// Track this new chunk for delta-syncing.
 		this.newlyCreatedChunks.push(newChunkId)
@@ -1109,6 +1246,9 @@ export class EntityManager {
 		// Reset the chunk's core metadata.
 		entityStore.chunkArchetypeIds[chunkId] = archetypeId
 		entityStore.chunkSizes[chunkId] = 0
+		// Zero out stale pointers before re-linking.
+		entityStore.chunkPrevInArchetype[chunkId] = NULL_CHUNK_ID
+		entityStore.chunkNextInArchetype[chunkId] = NULL_CHUNK_ID
 
 		// Create fresh containers for the new archetype's data. The entities buffer is always kept.
 		const newComponentData = { entities: oldComponentData.entities }
@@ -1152,11 +1292,20 @@ export class EntityManager {
 		const archetypeTicksBuffer = new SharedArrayBuffer(newComponentCount * Uint32Array.BYTES_PER_ELEMENT)
 		entityStore.chunkArchetypeDirtyTicks[chunkId] = new Uint32Array(archetypeTicksBuffer)
 
-		// Add the re-purposed chunk to its new archetype's list.
-		const archetypeChunks = entityStore.archetypeChunks[archetypeId]
-		archetypeChunks.push(chunkId)
+		// --- Link the recycled chunk into its new archetype's list ---
+		const tailId = entityStore.archetypeTailChunkIds[archetypeId]
+		if (tailId !== NULL_CHUNK_ID) {
+			entityStore.chunkNextInArchetype[tailId] = chunkId
+		}
+		entityStore.chunkPrevInArchetype[chunkId] = tailId
+		entityStore.chunkNextInArchetype[chunkId] = NULL_CHUNK_ID // It's the new tail
+		entityStore.archetypeTailChunkIds[archetypeId] = chunkId
+		if (entityStore.archetypeHeadChunkIds[archetypeId] === NULL_CHUNK_ID) {
+			entityStore.archetypeHeadChunkIds[archetypeId] = chunkId
+		}
+		entityStore.archetypeChunkCounts[archetypeId]++
+		entityStore.archetypeLastNonFullChunkId[archetypeId] = chunkId
 		this.queryManager.registerChunk(archetypeId, chunkId)
-		entityStore.archetypeLastNonFullChunk[archetypeId] = archetypeChunks.length - 1
 
 		this.newlyCreatedChunks.push(chunkId)
 		return chunkId
@@ -1165,16 +1314,22 @@ export class EntityManager {
 	 * Internal helper to mark a chunk as destroyed and ready for cleanup/pooling.
 	 * @param {number} chunkId The ID of the chunk to destroy.
 	 * @param {number} archetypeId The archetype the chunk belonged to.
-	 * @param {number} indexInArchetype The chunk's index in the archetype's chunk list.
 	 * @private
 	 */
-	_destroyChunk(chunkId, archetypeId, indexInArchetype) {
-		if (indexInArchetype > -1) {
-			const archetypeChunks = entityStore.archetypeChunks[archetypeId]
-			archetypeChunks.splice(indexInArchetype, 1)
-			if (entityStore.archetypeLastNonFullChunk[archetypeId] >= indexInArchetype) {
-				entityStore.archetypeLastNonFullChunk[archetypeId]--
-			}
+	_destroyChunk(chunkId, archetypeId) {
+		// --- Unlink the chunk from the archetype's list ---
+		const prevId = entityStore.chunkPrevInArchetype[chunkId]
+		const nextId = entityStore.chunkNextInArchetype[chunkId]
+
+		if (prevId !== NULL_CHUNK_ID) entityStore.chunkNextInArchetype[prevId] = nextId
+		else entityStore.archetypeHeadChunkIds[archetypeId] = nextId
+
+		if (nextId !== NULL_CHUNK_ID) entityStore.chunkPrevInArchetype[nextId] = prevId
+		else entityStore.archetypeTailChunkIds[archetypeId] = prevId
+
+		entityStore.archetypeChunkCounts[archetypeId]--
+		if (entityStore.archetypeLastNonFullChunkId[archetypeId] === chunkId) {
+			entityStore.archetypeLastNonFullChunkId[archetypeId] = entityStore.archetypeHeadChunkIds[archetypeId]
 		}
 
 		this.queryManager.unregisterChunk(archetypeId, chunkId)
@@ -1187,6 +1342,9 @@ export class EntityManager {
 		// We don't clear chunkComponentData or chunkDirtyTicks here, as they will be overwritten
 		// on re-initialization. However, we should clear the archetype-level ticks.
 		entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined
+		// Explicitly zero out pointers to prevent stale data traversal on bugs.
+		entityStore.chunkPrevInArchetype[chunkId] = NULL_CHUNK_ID
+		entityStore.chunkNextInArchetype[chunkId] = NULL_CHUNK_ID
 		entityStore.freeChunkIds.push(chunkId)
 
 		this.destroyedChunks.push(chunkId)

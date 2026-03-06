@@ -2,18 +2,16 @@ const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
 const { queryManager } = ecs
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+const { position, velocity, rwmTag } = ecs.getTypeIDs()
 
 export class RWMBenchmark {
 	static dependencies = {
 		update: {
-			reads: ['velocity'],
-			writes: ['position'],
+			reads: [velocity],
+			writes: [position],
 		},
 	}
 	constructor() {
-		const { position, velocity, rwmTag } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity, rwmTag })
-
 		this.query = queryManager.getQuery({
 			with: [position, velocity, rwmTag],
 		})
@@ -36,8 +34,8 @@ export class RWMBenchmark {
 
 	update({deltaTime, currentTick}) {
 		for (const chunkView of this.query.iter()) {
-			const positions = chunkView.componentData[this.position]
-			const velocities = chunkView.componentData[this.velocity]
+			const positions = chunkView.componentData[position]
+			const velocities = chunkView.componentData[velocity]
 
 			for (let indexInChunk = 0; indexInChunk < chunkView.size; indexInChunk++) {
 				positions.x[indexInChunk] += velocities.x[indexInChunk] * deltaTime
@@ -45,7 +43,7 @@ export class RWMBenchmark {
 			}
 
 			// Since we modify every entity, mark the whole component type as dirty.
-			chunkView.markAllDirty(this.position, currentTick)
+			chunkView.markAllDirty(position, currentTick)
 		}
 	}
 

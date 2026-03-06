@@ -5,7 +5,9 @@ window.PATH_ASSETS = `${window.PATH_CLIENT}/assets`
 
 window.PATH_COMPONENTS = `${window.PATH_CLIENT}/Components`
 window.PATH_SYSTEMS = `${window.PATH_CLIENT}/Systems`
+window.PATH_KERNELS = `${window.PATH_CLIENT}/Kernels`
 window.PATH_SUBSYSTEMS = `${window.PATH_CLIENT}/Subsystems`
+
 
 window.PATH_ECS = `${window.PATH_CLIENT}/ECS`
 

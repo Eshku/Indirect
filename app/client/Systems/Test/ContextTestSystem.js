@@ -1,6 +1,8 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager, payloadCompiler } = ecs
+const { contextTest } = ecs.getKernelIDs()
+
+const { contextTestTag } = ecs.getTypeIDs()
 
 /**
  * A system to test that properties passed via the `schedule` context are correctly
@@ -12,29 +14,30 @@ const { queryManager, payloadCompiler } = ecs
  * 3. `process` (Main Thread): Reads the value again and verifies it's 2.
  */
 export class ContextTestSystem {
+	static dependencies = {
+		update: {},
+		contextTest: {
+			context: {
+				sharedState: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+			},
+		},
+		process: {},
+	}
+
 	constructor() {
-		// --- 1. Initialize Context Property ---
-		// Create a SharedArrayBuffer that will be passed to workers via the context.
-		// It holds a single Int32 value for our test.
-		const sab = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
-		this.sharedState = new Int32Array(sab)
-
-		// --- 2. Setup for creating a test entity ---
-		// The schedule method needs at least one chunk to operate on. We create a query
-		// that will match the test entity we create in `init`.
-		const { contextTestTag } = ecs.getTypeIDs()
-		this.scheduleQuery = queryManager.getQuery({
-			with: [contextTestTag],
-		})
-
-		// Pre-compile the payload for creating the test entity.
-		const { payload } = payloadCompiler.compileEntity({
-			contextTestTag: {},
-		})
-		this.creationPayload = payload
+		this.sharedState = ContextTestSystem.dependencies.contextTest.context.sharedState
 	}
 
 	init() {
+		this.query = this.getQuery({
+			with: [contextTestTag],
+		})
+
+		const { payload } = this.compiler.compileEntity({
+			contextTestTag: {},
+		})
+		this.creationPayload = payload
+
 		// Create a single entity to ensure the schedule phase has a job to run.
 		this.commands.createEntity(this.creationPayload)
 		console.log('[ContextTestSystem] Initialized and created a test entity.')
@@ -47,34 +50,17 @@ export class ContextTestSystem {
 		console.log(`%c[ContextTestSystem] update (tick ${currentTick}): Wrote value -> ${valueToWrite}`, 'color: orange')
 	}
 
-	schedule(chunk, context) {
-		// This runs on a worker thread. It will run once for our single test entity's chunk.
-		// To prevent log spam from multiple chunks/jobs, we use a global flag.
-		if (globalThis.hasRunScheduleTest) return
-		globalThis.hasRunScheduleTest = true
+	schedule() {
+		const jobs = []
+		const chunkIds = this.query.getChunks()
 
-		// --- 1. Verify value from `update` ---
-		const valueToRead = 1
-		const readValue = Atomics.load(context.sharedState, 0)
-
-		if (readValue === valueToRead) {
-			console.log(
-				`%c[ContextTestSystem] schedule (tick ${context.currentTick}): Correctly read value -> ${readValue}`,
-				'color: lightgreen',
-			)
-		} else {
-			console.error(
-				`[ContextTestSystem] schedule (tick ${context.currentTick}): FAILED! Expected to read ${valueToRead}, but got ${readValue}.`,
-			)
+		for (const chunkId of chunkIds) {
+			jobs.push({
+				kernel: contextTest,
+				payload: chunkId,
+			})
 		}
-
-		// --- 2. Write new value for `process` ---
-		const valueToWrite = 2
-		Atomics.store(this.sharedState, 0, valueToWrite)
-		console.log(
-			`%c[ContextTestSystem] schedule (tick ${context.currentTick}): Wrote new value -> ${valueToWrite}`,
-			'color: cyan',
-		)
+		return jobs
 	}
 
 	process({ currentTick }) {
@@ -99,7 +85,7 @@ export class ContextTestSystem {
 
 	destroy() {
 		// Clean up the test entity on HMR.
-		for (const chunk of this.scheduleQuery.iter()) {
+		for (const chunk of this.query.iter()) {
 			this.commands.destroyEntitiesInChunk(chunk)
 		}
 		console.log('[ContextTestSystem] Destroyed test entity.')

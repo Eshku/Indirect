@@ -19,14 +19,13 @@
  *
  * - **`'none'`**: For systems that only need to be initialized. Their constructor and `init()` method are
  *   called, but they are not added to any update loop. Ideal for purely event-driven systems
- *   (e.g., setting up listeners for external libraries) that don't need a per-frame update.
+ *   that don't need a per-frame update.
  *
  * - **`'input'`**: Runs once per frame, before the main logic. Designed for low-latency systems that
  *   process raw user input before any gameplay calculations occur.
  *
  * - **`'logic'`**: Runs on a fixed, deterministic timestep (e.g., 60 times per second). This is for all
- *   core gameplay logic, such as physics, state changes, and AI. This entire group is a candidate for
- *   future parallel execution on a Web Worker to improve performance.
+ *   core gameplay logic, such as physics, state changes, and AI.
  *
  * - **`'visuals'`**: Runs once per rendered frame (variable timestep). These systems receive an `alpha`
  *   interpolation value, making them perfect for tasks that need to be visually smooth, like camera
@@ -36,15 +35,12 @@
  *   infrequent tasks that don't need to run every frame, like periodic UI refreshes.
  */
 export const systemSchedule = {
-	
 	// Systems that only need to be initialized (e.g., for event listeners)
-	Initialization: [{ name: 'UIInputSystem', frequency: 'none' }],
+		Initialization: [{ name: 'UIInputSystem', frequency: 'none' }],
 
 	Cursor: [{ name: 'CursorSystem', frequency: 'input' }],
 
-	Input: [
-		{ name: 'PlayerInputSystem', frequency: 'input' },
-	],
+	Input: [{ name: 'PlayerInputSystem', frequency: 'input' }],
 
 	// Runs on a fixed timestep for deterministic gameplay logic and physics.
 	Logic: [
@@ -74,15 +70,17 @@ export const systemSchedule = {
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
-		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' }, 
+		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
 	],
 
 	//! Do not run benchmark \ test systems with other systems together, high query overlap potential.
 
 	Benchmark: [
 		/* { name: 'CPUBenchmark', frequency: 'logic' }, */
-		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */
-		/* { name: 'ParallelRWMBenchmark', frequency: 'logic' }, */
+		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */ 
+
+		/* { name: 'RWMBenchmark', frequency: 'logic' },  */
+		
 		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
@@ -90,15 +88,10 @@ export const systemSchedule = {
 		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
-		/* { name: 'SimpleParallelismTestSystem', frequency: 'logic' }, */
+		/* { name: 'CustomJobTestSystem', frequency: 'logic' }, */
 		/* 		{ name: 'DependencySystemA', frequency: 'visuals' },
 		{ name: 'DependencySystemB', frequency: 'visuals' },
 		{ name: 'DependencySystemC', frequency: 'visuals' }, */
-
-
-
-
-		//! Spoilers, not yet implemented
 		/* { name: 'KernelArchitecture', frequency: 'logic' }, */
 	],
 

@@ -17,22 +17,40 @@ const TOP_SYSTEMS_COUNT = 5 // How many of the slowest systems to show by defaul
  *
  * ---
  *
- * ### Developer Note: Features & Functionality
+ * ### Developer Note: What is Measured?
+ *
+ * The performance monitor provides timings for the main thread only. It does **not** currently measure the
+ * execution time of parallel kernel jobs that run on Web Workers.
+ *
+ * The detailed breakdown for a system is as follows:
+ *
+ * - **`Update`**: The execution time of the system's `update()` method. This is always a main-thread job.
+ * - **`Schedule`**: The time it takes for the system's `schedule()` method to run and create its job definitions.
+ *   This measures the cost of **job creation**, not job execution. This is always a main-thread operation.
+ * - **`Process`**: The execution time of the system's `process()` method. This is always a main-thread job.
+ * - **`Total`**: The sum of `Update`, `Schedule`, `Process`, and the execution time of any `KERNEL` jobs that
+ *   happened to be executed by the main thread during its work-stealing loop.
+ *
+ * The `Render` and `Command Buffer` timings are also main-thread-only operations.
+ *
+ * ---
  *
  * This monitor is designed to be a comprehensive, non-intrusive tool for debugging performance.
  *
  * - **Data Collection**: It pulls raw timing data from `SystemManager.systemTimings` each frame.
  * - **Sliding Window**: It calculates `avg` and `max` execution times over a configurable `windowDuration` (e.g., 1 second)
- *   to provide a rolling, stable view of performance rather than noisy, per-frame numbers. * - **Top Systems**: By default, it shows only the top 5 slowest systems (by max execution time) to provide a clean,
+ *   to provide a rolling, stable view of performance rather than noisy, per-frame numbers.
+ * - **Top Systems**: By default, it shows only the top 5 slowest systems (by max execution time) to provide a clean,
  *   stable view of the most expensive operations. This can be toggled with the "Show all" checkbox to display all systems.
  * - **Pinning**: You can click on any system in the list to "pin" it. Pinned systems are always displayed at the top
  *   of the list in a separate group, sorted alphabetically. This is extremely useful for tracking a specific system's
  *   behavior without it being lost in the main list, which is sorted by `max` time.
- * - **Command Buffer**: The `CommandBuffer.flush` operation is displayed separately at the top, as its performance
- *   is critical and distinct from other systems.
- * - **Frame Summary**: A total of all system `avg` and `max` times is displayed at the bottom, giving a rough
- *   idea of the total frame cost from the perspective of the ECS.
  */
+
+//! workers are not measured currently
+//! Measuring them would mean adding overhead per job
+//! Somewhat efficient implementation would be to let workers write into their own buffers (no atomics)
+//! Then sync on main thread.
 
 export class PerformanceMonitor {
 	constructor() {
@@ -64,6 +82,7 @@ export class PerformanceMonitor {
 	init() {
 		this.systemManager = systemManager
 		this._createPanel()
+		this.systemManager.enablePerformanceTimings()
 		// @ts-ignore
 		window.performanceMonitor = this
 	}
@@ -863,6 +882,8 @@ export class PerformanceMonitor {
 	}
 
 	destroy() {
+		this.systemManager.disablePerformanceTimings()
+
 		const styleId = 'performance-monitor-styles'
 		const styleElement = document.getElementById(styleId)
 		if (styleElement) {

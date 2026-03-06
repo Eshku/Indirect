@@ -235,3 +235,5 @@ export class CommandBuffer {
 		}
 	}
 }
+
+export const commandBuffer = new CommandBuffer()

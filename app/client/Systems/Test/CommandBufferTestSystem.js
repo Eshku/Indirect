@@ -2,10 +2,9 @@ const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, testManager } = engine.getManagers()
 
 const { entityManager, queryManager, prefabManager, systemManager } = ecs
-
 const { describe, it, expect } = await import(`${PATH_MANAGERS}/TestManager/TestAPI.js`)
 
-const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+const { position, velocity, testEntityTag, parent } = ecs.getTypeIDs()
 
 /**
  * A simple configuration object to enable or disable specific command buffer tests.
@@ -29,33 +28,26 @@ const testConfig = {
 export class CommandBufferTestSystem {
 	constructor() {
 		this.systemManager = systemManager
-
-		const { position, velocity, testEntityTag, parent } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity, testEntityTag, parent })
-
-		// Create queries for verification steps.
-		// All queries now require the TestEntityTag to ensure they only match test entities.
-		this.creationQuery = queryManager.getQuery({
-			with: [position, testEntityTag],
-			without: [velocity],
-		})
-
-		this.instantiateQuery = queryManager.getQuery({
-			with: [position, velocity, testEntityTag],
-		})
-
-		// --- Pre-compile payloads for tests ---
-		this.addComponentPayload = payloadCompiler.compileComponent(this.velocity, { x: 5, y: 5 }).payload
-		this.setVelocityPayload = payloadCompiler.compileComponent(this.velocity, { x: 999, y: -999 }).payload
-		this.setPositionPayload = payloadCompiler.compileComponent(this.position, { x: 100, y: 100 }).payload
-
-		// Payload for generational entity tests
-		this.generationalTestVelocityPayload = payloadCompiler.compileComponent(this.velocity, { x: 999, y: 999 })
 	}
 
 	async init() {
 		// Preload the specific prefab needed for the instantiate test.
 		await prefabManager.preload(['test_prefab'])
+
+		// --- Initialize Queries ---
+		this.creationQuery = this.getQuery({
+			with: [position, testEntityTag],
+			without: [velocity],
+		})
+		this.instantiateQuery = this.getQuery({
+			with: [position, velocity, testEntityTag],
+		})
+
+		// --- Initialize Payloads ---
+		this.addComponentPayload = this.compiler.compileComponent(velocity, { x: 5, y: 5 }).payload
+		this.setVelocityPayload = this.compiler.compileComponent(velocity, { x: 999, y: -999 }).payload
+		this.setPositionPayload = this.compiler.compileComponent(position, { x: 100, y: 100 }).payload
+		this.generationalTestVelocityPayload = this.compiler.compileComponent(velocity, { x: 999, y: 999 })
 
 		const flush = () => {
 			this.systemManager.commandBufferExecutor.execute(this.commands, this.systemManager.currentTick)
@@ -65,7 +57,7 @@ export class CommandBufferTestSystem {
 			// --- Test 1: createEntity ---
 			if (testConfig.runCreateEntityTest) {
 				it('should create an entity with components via createEntity', () => {
-					const { payload } = payloadCompiler.compileEntity({
+					const { payload } = this.compiler.compileEntity({
 						position: { x: 10, y: 20 },
 						testEntityTag: {},
 					})
@@ -127,7 +119,7 @@ export class CommandBufferTestSystem {
 						velocity: { x: 5, y: 5 },
 						testEntityTag: {},
 					})
-					this.commands.removeComponent(entity, this.velocity)
+					this.commands.removeComponent(entity, velocity)
 					flush()
 					expect(ECS.hasComponent(entity, `velocity`)).toBe(false)
 					this.commands.destroyEntity(entity)
@@ -162,8 +154,8 @@ export class CommandBufferTestSystem {
 						)
 						return
 					}
-					// Compile the prefab payload with overrides.
-					const { payload } = payloadCompiler.compileEntity('test_prefab', { position: { x: 123, y: 456 } })
+					// Compile the prefab payload with overrides using the injected compiler.
+					const { payload } = this.compiler.compileEntity('test_prefab', { position: { x: 123, y: 456 } })
 
 					this.commands.instantiate(payload, 0)
 					flush()
@@ -267,7 +259,7 @@ export class CommandBufferTestSystem {
 				const entityA_ID = ECS.createEntity({ position: { x: 1, y: 1 }, velocity: { x: 1, y: 1 } })
 
 				// --- 2. Defer Commands ---
-				this.commands.removeComponent(entityA_ID, this.velocity)
+				this.commands.removeComponent(entityA_ID, velocity)
 				this.commands.destroyEntity(entityA_ID)
 
 				// --- 3. Flush & Recycle ---
@@ -310,7 +302,7 @@ export class CommandBufferTestSystem {
 		describe('Command Buffer (Placeholder Entities)', () => {
 			it('should create a parent and child and link them using placeholders', () => {
 				// 1. Defer creation of parent and child, getting placeholder IDs back.
-				const { payload: parentPayload } = payloadCompiler.compileEntity({
+				const { payload: parentPayload } = this.compiler.compileEntity({
 					testEntityTag: {},
 					position: { x: 500, y: 500 },
 				})
@@ -318,14 +310,14 @@ export class CommandBufferTestSystem {
 
 				expect(parentPlaceholderId >> 63n === 1n).toBe(true) // Verify it's a placeholder
 
-				const { payload: childPayload } = payloadCompiler.compileEntity({
+				const { payload: childPayload } = this.compiler.compileEntity({
 					testEntityTag: {},
 					position: { x: 1, y: 1 },
 				})
 				const childPlaceholderId = this.commands.createEntity(childPayload)
 
 				// 2. Defer adding a 'Parent' component to the child, referencing the parent's placeholder.
-				const { payload: parentComponentPayload } = payloadCompiler.compileComponent(this.parent, {
+				const { payload: parentComponentPayload } = this.compiler.compileComponent(parent, {
 					entityId: parentPlaceholderId,
 				})
 				this.commands.addComponent(childPlaceholderId, parentComponentPayload)
@@ -334,7 +326,7 @@ export class CommandBufferTestSystem {
 				flush()
 
 				// 4. Verification
-				const parentQuery = queryManager.getQuery({ with: [this.parent, this.testEntityTag] })
+				const parentQuery = this.getQuery({ with: [parent, testEntityTag] })
 
 				let foundChildId
 				let foundParentId

@@ -3,7 +3,7 @@ const { ComponentManager } = await import('../ComponentManager/ComponentManager.
 import { entityStore } from './EntityManager.js'
 const { reconstruct } = await import('../ComponentManager/ComponentInterpreter.js')
 const { EntityManager } = await import('./EntityManager.js')
-const { QueryManager } = await import('../../Managers/QueryManager/QueryManager.js')
+const { queryManager } = await import('../../Managers/QueryManager/QueryManager.js')
 const { PrefabManager } = await import('../../Managers/PrefabManager/PrefabManager.js')
 const { SystemManager } = await import('../SystemManager/SystemManager.js')
 const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
@@ -20,7 +20,7 @@ const { sharedDataManager } = await import(`${PATH_ECS}/SharedDataManager/Shared
 export class ECS {
 	constructor() {
 		this.componentManager = new ComponentManager()
-		this.queryManager = new QueryManager()
+		this.queryManager = queryManager
 		this.entityManager = new EntityManager()
 		this.prefabManager = new PrefabManager()
 		this.systemManager = new SystemManager()
@@ -270,6 +270,20 @@ export class ECS {
 	 */
 	getTypeIDs() {
 		return this.componentManager.getTypeIDs()
+	}
+
+	/**
+	 * Retrieves an object mapping all registered system names to their numeric IDs.
+	 */
+	getSystemIDs() {
+		return this.systemManager.getSystemIds()
+	}
+
+	/**
+	 * Retrieves an object mapping all registered kernel names to their numeric IDs.
+	 */
+	getKernelIDs() {
+		return this.systemManager.getKernelIds()
 	}
 
 	/**

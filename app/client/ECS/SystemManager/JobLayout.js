@@ -15,6 +15,7 @@ export const JOB_PAYLOAD_OFFSET = 1 // Packed: jobType, chunkId
 export const JOB_DEP_LIST_START_OFFSET = 2 // Start index in dependentsSAB
 export const JOB_DEP_LIST_COUNT_OFFSET = 3 // Number of dependents in the list
 export const JOB_SYSTEM_ID_OFFSET = 4 // ID of the system this job belongs to
+export const JOB_KERNEL_ID_OFFSET = 5 // ID of the kernel to execute for KERNEL jobs.
 
 // The dependency counter is the "hot" field, frequently written to by multiple threads.
 // We place it at a separate location within the 64-byte stride (at index 8, which is 32 bytes in)
@@ -26,7 +27,7 @@ export const JOB_DEP_COUNTER_OFFSET = 8
  */
 export const JOB_TYPE = {
 	UPDATE: 0, // Main-thread job that runs before parallel work.
-	SCHEDULE: 1, // Parallel job that can run on any thread.
+	KERNEL: 1, // Parallel kernel job that can run on any thread.
 	PROCESS: 2, // Main-thread job that runs after parallel work.
 }
 

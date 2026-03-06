@@ -265,7 +265,6 @@ export class GameLoop {
 			this.frameContext.lastTick = this.systemManager.updateGroups.input.lastTick
 			this.frameContext.alpha = 0 // Not applicable, but set for consistency
 			await this.scheduler.execute(inputSystems, this.frameContext, this.frameCounter)
-			this.systemManager.updateGroups.input.lastTick = this.currentTick
 		}
 
 		// --- 2. Logic Phase (Fixed Timestep) ---
@@ -311,7 +310,6 @@ export class GameLoop {
 				this.frameContext.lastTick = group.lastTick
 				this.frameContext.alpha = 0 // Not applicable
 				await this.scheduler.execute(group.systems, this.frameContext, this.frameCounter)
-				group.lastTick = this.lastTick // Sync with the last completed logic tick
 				group.accumulator = 0 // Reset accumulator for this group
 			}
 		}
@@ -329,7 +327,6 @@ export class GameLoop {
 
 			// Await the completion of all jobs for this group.
 			await this.scheduler.execute(visualsSystems, this.frameContext, this.frameCounter)
-			this.systemManager.updateGroups.visuals.lastTick = this.lastTick // Sync with the last completed logic tick
 		}
 
 		// --- 5. Post-Execution Frame Finalization ---
@@ -338,6 +335,16 @@ export class GameLoop {
 		// This must happen after all system groups are complete.
 		const cbFlushStartTime = performance.now()
 		this.systemManager.commandBufferExecutor.execute(this.systemManager.commandBuffer, this.currentTick)
+
+		// Sync the last-run tick for all non-logic groups to the last completed logic tick of this frame.
+		// This ensures reactivity is consistent across all of them for the next frame.
+		for (const groupName in this.systemManager.updateGroups) {
+			if (groupName !== 'logic') {
+				const group = this.systemManager.updateGroups[groupName]
+				group.lastTick = this.lastTick
+			}
+		}
+
 		const cbFlushEndTime = performance.now()
 
 		// --- Performance Data Recording ---
@@ -354,11 +361,8 @@ export class GameLoop {
 
 		this.systemManager.clearSystemTimings()
 
-		const { newChunks, destroyedChunks, newArchetypes } = this.ecs.entityManager.getAndClearChunkDeltas()
-
-		if (newChunks || destroyedChunks || newArchetypes) {
-			this.workerManager.broadcastChunkDeltas({ newChunks, destroyedChunks, newArchetypes })
-		}
+		// Broadcast all structural deltas (chunks, archetype pages) to workers.
+		this.workerManager.broadcastDeltas()
 
 		// --- Manual Render Call ---
 		const renderStartTime = performance.now()

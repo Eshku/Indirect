@@ -1,146 +1,159 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager, payloadCompiler } = ecs
 
-//! SPOILERS AHEAD
-//! Might or might not be implemented in some sort of future.
-//! I'm confused and scared.
-//! is this too complex?
+const { position, velocity } = ecs.getTypeIDs()
+// Use camelCase for all ID lookups for consistency.
+// Kernels are functions, so we use camelCase. Let's get all the ones we need.
+const { testKernel, loggingKernel } = ecs.getKernelIDs()
 
-// A mock helper class to represent the SharedArrayBuffer-based request queue.
-// In a real implementation, this would use Atomics.
-class MockRequestQueue {
-	constructor() {
-		this.requests = []
-	}
-	addRequest(request) {
-		this.requests.push(request)
-	}
-	claimRequest() {
-		return this.requests.shift()
-	}
-}
+// Systems are classes, so we use PascalCase.
+const { PlayerInputSystem } = ecs.getSystemIDs()
+
+// Module-level constants are the preferred way to define static context data.
+const KERNEL_SPEED = 100
+
+// --- Test State for Execution Order ---
+// These are module-level so they can be referenced in the static context.
+const executionLog = new Int32Array(new SharedArrayBuffer(4 * 5)) // 5 slots
+const logIndex = new Int32Array(new SharedArrayBuffer(4))
+Atomics.store(logIndex, 0, 0)
 
 /**
- * A test system for the new hybrid (static + dynamic)  jobs architecture.
+ * A test system for the new hybrid (static + dynamic) jobs architecture.
  */
 export class KernelArchitecture {
-	//! reads and writes would be defined as componentTypeId's too.
-
-	// 1. Declare all dependencies for all methods and kernels.
 	static dependencies = {
-		// Main-thread method dependencies
-		update: {
-			reads: ['position'], // To decide which entities to boost
+		// --- Main-thread update phase ---
+		// This job runs on the main thread.
+		update: {},
+
+		// --- Kernel Dependencies ---
+
+		// 'testKernel' has no explicit `runsAfter` dependency on 'update'.
+		// This means the scheduler treats them as independent and they can
+		// run in PARALLEL. The order between them is not guaranteed.
+		testKernel: {
+			reads: velocity,
+			writes: position,
+			context: {
+				speed: KERNEL_SPEED,
+				position,
+				velocity,
+				executionLog,
+				logIndex,
+			},
 		},
+
+		// 'loggingKernel' explicitly depends on 'update'.
+		// This SERIALIZES its execution, guaranteeing it will only run AFTER
+		// the 'update' job for this system has completed.
+		loggingKernel: {
+			context: {
+				executionLog,
+				logIndex,
+			},
+		},
+
+		// --- Main-thread finalizer ---
+		// The 'process' job has an implicit dependency on all other jobs in the
+		// same system (`update` and all `kernels`). It is guaranteed to run last.
 		process: {
-			reads: ['velocity'], // To log final velocities
+			reads: velocity,
 		},
-		// Kernel dependencies
-		move: {
-			reads: ['velocity'],
-			writes: ['vosition'],
-			context: ['speed'], // This property will be sent to workers
-		},
-		processBoostRequests: {
-			writes: ['velocity'], // This kernel modifies velocity
-			context: ['boostRequestQueue'], // The request queue needs to be on the worker
-		},
-	}
-
-	constructor() {
-		const { position, velocity } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity })
-
-		this.query = queryManager.getQuery({ with: [position, velocity] })
-		this.speed = 100
-
-		// 2. Initialize resources for dynamic work (Request Buffer)
-		this.boostRequestQueue = new MockRequestQueue()
-
-		// 3. The engine provides kernel IDs to avoid magic strings.
-		// During its analysis phase, the SystemManager inspects the associated
-		// `KernelArchitecture.kernels.js` file, assigns a unique numeric ID to each
-		// exported kernel function (e.g., 'move' -> 0), and caches this mapping.
-		// This API call retrieves that pre-computed mapping for this system instance.
-		this.kernelIds = ecs.getKernelsFor(this)
-		// For this example, we'll mock the return value as the real API doesn't exist yet.
-		if (!this.kernelIds) this.kernelIds = { move: 0, processBoostRequests: 1 }
-
-		// Create a few test entities
-		const { payload } = payloadCompiler.compileEntity({
-			position: { x: 100, y: 100 },
-			velocity: { x: 1, y: 0 },
-		})
-		this.creationPayload = payload
 	}
 
 	// init() is called after the constructor.
 	init() {
+		this.query = this.getQuery({ with: [position, velocity] })
+
+		const { payload } = this.compiler.compileEntity({
+			position: { x: 100, y: 100 },
+			velocity: { x: 1, y: 0 },
+		})
+		this.creationPayload = payload
 		this.commands.createEntity(this.creationPayload)
 	}
 
-	/**
-	 * Runs ONCE per frame on the MAIN THREAD to schedule static, predictable work.
-	 */
-	createJobs(frameContext) {
-		const chunkIds = this.query.getChunks()
+	update(frameContext) {
+		// Reset log periodically to see fresh results.
+		if (frameContext.currentTick > 0 && frameContext.currentTick % 60 === 0) {
+			Atomics.store(logIndex, 0, 0)
+			executionLog.fill(0)
+		}
 
-		// 4. Return an array of job descriptions.
-		return [
-			// A standard, chunk-based job for high-volume parallel work.
-			{
-				kernel: this.kernelIds.move,
-				chunks: chunkIds,
-			},
-			// A custom "listener" job. It has no 'chunks' property, so the scheduler
-			// will run it once. It's responsible for its own logic, in this case,
-			// polling the request buffer.
-			{
-				kernel: this.kernelIds.processBoostRequests,
-			},
-		]
+		// --- Simulate a heavier workload to test parallelism ---
+		// This busy-wait gives worker threads a chance to start their
+		// `testKernel` job before this `update` job finishes.
+		const start = performance.now()
+		while (performance.now() - start < 2) {
+			// Burn CPU for ~2ms
+		}
+
+		const index = Atomics.add(logIndex, 0, 1)
+		if (index < executionLog.length) {
+			Atomics.store(executionLog, index, 1) // 1 for update
+		}
 	}
 
 	/**
-	 * Runs ONCE per frame on the MAIN THREAD for complex logic and dynamic job creation.
-	 * created jobs - both custom and chunk-based run in parallel with new archetechture, unless conflicts.
-	 * I think...idk, might need additional thing for barrier if one is needed \ cannot be defined through through dependencies.
+	 * Runs ONCE per frame on the MAIN THREAD to create jobs for static, predictable work.
 	 */
+	schedule() {
+		const jobs = []
+		const chunkIds = this.query.getChunks()
 
-	//! overall order:
-	//! 1. create jobs on main thread (creation process)
-	//! 2. run update + created custom jobs in parallel
-	//! Once all those ^ done - run process() on main thread.
-
-	update(frameContext) {
-		// Example: Find an entity on the left side of the screen and boost it.
-		for (const chunk of this.query.iter()) {
-			const positions = chunk.componentData[this.position]
-			for (let i = 0; i < chunk.size; i++) {
-				if (positions.x[i] < 50) {
-					const entityId = chunk.entities[i]
-					// 5. Write a request to the shared buffer. The 'processBoostRequests' kernel will pick this up.
-					console.log(`%c[System/Main] Enqueuing boost request for entity ${entityId}.`, 'color: orange')
-					this.boostRequestQueue.addRequest({ entityId, boostAmount: 2 })
-					// We only boost one entity per frame for this test.
-					return
-				}
-			}
+		// Job for the main kernel
+		for (const chunkId of chunkIds) {
+			jobs.push({
+				kernel: testKernel,
+				payload: chunkId,
+			})
 		}
+
+		// Job for the logging kernel
+		jobs.push({
+			kernel: loggingKernel,
+			payload: 0, // Payload is unused
+		})
+
+		return jobs
 	}
 
 	/**
 	 * Runs ONCE per frame on the MAIN THREAD after all other work for this system is complete.
 	 */
 	process(frameContext) {
-		// Example: Log the final state of an entity after all kernels have run.
-		for (const chunk of this.query.iter()) {
-			const velocities = chunk.componentData[this.velocity]
-			// Log the first entity's velocity for demonstration.
-			if (chunk.size > 0) {
-				// console.log(`[System/Main] Process phase: Final velocity.x is ${velocities.x[0]}`);
-				break // Only log once.
+		// --- Verify Execution Order ---
+		// Check on the frame after a reset to ensure we have a full log.
+		if (frameContext.currentTick > 0 && frameContext.currentTick % 60 === 1) {
+			const finalLogIndex = Atomics.load(logIndex, 0)
+			const log = Array.from(executionLog).slice(0, finalLogIndex)
+
+			// Map numeric codes to human-readable names for logging.
+			const phaseNames = { 1: 'update', 2: 'testKernel', 3: 'loggingKernel' }
+			const namedLog = log.map(code => phaseNames[code] || `unknown(${code})`)
+
+			const updateIdx = log.indexOf(1)
+			const testKernelIdx = log.indexOf(2)
+			const loggingKernelIdx = log.indexOf(3)
+
+			let success = true
+			let message = `Execution Order: [${namedLog.join(' -> ')}]`
+
+			if (updateIdx === -1 || testKernelIdx === -1 || loggingKernelIdx === -1) {
+				success = false
+				message += ` | FAILED: Not all phases ran. Expected [update, testKernel, loggingKernel] to be present.`
+			} else if (loggingKernelIdx < updateIdx || testKernelIdx < updateIdx) {
+				success = false
+				message += ` | FAILED: A kernel ran before 'update'. The implicit 'update' -> 'kernel' dependency was not respected.`
+			} else {
+				message += ` | PASSED: All kernels ran after 'update' as required by the simplified intra-system dependency model.`
+			}
+
+			if (success) {
+				console.log(`%c[KernelArchitecture] ${message}`, 'color: lightgreen')
+			} else {
+				console.error(`[KernelArchitecture] ${message}`)
 			}
 		}
 	}

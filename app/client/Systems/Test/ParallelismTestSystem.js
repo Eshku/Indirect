@@ -1,7 +1,12 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, layerManager } = engine.getManagers()
 
-const { queryManager, payloadCompiler } = ecs
+const { position, velocity, column, parallelismTestTag } = ecs.getTypeIDs()
+const { parallelismTest } = ecs.getKernelIDs()
+
+const WORLD_WIDTH = 800
+const LEFT_BOUNDARY = WORLD_WIDTH * 0.1
+const RIGHT_BOUNDARY = WORLD_WIDTH * 0.9
 
 /**
  * A self-contained, system to test and verify the three-phase parallel execution model.
@@ -32,21 +37,21 @@ const { queryManager, payloadCompiler } = ecs
  */
 export class ParallelismTestSystem {
 	static dependencies = {
-		update: {
-			reads: ['position', 'column'],
-		},
-		schedule: {
-			reads: ['velocity'],
-			writes: ['position'],
+		parallelismTest: {
+			reads: [velocity],
+			writes: [position],
+			context: {
+				position,
+				velocity,
+				rightBoundary: RIGHT_BOUNDARY,
+				leftBoundary: LEFT_BOUNDARY,
+			},
 		},
 		process: {
-			reads: ['position', 'column'],
+			reads: [position, column],
 		},
 	}
 	constructor() {
-		const { position, velocity, parallelismTestTag, column } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity, parallelismTestTag, column })
-
 		// --- PIXI Setup ---
 		this.particleContainer = new PIXI.Container()
 		this.textContainer = new PIXI.Container()
@@ -71,29 +76,26 @@ export class ParallelismTestSystem {
 
 		//  Transpiler will automatically pick this.worldWidth` up and add it to `context` object.
 
-		this.worldWidth = 800
+		this.worldWidth = WORLD_WIDTH
 		this.worldHeight = 1000
 
 		// --- Test Configuration ---
 		this.topMargin = 50 // The space at the top to reserve for labels.
 
 		// number of columns will be derived from these settings.
-		this.totalChunksToCreate = 40 // Total number of chunks to fill with test entities.
+		this.totalChunksToCreate = 30 // Total number of chunks to fill with test entities.
 		this.chunksPerColumn = 10 // Each column will be made of entities from this many chunks.
 
-		this.leftBoundary = this.worldWidth * 0.1
-		this.rightBoundary = this.worldWidth * 0.9
-		// Query for the parallel `schedule` phase .
-		this.scheduleQuery = queryManager.getQuery({
-			with: [position, velocity, parallelismTestTag],
+		this.leftBoundary = LEFT_BOUNDARY
+		this.rightBoundary = RIGHT_BOUNDARY
+	}
+
+	init() {
+		this.query = this.getQuery({
+			with: [position, velocity, parallelismTestTag, column],
 		})
 
-		// Query for the main-thread `update` phase to sync visuals.
-		this.updateQuery = queryManager.getQuery({
-			with: [position, parallelismTestTag, column],
-		})
-
-		const { payload, mutators } = payloadCompiler.compileEntity({
+		const { payload, mutators } = this.compiler.compileEntity({
 			position: { x: 0, y: 0 },
 			velocity: { x: 1, y: 0 },
 			parallelismTestTag: {}, // Tag for this system's entities
@@ -101,9 +103,7 @@ export class ParallelismTestSystem {
 		})
 		this.creationPayload = payload
 		this.creationMutators = mutators
-	}
 
-	init() {
 		// --- Visual Test Setup: Create a Grid of Entities ---
 		// We will create long, continuous vertical columns of entities. Each column spans
 		// multiple chunks. This makes it easy to visually detect if chunks are processed
@@ -153,7 +153,7 @@ export class ParallelismTestSystem {
 	_initializeSprites() {
 		// This runs once on the first update, after entities have been created by `init`.
 		// It populates our sprite map, so the `update` loop can be a simple, hot loop.
-		for (const chunk of this.updateQuery.iter()) {
+		for (const chunk of this.query.iter()) {
 			const entities = chunk.entities
 			for (let i = 0; i < chunk.size; i++) {
 				const entityId = entities[i]
@@ -171,30 +171,41 @@ export class ParallelismTestSystem {
 		}
 	}
 
-	update({ deltaTime, currentTick }) {
+	schedule() {
+		const jobs = []
+		const chunkIds = this.query.getChunks()
+
+		for (const chunkId of chunkIds) {
+			jobs.push({
+				kernel: parallelismTest,
+				payload: chunkId,
+			})
+		}
+		return jobs
+	}
+
+	process({ deltaTime, currentTick }) {
+		// --- 1. Initialize Sprites (if needed) ---
 		if (!this.spritesInitialized) {
 			this._initializeSprites()
-			// If still not initialized (e.g., no entities created yet), wait for the next frame.
 			if (!this.spritesInitialized) return
 		}
 
-		// --- Render Particles and Debug Labels ---
+		// --- 2. Render Particles and Debug Labels ---
 		this.labelBackgrounds?.clear?.()
 		const columnInfo = new Map() // Map<columnIndex, {x: number, chunkIds: Set}>
 
-		// 1. Update sprite positions and gather debug info in a single, streamlined loop.
-
-		for (const chunk of this.updateQuery.iter()) {
+		// Update sprite positions and gather debug info in a single, streamlined loop.
+		for (const chunk of this.query.iter()) {
 			const entities = chunk.entities
-			const positions = chunk.componentData[this.position]
-			const columns = chunk.componentData[this.column]
+			const positions = chunk.componentData[position]
+			const columns = chunk.componentData[column]
 
 			for (let i = 0; i < chunk.size; i++) {
 				const entityId = entities[i]
 				const x = positions.x[i]
 				const y = positions.y[i]
 
-				// The sprite is guaranteed to exist, so we can get it directly without checks.
 				const sprite = this.entitySprites.get(entityId)
 				sprite.position.set(x, y)
 
@@ -208,7 +219,7 @@ export class ParallelismTestSystem {
 			}
 		}
 
-		// 2. Draw the text labels above each column.
+		// Draw the text labels above each column.
 		this.labelBackgrounds.fill({ color: 0x000000, alpha: 0.5 })
 		for (const [columnIndex, info] of columnInfo.entries()) {
 			const chunkText = `${[...info.chunkIds].join(',')}`
@@ -217,11 +228,7 @@ export class ParallelismTestSystem {
 			if (!textObject) {
 				textObject = new PIXI.Text({
 					text: '',
-					style: {
-						fontFamily: 'Arial',
-						fontSize: 10,
-						fill: 0x00ff00,
-					},
+					style: { fontFamily: 'Arial', fontSize: 10, fill: 0x00ff00 },
 				})
 				this.debugLabels.set(columnIndex, textObject)
 				this.textContainer.addChild(textObject)
@@ -230,40 +237,20 @@ export class ParallelismTestSystem {
 			textObject.x = info.x - 20
 			textObject.y = 15
 
-			// Draw a background for the label for better contrast.
 			const textBounds = textObject.getBounds()
 			this.labelBackgrounds.rect(textBounds.x - 4, textBounds.y - 2, textBounds.width + 8, textBounds.height + 4)
 		}
-	}
 
-	schedule(chunk, context) {
-		const { deltaTime } = context
-		//console.log(JSON.stringify(context))
-		const positions = chunk.componentData[this.position]
-		const velocities = chunk.componentData[this.velocity]
-
-		for (let i = 0; i < chunk.size; i++) {
-			// Move by a fixed step, ignoring deltaTime for this test.
-			positions.x[i] += velocities.x[i]
-
-			// When a particle hits a boundary, invert its velocity.
-			// This creates a "bouncing" or "ping-pong" effect.
-			if (positions.x[i] > this.rightBoundary || positions.x[i] < this.leftBoundary) {
-				velocities.x[i] *= -1
-			}
-		}
-	}
-
-	process({ deltaTime, currentTick }) {
-		// This verification step runs on the main thread after all parallel jobs are complete. It
-		// checks that all entities within a single column are perfectly aligned horizontally.
+		// --- 3. Verification Step ---
+		// This now runs in the same phase as the visual update, after all parallel jobs are complete.
 		if (currentTick % 60 !== 0) return
+
 		const columns = new Map()
 
-		// 1. Group all entities by their column index.
-		for (const chunk of this.scheduleQuery.iter()) {
-			const positions = chunk.componentData[this.position]
-			const columnIndices = chunk.componentData[this.column]
+		// Group all entities by their column index.
+		for (const chunk of this.query.iter()) {
+			const positions = chunk.componentData[position]
+			const columnIndices = chunk.componentData[column]
 
 			for (let i = 0; i < chunk.size; i++) {
 				const columnIndex = columnIndices.index[i]
@@ -276,7 +263,7 @@ export class ParallelismTestSystem {
 			}
 		}
 
-		// 2. Verify that all entities within each column have the same X position.
+		// Verify that all entities within each column have the same X position.
 		for (const [columnIndex, xPositions] of columns.entries()) {
 			const firstX = xPositions[0]
 			if (!xPositions.every(x => x === firstX)) {
@@ -288,8 +275,8 @@ export class ParallelismTestSystem {
 	destroy() {
 		// --- HMR Cleanup ---
 		// On hot-swap, destroy any entities that were created by the previous instance of this system.
-		// Use the efficient chunk-based destruction. This query will find all entities with the tag.
-		for (const chunk of this.scheduleQuery.iter()) this.commands.destroyEntitiesInChunk(chunk)
+		// Use the efficient chunk-based destruction. This query will find all entities with the tag
+		for (const chunk of this.query.iter()) this.commands.destroyEntitiesInChunk(chunk)
 
 		// Destroy all PIXI objects created by this system.
 		if (this.particleContainer) {
