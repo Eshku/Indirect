@@ -6,6 +6,10 @@ const testConfig = {
 	logVerbose: false, // Set to true for detailed step-by-step logs
 }
 
+// --- Define shared resources in the module scope for clarity ---
+const requestBuffer = new Int32Array(new SharedArrayBuffer(4))
+const resultBuffer = new Int32Array(new SharedArrayBuffer(4))
+
 /**
  * A system to demonstrate and test:
  * 1. Custom Jobs: Creating a kernel job where the payload is not a chunkId.
@@ -14,25 +18,20 @@ const testConfig = {
  */
 export class CustomJobTestSystem {
 	static dependencies = {
-		update: {},
 		customJob: {
 			// This kernel needs access to the buffers via its context.
 			context: {
-				requestBuffer: new Int32Array(new SharedArrayBuffer(4)),
-				resultBuffer: new Int32Array(new SharedArrayBuffer(4)),
+				requestBuffer: requestBuffer,
+				resultBuffer: resultBuffer,
 				logVerbose: testConfig.logVerbose,
 			},
 		},
-		process: {},
 	}
 
-	constructor() {
-		// We can get a direct reference to the context object defined statically.
-		const context = CustomJobTestSystem.dependencies.customJob.context
-		this.requestBuffer = context.requestBuffer
-		this.resultBuffer = context.resultBuffer
-
-		console.log('[CustomJobTestSystem] Initialized.')
+	init() {
+		// Main thread methods can now access the buffers directly from the module scope.
+		this.requestBuffer = requestBuffer
+		this.resultBuffer = resultBuffer
 	}
 
 	/**
@@ -45,6 +44,7 @@ export class CustomJobTestSystem {
 			if (testConfig.logVerbose) {
 				console.log(`%c[CustomJobTestSystem] update: Posting dynamic request -> ${value}`, 'color: orange')
 			}
+			// Access via `this` property set in init().
 			Atomics.store(this.requestBuffer, 0, value)
 		}
 	}
@@ -73,6 +73,7 @@ export class CustomJobTestSystem {
 			self.hasRunCustomJobTest = false
 		}
 
+		// Access via `this` property set in init().
 		const result = Atomics.load(this.resultBuffer, 0)
 		if (result !== 0) {
 			// A result has arrived. Verify it's valid.

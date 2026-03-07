@@ -17,10 +17,10 @@
  *
  */
 
-import * as Schema from '../../ECS/ComponentManager/ComponentSchema.js'
 import { ChunkView } from './ChunkView.js'
-import { NULL_CHUNK_ID, MAX_COMPONENTS, MASK_PARTS } from '../../ECS/EntityManager/EntityManager.js'
-import { entityStore } from '../../ECS/EntityManager/EntityManager.js'
+const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+
+const { NULL_CHUNK_ID, MAX_COMPONENTS, MASK_PARTS } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
 
 export class Query {
 	static _createSimpleMask(componentTypeIDs, categoryName) {
@@ -58,14 +58,20 @@ export class Query {
 		this.queryManager = queryManager
 		this.iterationLastTick = null
 
-		this.with = Query._createComponentTypeIDSet(withComponents, 'With')
-		this.without = Query._createComponentTypeIDSet(withoutComponents, 'Without')
-		this.any = Query._createComponentTypeIDSet(anyComponents, 'AnyOf')
-		this.react = Query._createComponentTypeIDSet(reactComponents, 'React')
+		// --- DX Improvement: Normalize single values to arrays ---
+		const normalize = comps => (comps ? (Array.isArray(comps) ? comps : [comps]) : [])
+		const normalizedWith = normalize(withComponents)
+		const normalizedWithout = normalize(withoutComponents)
+		const normalizedAny = normalize(anyComponents)
+		const normalizedReact = normalize(reactComponents)
 
-		const withMask = Query._createSimpleMask(withComponents, 'With')
-		const reactMask = Query._createSimpleMask(reactComponents, 'React')
+		this.with = Query._createComponentTypeIDSet(normalizedWith, 'With')
+		this.without = Query._createComponentTypeIDSet(normalizedWithout, 'Without')
+		this.any = Query._createComponentTypeIDSet(normalizedAny, 'AnyOf')
+		this.react = Query._createComponentTypeIDSet(normalizedReact, 'React')
 
+		const withMask = Query._createSimpleMask(normalizedWith, 'With')
+		const reactMask = Query._createSimpleMask(normalizedReact, 'React')
 		this._requiredMask = new BigUint64Array(MASK_PARTS)
 		for (let i = 0; i < MASK_PARTS; i++) {
 			this._requiredMask[i] = withMask[i] | reactMask[i]
@@ -76,7 +82,7 @@ export class Query {
 
 		this.isReactiveQuery = this._reactiveMask.some(part => part > 0n)
 		this._anyOfMaskIsNonZero = this._anyOfMask.some(part => part > 0n)
-		
+
 		this.matchingChunkIds = []
 		this._chunkView = new ChunkView(entityStore)
 		this.matchingArchetypeIds = new Set()

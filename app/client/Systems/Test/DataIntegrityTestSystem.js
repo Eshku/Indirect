@@ -39,7 +39,7 @@ export class DataIntegrityTestSystem {
 		},
 	}
 
-	constructor() {
+	init() {
 		// --- Test Configuration ---
 		this.maxEntities = 2000
 		this.creationBatchSize = 100
@@ -49,15 +49,13 @@ export class DataIntegrityTestSystem {
 		this.destructionPhaseDuration = 0.5 // seconds
 		this.phaseTimer = this.creationPhaseDuration
 		this.isCreationPhase = true
-	}
 
-	init() {
 		// --- Queries ---
 		this.churnQuery = this.getQuery({ with: [churnTag] })
 		this.query = this.getQuery({ with: [churnTag, churnData, verification] })
 
 		// --- Payloads ---
-		const { payload, mutators } = this.compiler.compileEntity({
+		const { payload, mutators } = this.compileEntity({
 			churnTag: {},
 			churnData: { creationTick: 0, entityId: 0n }, // Initialize entityId to 0
 			verification: { status: 0 }, // 0: unchecked, 1: ok, -1: fail, 2: logged
@@ -65,7 +63,7 @@ export class DataIntegrityTestSystem {
 		this.creationPayload = payload
 		this.creationMutators = mutators
 
-		const { payload: verificationPayload } = this.compiler.compileComponent(
+		const { payload: verificationPayload } = this.compileComponent(
 			verification,
 			{ status: 2 }, // The data we want to set
 		)

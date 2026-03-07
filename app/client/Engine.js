@@ -1,17 +1,26 @@
 // Define the explicit initialization order of managers.
 // This order is crucial due to dependencies between managers.
 const MANAGER_INIT_ORDER = [
-	// Non-ECS Services & Low-Level ECS ---
-	// These have minimal dependencies and provide foundational services.
 	'LayerManager',
 	'PhysicsManager',
 	'GameManager',
 	'AssetManager',
+	'SharedDataManager',
 
 	// High-Level Engine Systems ---
 	// These depend on a fully initialized ECS.
 	`WorkerManager`,
-	'ECS',
+
+
+	'ecs',
+	'ComponentManager',
+	'EntityManager',
+	'QueryManager',
+	'PrefabManager',
+	'SystemManager',
+
+
+	// --- User-Facing systems ---
 	'UiManager',
 	'InputManager',
 
@@ -26,6 +35,7 @@ export class Engine {
 	constructor() {
 		/** @type {Map<string, object>} */
 		this.managers = new Map()
+		this._cachedManagersObject = null
 	}
 
 	/**
@@ -59,11 +69,15 @@ export class Engine {
 	 *                                    with keys in camelCase (e.g., `assetManager`).
 	 */
 	getManagers() {
+		if (this._cachedManagersObject) {
+			return this._cachedManagersObject
+		}
 		const result = {}
 		for (const [className, instance] of this.managers.entries()) {
 			result[toCamelCase(className)] = instance
 		}
-		return result
+		this._cachedManagersObject = Object.freeze(result)
+		return this._cachedManagersObject
 	}
 
 	/**
@@ -79,6 +93,8 @@ export class Engine {
 			this[instanceName] = instance
 			this.managers.set(className, instance)
 		}
+		// Invalidate the cache if managers are ever re-registered.
+		this._cachedManagersObject = null
 	}
 
 	/**
@@ -91,6 +107,7 @@ export class Engine {
 
 			if (instance) {
 				await instance?.init(this)
+				//console.log(`Instance ${instance.constructor.name} initialized`)
 			} else {
 				const errorMsg = `Engine: Critical manager "${className}" from MANAGER_INIT_ORDER was not found for initialization. Halting.`
 				console.error(errorMsg)
@@ -103,8 +120,23 @@ export class Engine {
 		const loadedManagers = new Map()
 		//! prep for restructure, no auto-load for now
 
-		const { ecs } = await import(`${PATH_ECS}/EntityManager/ECS.js`)
-		loadedManagers.set('ECS', ecs)
+		const { ecs } = await import(`${PATH_MANAGERS}/EntityManager/ECS.js`)
+		loadedManagers.set('ecs', ecs)
+
+		const { componentManager } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentManager.js`)
+		loadedManagers.set('ComponentManager', componentManager)
+
+		const { entityManager } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+		loadedManagers.set('EntityManager', entityManager)
+
+		const { queryManager } = await import(`${PATH_MANAGERS}/QueryManager/QueryManager.js`)
+		loadedManagers.set('QueryManager', queryManager)
+
+		const { prefabManager } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabManager.js`)
+		loadedManagers.set('PrefabManager', prefabManager)
+
+		const { systemManager } = await import(`${PATH_MANAGERS}/SystemManager/SystemManager.js`)
+		loadedManagers.set('SystemManager', systemManager)
 
 		const { layerManager } = await import(`${PATH_MANAGERS}/LayerManager/LayerManager.js`)
 		loadedManagers.set('LayerManager', layerManager)
@@ -131,6 +163,9 @@ export class Engine {
 
 		const { physicsManager } = await import(`${PATH_MANAGERS}/PhysicsManager/PhysicsManager.js`)
 		loadedManagers.set('PhysicsManager', physicsManager)
+
+		const { sharedDataManager } = await import(`${PATH_MANAGERS}/SharedDataManager/SharedDataManager.js`)
+		loadedManagers.set('SharedDataManager', sharedDataManager)
 
 		return loadedManagers
 	}

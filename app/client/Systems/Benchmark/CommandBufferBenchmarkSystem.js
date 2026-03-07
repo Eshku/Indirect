@@ -1,8 +1,6 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 
 const { ecs } = engine.getManagers()
-const { entityManager, queryManager } = ecs
-const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 const benchmarkConfig = {
 	// Select ONE benchmark to run by setting its name here.
@@ -39,39 +37,34 @@ const { position, velocity, componentA, componentB, commandBufferBenchmarkTag } 
 export class CommandBufferBenchmarkSystem {
 	static dependencies = {
 		update: {
-			// This system reads from multiple queries to find entities to modify via commands.
-			// We must declare all components it could possibly read to ensure it runs after
-			// they have been written to by other systems.
-
 			reads: [commandBufferBenchmarkTag, componentA, componentB, position],
 		},
 	}
-	constructor() {
+
+	init() {
 		// --- Queries ---
-		this.benchmarkQuery = queryManager.getQuery({ with: [commandBufferBenchmarkTag] })
-		this.addQuery = queryManager.getQuery({ with: [commandBufferBenchmarkTag, componentA], without: [componentB] })
-		this.removeQuery = queryManager.getQuery({ with: [commandBufferBenchmarkTag, componentA, componentB] })
+		this.benchmarkQuery = this.getQuery({ with: [commandBufferBenchmarkTag] })
+		this.addQuery = this.getQuery({ with: [commandBufferBenchmarkTag, componentA], without: [componentB] })
+		this.removeQuery = this.getQuery({ with: [commandBufferBenchmarkTag, componentA, componentB] })
 
 		// --- Payloads ---
-		this.creationPayload = payloadCompiler.compileEntity({
+		this.creationPayload = this.compileEntity({
 			commandBufferBenchmarkTag: {},
 			componentA: {},
 			position: { x: 1, y: 2 },
 			velocity: { x: 3, y: 4 },
 		}).payload
 
-		this.addComponentPayload = payloadCompiler.compileComponent(componentB, {}).payload
+		this.addComponentPayload = this.compileComponent(componentB, {}).payload
 
 		// 'set' payload is also pre-compiled. We will use its mutators in the loop.
-		const { payload, mutators } = payloadCompiler.compileComponent(position, { x: 99, y: 99 })
+		const { payload, mutators } = this.compileComponent(position, { x: 99, y: 99 })
 		this.setComponentPayload = payload
 		this.setComponentMutators = mutators
 
 		// --- State ---
 		this.isAdding = true // For structural change benchmark
-	}
 
-	init() {
 		if (benchmarkConfig.activeBenchmark !== 'creation') {
 			const config = benchmarkConfig[benchmarkConfig.activeBenchmark]
 			this.commands.createEntities(this.creationPayload, config.entityCount)

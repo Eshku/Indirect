@@ -1,7 +1,8 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, layerManager, assetManager } = engine.getManagers()
-const { queryManager } = ecs
 const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
+
+const { viewable, layer } = ecs.getTypeIDs()
 
 const UNINITIALIZED_REF = 0
 
@@ -12,11 +13,8 @@ const UNINITIALIZED_REF = 0
  * and the Layer component (when an entity's layer is changed).
  */
 export class RenderLayerSystem {
-	constructor() {
-		const { viewable, layer } = ecs.getTypeIDs()
-		Object.assign(this, { viewable, layer })
-
-		this.layerQuery = queryManager.getQuery({
+	init() {
+		this.layerQuery = this.getQuery({
 			with: [viewable, layer],
 			react: [viewable, layer], // React to sprite creation OR layer changes
 		})
@@ -24,16 +22,14 @@ export class RenderLayerSystem {
 		this.stringStorage = stringInterningTable.storage
 	}
 
-	init() {}
-
 	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.layerQuery.iter()) {
-			const viewableArrays = chunk.componentData[this.viewable]
-			const layerArrays = chunk.componentData[this.layer]
+			const viewableArrays = chunk.componentData[viewable]
+			const layerArrays = chunk.componentData[layer]
 
 			for (let i = 0; i < chunk.size; i++) {
 				// We only need to act if one of the components we care about has changed.
-				if (chunk.hasChanged(this.viewable, i) || chunk.hasChanged(this.layer, i)) {
+				if (chunk.hasChanged(viewable, i) || chunk.hasChanged(layer, i)) {
 					const spriteRef = viewableArrays.spriteRef[i]
 
 					// If spriteRef is 0, the sprite hasn't been created yet. Skip.

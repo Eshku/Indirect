@@ -13,7 +13,6 @@
  * All components are defined by a schema object that maps property names to data types
  * (e.g., `{ x: { type: 'f64' }, y: { type: 'f64' } }`).
  *
- *   performance and architectural simplicity.
  *
  * - **Storage**: The `Archetype` stores component data in `TypedArray`s, one for each property.
  *   This is cache-friendly for systems that iterate over specific properties of many entities.
@@ -72,7 +71,7 @@
  *   vector component (-1, 0, or 1).
  *
  */
-const { loadAllComponents } = await import(`${PATH_ECS}/ComponentManager/componentLoader.js`)
+const { loadAllComponents } = await import(`${PATH_MANAGERS}/ComponentManager/componentLoader.js`)
 const { schemaCompiler } = await import('./SchemaCompiler.js')
 const { reconstruct } = await import('./ComponentInterpreter.js')
 const { toCamelCase } = await import(`${PATH_CORE}/utils/stringUtils.js`)
@@ -84,6 +83,7 @@ export class ComponentManager {
 		this.componentInfo = Schema.componentInfo
 		this.componentConstants = Schema.componentConstants
 		this.compiledDefaults = Schema.compiledDefaults
+
 
 		this.entityManager = null // self-reference after init
 		this._cachedComponentsObject = null
@@ -144,6 +144,7 @@ export class ComponentManager {
 			Schema.componentNameToTypeID.set(lowerCaseName, typeID)
 
 			this._cachedComponentsObject = null
+			this._cachedTypeIDsObject = null
 		}
 	}
 
@@ -207,6 +208,9 @@ export class ComponentManager {
 	 * @returns {Object.<string, number>} An object mapping component names to their type IDs.
 	 */
 	getTypeIDs() {
+		if (this._cachedTypeIDsObject) {
+			return this._cachedTypeIDsObject
+		}
 		const idMap = {}
 		for (let i = 0; i < Schema.nextComponentTypeID; i++) {
 			const name = Schema.componentNames[i]
@@ -214,7 +218,8 @@ export class ComponentManager {
 				idMap[name] = i
 			}
 		}
-		return idMap
+		this._cachedTypeIDsObject = Object.freeze(idMap)
+		return this._cachedTypeIDsObject
 	}
 
 	/**

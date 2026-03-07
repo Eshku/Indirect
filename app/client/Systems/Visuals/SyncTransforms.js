@@ -1,6 +1,7 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, assetManager } = engine.getManagers()
-const { queryManager } = ecs
+
+const { viewable, position, rotation, scale } = ecs.getTypeIDs()
 
 /**
  * Synchronizes the visual properties (position, rotation, scale) of a PIXI.Sprite
@@ -8,19 +9,18 @@ const { queryManager } = ecs
  * only update sprites when their corresponding component data has changed.
  */
 export class SyncTransforms {
-	constructor() {
-		const { viewable, position, rotation, scale } = ecs.getTypeIDs()
-		Object.assign(this, { viewable, position, rotation, scale })
-
-		this.positionQuery = queryManager.getQuery({
+	init() {
+		this.positionQuery = this.getQuery({
 			with: [viewable, position],
 			react: [position],
 		})
-		this.rotationQuery = queryManager.getQuery({
+
+		this.rotationQuery = this.getQuery({
 			with: [viewable, rotation],
 			react: [rotation],
 		})
-		this.scaleQuery = queryManager.getQuery({
+
+		this.scaleQuery = this.getQuery({
 			with: [viewable, scale],
 			react: [scale],
 		})
@@ -31,15 +31,16 @@ export class SyncTransforms {
 	update(deltaTime, currentTick) {
 		// --- Position Sync ---
 		for (const chunk of this.positionQuery.iter()) {
-			const viewableRefs = chunk.componentData[this.viewable].spriteRef
-			const positionArrays = chunk.componentData[this.position]
+
+			const viewableRefs = chunk.componentData[viewable].spriteRef
+			const positionArrays = chunk.componentData[position]
 
 			const posX = positionArrays.x
 			const posY = positionArrays.y
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (chunk.hasChanged(this.position, indexInChunk)) {
+				if (chunk.hasChanged(position, indexInChunk)) {
 					const spriteRef = viewableRefs[indexInChunk]
 					if (spriteRef === 0) continue
 
@@ -54,14 +55,14 @@ export class SyncTransforms {
 
 		// --- Rotation Sync ---
 		for (const chunk of this.rotationQuery.iter()) {
-			const viewableRefs = chunk.componentData[this.viewable].spriteRef
-			const rotationArrays = chunk.componentData[this.rotation]
+			const viewableRefs = chunk.componentData[viewable].spriteRef
+			const rotationArrays = chunk.componentData[rotation]
 
 			const angle = rotationArrays.angle
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (chunk.hasChanged(this.rotation, indexInChunk)) {
+				if (chunk.hasChanged(rotation, indexInChunk)) {
 					const spriteRef = viewableRefs[indexInChunk]
 					if (spriteRef === 0) continue
 
@@ -74,15 +75,15 @@ export class SyncTransforms {
 
 		// --- Scale Sync ---
 		for (const chunk of this.scaleQuery.iter()) {
-			const viewableRefs = chunk.componentData[this.viewable].spriteRef
-			const scaleArrays = chunk.componentData[this.scale]
+			const viewableRefs = chunk.componentData[viewable].spriteRef
+			const scaleArrays = chunk.componentData[scale]
 
 			const scaleX = scaleArrays.x
 			const scaleY = scaleArrays.y
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (chunk.hasChanged(this.scale, indexInChunk)) {
+				if (chunk.hasChanged(scale, indexInChunk)) {
 					const spriteRef = viewableRefs[indexInChunk]
 					if (spriteRef === 0) continue
 

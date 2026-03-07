@@ -19,8 +19,9 @@
  * provided by the `SchemaCompiler` to create the final payload and its mutators.
  */
 
-const { interpret } = await import('../ComponentManager/ComponentInterpreter.js')
-import * as Schema from '../ComponentManager/ComponentSchema.js'
+const { interpret } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
+
+const Schema = await import(`${PATH_MANAGERS}/ComponentManager/ComponentSchema.js`)
 
 class PayloadCompiler {
 	constructor() {
@@ -30,10 +31,10 @@ class PayloadCompiler {
 	}
 
 	init(ecs) {
-		this.componentManager = ecs.componentManager
-		this.entityManager = ecs.entityManager
-		this.prefabManager = ecs.prefabManager
-		this.sharedDataManager = ecs.sharedDataManager
+		this.componentManager = ecs.engine.componentManager
+		this.entityManager = ecs.engine.entityManager
+		this.prefabManager = ecs.engine.prefabManager
+		this.sharedDataManager = ecs.engine.sharedDataManager
 	}
 
 	/**
@@ -177,7 +178,8 @@ class PayloadCompiler {
 			for (const factory of info.mutatorFactories) {
 				factory(mutators[componentName], payloadBuffer, componentBaseOffset, info)
 			}
-			for (const propKey of info.propertyKeys) { // Now iterate all final properties to write data
+			for (const propKey of info.propertyKeys) {
+				// Now iterate all final properties to write data
 				// Now iterate all final properties to write data
 				const propInfo = info.properties[propKey]
 				if (!propInfo) continue

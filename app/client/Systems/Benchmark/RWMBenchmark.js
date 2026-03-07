@@ -1,7 +1,6 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager } = ecs
-const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
+
 const { position, velocity, rwmTag } = ecs.getTypeIDs()
 
 export class RWMBenchmark {
@@ -11,28 +10,27 @@ export class RWMBenchmark {
 			writes: [position],
 		},
 	}
-	constructor() {
-		this.query = queryManager.getQuery({
+
+	init() {
+		this.query = this.getQuery({
 			with: [position, velocity, rwmTag],
 		})
 
 		//1.5m stable
 		this.entityCount = 1_500_000
 
-		const { payload } = payloadCompiler.compileEntity({
+		const { payload } = this.compileEntity({
 			position: { x: 0, y: 0 },
 			velocity: { x: 10, y: 10 },
 			rwmTag: {},
 		})
 
 		this.creationPayload = payload
-	}
 
-	init() {
 		this.spawnEntities()
 	}
 
-	update({deltaTime, currentTick}) {
+	update({ deltaTime, currentTick }) {
 		for (const chunkView of this.query.iter()) {
 			const positions = chunkView.componentData[position]
 			const velocities = chunkView.componentData[velocity]

@@ -1,7 +1,7 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 
-const { ecs, physicsManager } = engine.getManagers()
-const { queryManager } = ecs
+const { ecs, physicsManager, queryManager } = engine.getManagers()
+
 const { SpatialHashGrid, SPATIAL_GRID_CONFIG } = await import(`${PATH_CORE}/DataStructures/SpatialHashGrid.js`)
 
 /**
@@ -11,7 +11,7 @@ const { SpatialHashGrid, SPATIAL_GRID_CONFIG } = await import(`${PATH_CORE}/Data
  * This prepares the grid for safe, parallel read-only queries by worker threads.
  */
 export class SpatialHashingSystem {
-	constructor() {
+	init() {
 		// Get the main-thread instance of the spatial hash grid API.
 		// The SABs are owned by the PhysicsManager.
 		const gridSABs = physicsManager.getSpatialHashGridSABs()
@@ -41,10 +41,6 @@ export class SpatialHashingSystem {
 		// Cache the last known player position.
 		this.lastPlayerX = 0
 		this.lastPlayerY = 0
-	}
-
-	init() {
-		// No async init needed for this system.
 	}
 
 	update({ currentTick, lastTick }) {

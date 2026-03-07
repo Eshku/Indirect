@@ -4,43 +4,23 @@ import { toCamelCase } from '../../Core/utils/stringUtils.js'
  * A central registry for all kernel functions.
  * It discovers all kernels, assigns them unique IDs, and provides mappings for the
  * main thread and workers.
+ *
+ * @property {Map<Function, number>} kernelToId - A map from a kernel function reference to its unique numeric ID.
+ * @property {Map<number, Function>} idToKernel - A map from a kernel's unique numeric ID back to its function reference. Used primarily for debugging on the main thread.
+ * @property {Map<string, number>} kernelNameToId - A map from a kernel's exported name to its unique numeric ID.
+ * @property {Map<number, { name: string, moduleName: string }>} kernelMetadata - A map from a kernel's unique numeric ID to its metadata.
+ * @property {Object.<string, string>} kernelCode - Stores the source code of all loaded kernel modules, keyed by module name. This is used to send the code to workers for initialization.
+ * @property {number} nextKernelId - The next available ID to assign to a new kernel.
+ * @property {object | null} _kernelIdObject - The frozen object mapping kernel names to IDs, for `ecs.getKernelIDs()`.
  */
 class KernelRegistry {
 	constructor() {
-		/**
-		 * A map from a kernel function reference to its unique numeric ID.
-		 * @type {Map<Function, number>}
-		 */
 		this.kernelToId = new Map()
-
-		/**
-		 * A map from a kernel's unique numeric ID back to its function reference.
-		 * Used primarily for debugging on the main thread.
-		 * @type {Map<number, Function>}
-		 */
 		this.idToKernel = new Map()
-
-		/**
-		 * A map from a kernel's exported name to its unique numeric ID.
-		 * @type {Map<string, number>}
-		 */
 		this.kernelNameToId = new Map()
-
-		/**
-		 * A map from a kernel's unique numeric ID to its metadata.
-		 * @type {Map<number, { name: string, moduleName: string }>}
-		 */
 		this.kernelMetadata = new Map()
-
-		/**
-		 * Stores the source code of all loaded kernel modules, keyed by module name.
-		 * This is used to send the code to workers for initialization.
-		 * @type {Object.<string, string>}
-		 */
 		this.kernelCode = {}
-
 		this.nextKernelId = 1 // Start from 1. 0 can be a sentinel value.
-
 		this._kernelIdObject = null
 	}
 

@@ -36,9 +36,11 @@ This is a foundation for what could become an engine, built around a hybrid para
 
 ## Architecture
 
+Engine's architecture is composed of several core concepts that work together.
+
 - **Entity**: A simple ID representing a game object.
 - **Component**: A schema defining a piece of data associated with an entity.
-- **Archetype**: A unique combination of components. All entities with the exact same set of components belong to same archetype.
+- **Archetype**: A unique combination of components. All entities with same set of components belong to same archetype.
 - **[System](app/client/Systems)**: A class containing game logic that operates on entities.
 - **[Kernel](app/client/Kernels)**: A pure function containing logic designed to be run in parallel on worker threads.
 - **[Manager](app/client/Managers)**: A class that owns a resource and provides an API to interact with it.
@@ -86,9 +88,9 @@ Components are defined as plain JavaScript objects that act as a schema, dictati
 
 Systems use queries to find entities that have a specific set of components.
 
-- **`with`**: Components that _must_ be present.
-- **`without`**: Components that _must not_ be present.
-- **`any`**: At least one of these components _must_ be present.
+- **`with`**: Components that must be present.
+- **`without`**: Components that must not be present.
+- **`any`**: At least one of these components must be present.
 - **`react`**: Query only returns entities where one of these components has changed since system last ran.
 
 Primary way to iterate is `query.iter()`, which yields [`Chunk Views`](app/client/Managers/QueryManager/ChunkView.js) for processing.
@@ -98,62 +100,55 @@ Primary way to iterate is `query.iter()`, which yields [`Chunk Views`](app/clien
 Engine uses a hybrid parallel job scheduler that separates main-thread **orchestration** (in a System) from parallel **execution** (in a Kernel).
 
 - **System Class (`.js`):** Lives on main thread. It defines queries and schedules jobs for a frame.
-- **Kernel Module (`/app/client/Kernels/*.js`):** A plain JavaScript module containing a pure "kernel" function that executes on a worker thread.
+- **Kernel Module (`/app/client/Kernels/*.js`):** A plain JavaScript module containing a pure "kernel" function that executes on a workers in parallel.
 
-**System Lifecycle:**
+**System Lifecycle & API:**
 
-- **`constructor()`**: Called once on instantiation. Used for setting up queries and caching IDs.
-- **`init()`**: (Optional) `async` method for one-time setup.
+System methods are executed in a specific, guaranteed order. An `async init()` method is preferred over a `constructor` for setup logic, as it runs after the System API is injected.
+
+- **`init()`**: (Optional) `async` method for one-time setup. A system has access to its API here.
 - **`update(frameContext)`**: (Optional) Runs on **main thread**. For logic that cannot be parallelized.
-- **`schedule(frameContext)`**: (Optional) Runs on **main thread** to create and return an array of jobs for scheduler.
-- **`process(frameContext)`**: (Optional) Runs on **main thread** after all other jobs for this system are complete.
+- **`schedule(frameContext)`**: (Optional) Runs on **main thread** to create and return an array of jobs for the scheduler. This is a job factory.
+- **`process(frameContext)`**: (Optional) Runs on **main thread** after all other jobs for this system are complete. It's a finalizer.
 - **`destroy()`**: (Optional) `async` method for cleanup.
 
-**System Execution Order**
+**Execution Order:**
 
-Methods of a system are executed in a specific, guaranteed order to manage interplay between main-thread logic and parallel execution.
-
-1.  **`schedule(frameContext)` (Job Factory Phase)**
-    This method is always called first. Its sole purpose is to create and return an array of job definitions (kernels and their payloads) for scheduler. It runs on the main thread before any other execution phase begins. It does not contain game logic itself, but rather defines parallel work to be done.
-
-2.  **`update(frameContext)` (Main-Thread Execution)**
-    After `schedule()` has defined jobs, `update()` method runs on main thread. It is used for any logic that must run sequentially before parallel kernels begin.
-
-3.  **Kernel Execution (Parallel Phase)**
-    Kernel jobs created by `schedule()` are now executed by worker threads (or the main thread, if no workers are available). Scheduler ensures these jobs only start after system's `update()` method is complete.
-
-4.  **`process(frameContext)` (Main-Thread Finalizer)**
-    After all of system's `update()` and kernel jobs have finished, `process()` method runs on the main thread. It acts as a finalizer, allowing for logic that needs to happen after all other work for that system is complete (e.g., aggregating results from kernels).
+1.  **`schedule()`**: Creates and returns job definitions. It does not contain game logic itself, but defines work to be done.
+2.  **`update()`**: Runs on the main thread after `schedule()`. It is used for any logic that must run sequentially before parallel kernels begin.
+3.  **Kernel Execution**: Kernel jobs created by `schedule()` are now executed in parallel.
+4.  **`process()`**: Runs on the main thread after all of the system's `update()` and kernel jobs have finished.
 
 **Declaring Dependencies:**
 
-To manage parallel execution safely, a system declares its data access patterns and dependencies in a `static dependencies` object.
+A system declares its data access patterns and dependencies in a `static dependencies` object.
 
 - **`reads`/`writes`**: An array of component Type IDs. Informs scheduler about data access to prevent race conditions.
-- **`context`**: A plain object containing static data (like configuration or constants) that is passed to a kernel.
-- **`runsAfter`**: An array of kernel functions or the string `'update'`. Enforces an explicit execution order _within_ a system's own jobs.
-
-To define execution order _between systems_, a class can declare `static runsAfter = [OtherSystem]`.
+- **`context`**: A plain object containing static data passed to a kernel.
+- To define execution order _between systems_, a class can declare `static runsAfter = [OtherSystemID]`.
 
 **System & Kernel Example:**
 
 This example shows a `PhysicsSystem` that schedules a kernel to apply gravity.
 
-**1. Kernel**
+**1. Kernel (`/app/client/Kernels/physicsKernels.js`)**
 
-A kernel is a pure function that runs on a worker, receiving all its data via arguments.
+A kernel is a pure function that runs on a worker, receiving all its data via arguments. Frame-specific data is available on `self.frameContext`.
 
 ```javascript
 /**
  * A "kernel" function that applies gravity and updates position.
- * @param {number} payload - chunkId to process.
- * @param {object} systemContext - Read-only data from system's static dependencies.
+ * @param {number} payload - chunkId to process, passed from the job definition.
+ * @param {object} systemContext - Read-only data from system's static dependencies `context` block.
  * @param {object} kernelContext - Helpers, like getChunkView.
  */
 export function applyGravityAndMove(payload, systemContext, kernelContext) {
-	const { deltaTime } = frameContext // Global frame context
-	const { position, velocity, gravity } = systemContext // System-specific context
+	// Frame-specific data is globally available on the worker.
+	const { deltaTime, currentTick } = self.frameContext
+	// System-specific static data is passed in.
+	const { gravity, position, velocity } = systemContext
 
+	// Use the helper to get a view into the chunk's data.
 	const chunk = kernelContext.getChunkView(payload)
 	const positions = chunk.componentData[position]
 	const velocities = chunk.componentData[velocity]
@@ -167,15 +162,15 @@ export function applyGravityAndMove(payload, systemContext, kernelContext) {
 		positions.y[i] += velocities.y[i] * deltaTime
 	}
 
-	// Mark modified components as dirty.
-	chunk.markAllDirty(position, frameContext.currentTick)
-	chunk.markAllDirty(velocity, frameContext.currentTick)
+	// Mark modified components as dirty for reactive queries.
+	chunk.markAllDirty(position, currentTick)
+	chunk.markAllDirty(velocity, currentTick)
 }
 ```
 
-**2. Systems**
+**2. System (`/app/client/Systems/Gameplay/PhysicsSystem.js`)**
 
-System class orchestrates work from main thread.
+The System class orchestrates work from main thread.
 
 ```javascript
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
@@ -191,7 +186,7 @@ export class PhysicsSystem {
 		applyGravityAndMove: {
 			reads: [velocity],
 			writes: [position, velocity],
-			// Pass a gravity constant to kernel's `systemContext`.
+			// Pass a gravity constant and component IDs to the kernel's `systemContext`.
 			context: {
 				gravity: -9.81,
 				position: position,
@@ -200,15 +195,12 @@ export class PhysicsSystem {
 		},
 	}
 
-	constructor() {
-		this.query = ecs.queryManager.getQuery({ with: [position, velocity] })
+	init() {
+		// Use the injected getQuery method to create a query.
+		this.query = this.getQuery({ with: [position, velocity] })
 	}
 
-	update(frameContext) {
-		//Runs every frame.
-	}
-
-	// Runs on main thread to generate concurrent jobs for a frame.
+	// Runs on the main thread to generate concurrent jobs for a frame.
 	schedule(frameContext) {
 		const jobs = []
 		const chunkIds = this.query.getChunks()
@@ -217,34 +209,37 @@ export class PhysicsSystem {
 		for (const chunkId of chunkIds) {
 			jobs.push({ kernel: applyGravityAndMove, payload: chunkId })
 		}
-
 		return jobs
-	}
-
-	process(frameContext) {
-		// Runs every frame after all other jobs for this system are complete.
 	}
 }
 ```
 
+### System API Extensions
+
+To reduce boilerplate, common functionalities are automatically added to every system instance before its `init()` method is called.
+
+Injected properties include:
+
+- **`this.getQuery()`**: Creates a query.
+- **`this.commands`**: Access to the deferred command buffer for structural changes.
+- **`this.compileEntity()`**: Compiles an entity definition into a binary payload for `commands`.
+
 ### Command Buffer: Safe Structural Changes
 
-`commands` object provides a safe way to perform structural changes (creating/destroying entities, adding/removing components). It is available in a system's `update` and `process` methods, which run on main thread.
-
-Workflow involves compiling a binary `payload` once in constructor, updating it with `mutators`, and then passing it to a command.
+The `commands` object, available in a system's `update` and `process` methods, provides a deferred, thread-safe way to perform structural changes (creating/destroying entities, adding/removing components). Changes are queued and executed at a safe point in the frame.
 
 ```javascript
-// In a system's constructor:
-const { payload, mutators } = ecs.payloadCompiler.compileEntity({
-	Position: { x: 0, y: 0 },
+// In a system's init method:
+const { payload, mutators } = this.compileEntity({
+	position: { x: 0, y: 0 },
 })
 this.entityPayload = payload
 this.entityMutators = mutators
 
 // In an update or process method:
-this.entityMutators.Position.x[0] = 10
-this.entityMutators.Position.y[0] = 20
-this.commands.createEntity(this.entityPayload) // Create entity from payload
+this.entityMutators.position.x[0] = 10
+this.entityMutators.position.y[0] = 20
+this.commands.createEntity(this.entityPayload) // Queue entity creation
 
 // Other commands:
 this.commands.setComponentData(entityId, componentPayload)
@@ -254,7 +249,7 @@ this.commands.destroyEntity(entityId)
 
 ### Prefab Definitions
 
-Engine uses a **manifest-driven** approach for prefabs. A central manifest ([`prefabs.manifest.json`](app/client/Data/prefabs.manifest.json)) maps a human-readable `prefabName` (e.g., `"obsidian_sword"`) to a `.json` file. This decouples game logic from file system. Prefabs can extend other prefabs to create complex hierarchies.
+Engine uses a **manifest-driven** approach for prefabs. A central manifest ([`prefabs.manifest.json`](app/client/Data/prefabs.manifest.json)) maps a human-readable `prefabName` to a `.json` file. This decouples game logic from the file system.
 
 ```javascript
 // Instantiate using a prefab name:
@@ -263,26 +258,17 @@ const sword = ecs.instantiate('obsidian_sword', {
 })
 ```
 
-### System Update Groups
+### Immediate-Mode API: `ecs` Object
 
-System scheduling is defined in `systemConfig.js`. Key update groups are:
+For debugging, testing, and setup, the global `ecs` object provides an immediate-mode API. These operations execute instantly and are less performant than using the deferred `commands` buffer inside systems. This API should not be used in performance-critical code.
 
-- **`Input`**: Runs once per animation frame, for lowest-latency input.
-- **`Logic`**: Runs on a fixed timestep (e.g., 60Hz) for deterministic gameplay and physics.
-- **`Visuals`**: Runs once per animation frame, after all logic. Used for rendering, interpolation, and other visual updates.
-
-### Debugging & Immediate-Mode API: [`ecs` Object](app/client/ECS/EntityManager/ECS.js)
-
-For debugging and testing, global `ecs` object provides an immediate-mode API. This should **not** be used in performance-critical code; use `commands` object inside systems instead.
+_Note: The immediate-mode API is subject to change as thread-safe and console-specific variants are developed._
 
 **Getting Numeric IDs**
 
 ```javascript
 // Get a map of all component names to their numeric Type IDs.
 const { position, velocity } = ecs.getTypeIDs()
-
-// Get a map of system names to their numeric IDs.
-const { PhysicsSystem } = ecs.getSystemIDs()
 
 // Get a map of kernel function names to their numeric IDs.
 const { applyGravityAndMove } = ecs.getKernelIDs()
@@ -305,4 +291,4 @@ const sword = ecs.instantiate('obsidian_sword')
 
 ## Acknowledgements
 
-Inspired by ECS engines like Unity DoTS and Bevy.
+Inspired by ECS engines like Unity DOTS and Bevy.

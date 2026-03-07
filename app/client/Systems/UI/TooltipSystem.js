@@ -2,7 +2,7 @@ const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, uiManager } = engine.getManagers()
 const { ItemTooltip } = await import(`${PATH_UI}/ItemTooltip.js`)
 
-const { entityStore } = await import(`${PATH_ECS}/EntityManager/EntityManager.js`)
+const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
 
 const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
 
@@ -10,6 +10,8 @@ const { Easing } = await import(`${PATH_CORE}/utils/easing.js`)
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
 
 const { LRUCache } = await import(`${PATH_CORE}/DataStructures/LRUCache.js`)
+
+//!Legacy
 
 // --- Constants for tooltip behavior ---
 const LINGER_DURATION_MS = 200

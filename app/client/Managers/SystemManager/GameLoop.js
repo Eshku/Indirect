@@ -167,20 +167,20 @@ export class GameLoop {
 		}
 	}
 
-	async init(ecs) {
-		this.ecs = ecs
-		this.workerManager = ecs.engine.workerManager
-		this.systemManager = ecs.systemManager
-		this.app = this.ecs.systemManager.app
-		this.renderer = this.ecs.systemManager.renderer
+	async init(engine) {
+		const { workerManager, systemManager } = engine.getManagers()
+		this.workerManager = workerManager
+		this.systemManager = systemManager
+		this.app = this.systemManager.app
+		this.renderer = this.systemManager.renderer
 
 		// Initialize the scheduler, which will allocate its own shared memory.
 		this.scheduler = new Scheduler()
-		await this.scheduler.init(ecs)
+		await this.scheduler.init(engine)
 
 		// Now that the scheduler has allocated the shared buffers, we can fully
 		// initialize the workers with all the data they need.
-		await this.workerManager.initializeWorkers(ecs)
+		await this.workerManager.initializeWorkers(engine)
 	}
 
 	/**

@@ -1,8 +1,11 @@
-import { ChunkView } from '../../Managers/QueryManager/ChunkView.js'
-import { entityStore } from '../EntityManager/EntityManager.js'
-import { kernelRegistry } from './KernelRegistry.js'
-import { MPSCQueue, MPSC_QUEUE_CAPACITY } from '../../Core/Algorithms/MPSCQueue.js'
-import { WorkStealingDeque, NO_JOB_AVAILABLE, DEQUE_CAPACITY } from '../../Core/Algorithms/WorkStealingDeque.js'
+const { ChunkView } = await import(`${PATH_MANAGERS}/QueryManager/ChunkView.js`)
+const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+const { kernelRegistry } = await import(`${PATH_MANAGERS}/SystemManager/KernelRegistry.js`)
+const { MPSCQueue, MPSC_QUEUE_CAPACITY } = await import(`${PATH_CORE}/Algorithms/MPSCQueue.js`)
+const { WorkStealingDeque, NO_JOB_AVAILABLE, DEQUE_CAPACITY } = await import(
+	`${PATH_CORE}/Algorithms/WorkStealingDeque.js`
+)
+
 import {
 	MAX_JOBS,
 	MAX_DEPENDENTS,
@@ -87,10 +90,10 @@ export class Scheduler {
 		this.hasParallelJobs = false // Per-execution flag
 	}
 
-	async init(ecs) {
-		this.ecs = ecs
-		this.workerManager = ecs.engine.workerManager
-		this.systemManager = ecs.systemManager
+	async init(engine) {
+		const { workerManager, systemManager } = engine.getManagers()
+		this.workerManager = workerManager
+		this.systemManager = systemManager
 
 		// --- Shared Memory Allocation ---
 		// The Scheduler is the owner of all shared memory for the job system.
@@ -355,7 +358,7 @@ export class Scheduler {
 		// We will add dependencies in stages.
 
 		// 1. Resolve `runsAfter` (Control-flow) dependencies. (Highest Priority)
-		this._resolveControlFlowDependencies(systems)		
+		this._resolveControlFlowDependencies(systems)
 
 		// 2. Resolve local phase (`update`->`schedule`->`process`) dependencies.
 		this._resolveLocalPhaseDependencies()
@@ -712,7 +715,8 @@ export class Scheduler {
 
 					const kernelMeta = kernelRegistry.kernelMetadata.get(kernelId)
 					const kernelName = kernelMeta.name
-					const systemContext = this.workerManager.getSystemContext(system, kernelName)
+
+					const systemContext = this.workerManager.getSystemContext(system, kernelName, this.systemManager) //todo should use ID's
 
 					const kernelContext = {
 						getChunkView: chunkId => {
@@ -1105,8 +1109,7 @@ export class Scheduler {
 		const jobTypeNum = jobPayload >> 24
 		const payload = jobPayload & 0x00ffffff
 
-		const jobTypeName =
-			jobTypeNum === JOB_TYPE.KERNEL ? 'kernel' : JOB_TYPE_TO_METHOD_NAME[jobTypeNum] || 'unknown'
+		const jobTypeName = jobTypeNum === JOB_TYPE.KERNEL ? 'kernel' : JOB_TYPE_TO_METHOD_NAME[jobTypeNum] || 'unknown'
 		const info = { jobId, systemName, jobType: jobTypeName }
 		if (jobTypeNum === JOB_TYPE.KERNEL) info.payload = payload
 		return info

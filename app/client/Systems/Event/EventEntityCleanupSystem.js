@@ -1,6 +1,5 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager } = ecs
 
 /**
  * This system is responsible for cleaning up transient event entities at the end of each frame.
@@ -28,16 +27,12 @@ const { queryManager } = ecs
  * Use it with caution only when needed.
  */
 export class EventEntityCleanupSystem {
-	constructor() {
+	init() {
 		const { landedEvent, leftSurfaceEvent } = ecs.getTypeIDs()
 
-		// By querying for any of these event components, we can handle all
-		// transient event cleanup in a single pass.
-		this.transientEventQuery = queryManager.getQuery({
+		this.transientEventQuery = this.getQuery({
 			any: [landedEvent, leftSurfaceEvent],
 		})
-
-
 	}
 
 	update() {

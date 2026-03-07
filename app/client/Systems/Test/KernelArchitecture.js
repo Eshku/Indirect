@@ -23,15 +23,12 @@ Atomics.store(logIndex, 0, 0)
  */
 export class KernelArchitecture {
 	static dependencies = {
-		// --- Main-thread update phase ---
-		// This job runs on the main thread.
-		update: {},
-
 		// --- Kernel Dependencies ---
 
-		// 'testKernel' has no explicit `runsAfter` dependency on 'update'.
-		// This means the scheduler treats them as independent and they can
-		// run in PARALLEL. The order between them is not guaranteed.
+		// The scheduler has an implicit rule: all KERNEL jobs for a system
+		// will wait for that system's UPDATE job to complete.
+		// This ensures a predictable `update -> kernel` execution flow.
+		// Therefore, 'testKernel' will run AFTER 'update'.
 		testKernel: {
 			reads: velocity,
 			writes: position,
@@ -44,9 +41,8 @@ export class KernelArchitecture {
 			},
 		},
 
-		// 'loggingKernel' explicitly depends on 'update'.
-		// This SERIALIZES its execution, guaranteeing it will only run AFTER
-		// the 'update' job for this system has completed.
+		// 'loggingKernel' also implicitly depends on 'update' due to the
+		// scheduler's local phase dependency rule. No explicit `runsAfter` is needed.
 		loggingKernel: {
 			context: {
 				executionLog,
@@ -66,7 +62,7 @@ export class KernelArchitecture {
 	init() {
 		this.query = this.getQuery({ with: [position, velocity] })
 
-		const { payload } = this.compiler.compileEntity({
+		const { payload } = this.compileEntity({
 			position: { x: 100, y: 100 },
 			velocity: { x: 1, y: 0 },
 		})
@@ -138,12 +134,12 @@ export class KernelArchitecture {
 			const loggingKernelIdx = log.indexOf(3)
 
 			let success = true
-			let message = `Execution Order: [${namedLog.join(' -> ')}]`
+			let message = `Execution Order: [${namedLog.join(', ')}]`
 
 			if (updateIdx === -1 || testKernelIdx === -1 || loggingKernelIdx === -1) {
 				success = false
 				message += ` | FAILED: Not all phases ran. Expected [update, testKernel, loggingKernel] to be present.`
-			} else if (loggingKernelIdx < updateIdx || testKernelIdx < updateIdx) {
+			} else if (loggingKernelIdx < updateIdx || testKernelIdx < updateIdx) { // This check is now the core of the test
 				success = false
 				message += ` | FAILED: A kernel ran before 'update'. The implicit 'update' -> 'kernel' dependency was not respected.`
 			} else {

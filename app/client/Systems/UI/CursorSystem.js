@@ -3,7 +3,6 @@ const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
 const { Easing } = await import(`${PATH_CORE}/utils/easing.js`)
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { payloadCompiler } = ecs
 const { lerpColor } = await import(`${PATH_CORE}/utils/lerp.js`)
 const { CursorState: CursorStateDef } = await import(`${PATH_CLIENT}/Components/UI/CursorState.js`)
 
@@ -88,17 +87,14 @@ const TRANSITION_DURATION = 0.25 // seconds
  * - It runs in the main update loop to check for interactions with UI elements and change state accordingly.
  */
 export class CursorSystem {
-	constructor() {
-		this.pixiApp = null
-		this.renderer = null
-		this.cursor = null
-		this.commands = null // Injected by SystemManager
-
+	/**
+	 * Initializes the system. This is called by the SystemManager once.
+	 */
+	async init() {
 		// --- Component/Entity State ---
 		const { position, cursorTag, cursorState } = ecs.getTypeIDs()
-		this.positionComponent = position
 		this.cursorStateComponent = cursorState
-		this.cursorQuery = ecs.queryManager.getQuery({ with: [cursorTag] })
+		this.cursorQuery = this.getQuery({ with: [cursorTag] })
 		this.cursorEntityId = null
 		this.positionPayload = null
 		this.cursorStatePayload = null
@@ -128,12 +124,7 @@ export class CursorSystem {
 		this.isSettled = false
 		this.lastTrailPoint = { x: -1, y: -1 }
 		this.minTrailPointDistanceSq = 4 // pixels squared (2*2)
-	}
 
-	/**
-	 * Initializes the system. This is called by the SystemManager once.
-	 */
-	async init() {
 		const { layerManager, gameManager } = engine.getManagers()
 
 		this.pixiApp = gameManager.getApp()
@@ -154,8 +145,8 @@ export class CursorSystem {
 		}
 
 		// Pre-compile payloads for updating components. This is a one-time setup.
-		this.positionPayload = payloadCompiler.compileComponent(this.positionComponent, { x: 0, y: 0 })
-		this.cursorStatePayload = payloadCompiler.compileComponent(this.cursorStateComponent, { flags: 0 })
+		this.positionPayload = this.compileComponent(position, { x: 0, y: 0 })
+		this.cursorStatePayload = this.compileComponent(this.cursorStateComponent, { flags: 0 })
 
 		// Pre-generate all state textures
 		await this._generateAllStateTextures()

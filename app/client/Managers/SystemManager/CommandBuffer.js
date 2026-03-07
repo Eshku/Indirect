@@ -3,7 +3,6 @@ import { SortableCommandBuffer, SortKeyLayout, SortPhase } from './SortableComma
 import { OpCodes } from './CommandOpcodes.js'
 import * as Schema from '../ComponentManager/ComponentSchema.js'
 
-// const { payloadCompiler } = await import('./PayloadCompiler.js') // No longer needed.
 const SOA_BUFFER_INITIAL_CAPACITY = 1024
 
 //! Gather and Blit (block image transfer)

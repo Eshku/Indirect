@@ -1412,3 +1412,5 @@ export class EntityManager {
 		return totalBytes
 	}
 }
+
+export const entityManager = new EntityManager()

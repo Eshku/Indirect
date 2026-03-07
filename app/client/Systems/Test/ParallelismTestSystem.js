@@ -24,7 +24,7 @@ const RIGHT_BOUNDARY = WORLD_WIDTH * 0.9
  * out-of-sync context - if delta is incorrect || some racing shit.
  *
  * Symptom 3 - particles going astray, not on chunk level , but on individual level.
- * We are most likely fucked. Data corruption, paddings, job stealing, anything could happen at this point.
+ * We are most likely fucked. Data corruption, paddings, anything could happen at this point.
  *
  *
  * What is expected:
@@ -51,7 +51,8 @@ export class ParallelismTestSystem {
 			reads: [position, column],
 		},
 	}
-	constructor() {
+
+	init() {
 		// --- PIXI Setup ---
 		this.particleContainer = new PIXI.Container()
 		this.textContainer = new PIXI.Container()
@@ -88,14 +89,12 @@ export class ParallelismTestSystem {
 
 		this.leftBoundary = LEFT_BOUNDARY
 		this.rightBoundary = RIGHT_BOUNDARY
-	}
 
-	init() {
 		this.query = this.getQuery({
 			with: [position, velocity, parallelismTestTag, column],
 		})
 
-		const { payload, mutators } = this.compiler.compileEntity({
+		const { payload, mutators } = this.compileEntity({
 			position: { x: 0, y: 0 },
 			velocity: { x: 1, y: 0 },
 			parallelismTestTag: {}, // Tag for this system's entities

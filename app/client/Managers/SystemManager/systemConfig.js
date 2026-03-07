@@ -1,27 +1,31 @@
 /**
  * Centralized configuration for game systems.
- * This module defines the execution order and update frequencies for all systems in a unified structure.
+ * This module defines which systems are active and their update frequencies.
  */
 
 /**
  * --- DEVELOPER NOTE on System Scheduling & Frequencies ---
  *
- * This object is the single source of truth for system scheduling. It defines the global execution order
- * and assigns each system to an update group based on its `frequency`.
+ * This object is single source of truth for which systems are active in the engine
+ * and how frequently they should run.
+ *
+ * ### System Activation
+ * Any system listed in this file will be loaded, instantiated, and initialized by `SystemManager`.
+ * Systems not listed here will not run.
  *
  * ### Execution Order
- * The order of systems within this file defines the global, flattened execution order. This is crucial
- * for resolving dependencies and ensuring correct data flow between systems. For example, `MovementSystem`
- * runs before `CollisionSystem` to ensure collisions are checked against the new, updated positions.
+ * Order of systems within this file **DOES NOT** define the execution order. Execution
+ * order is determined dynamically by `Scheduler` based on static dependencies (`runsAfter`, `reads`/`writes`)
+ * declared in each system's class. This file's purpose is only to group systems by their update frequency.
  *
  * ### Update Frequencies
- * The `frequency` property determines how often a system's `update` method is called:
+ * `Frequency` property determines how often a system's `update` method is called:
  *
  * - **`'none'`**: For systems that only need to be initialized. Their constructor and `init()` method are
  *   called, but they are not added to any update loop. Ideal for purely event-driven systems
  *   that don't need a per-frame update.
  *
- * - **`'input'`**: Runs once per frame, before the main logic. Designed for low-latency systems that
+ * - **`'input'`**: Runs once per frame, before main logic. Designed for low-latency systems that
  *   process raw user input before any gameplay calculations occur.
  *
  * - **`'logic'`**: Runs on a fixed, deterministic timestep (e.g., 60 times per second). This is for all
@@ -31,7 +35,7 @@
  *   interpolation value, making them perfect for tasks that need to be visually smooth, like camera
  *   movement, animations, and UI updates that must sync with rendering.
  *
- * - **`number` (e.g., `10`)**: Runs on a timer at the specified updates-per-second. These are for
+ * - **`number` (e.g., `10`)**: Runs on a timer at specified updates-per-second. These are for
  *   infrequent tasks that don't need to run every frame, like periodic UI refreshes.
  */
 export const systemSchedule = {
@@ -62,14 +66,21 @@ export const systemSchedule = {
 	Visuals: [
 		{ name: 'SpriteFactorySystem', frequency: 'visuals' },
 		{ name: 'RenderLayerSystem', frequency: 'visuals' },
-		{ name: 'TooltipSystem', frequency: 'visuals' },
 		{ name: 'CameraSystem', frequency: 'visuals' },
 		{ name: 'SyncTransforms', frequency: 'visuals' },
+
+
+
+		//!legacy, but could be useful at some point to redo properly.
+		//{ name: 'TooltipSystem', frequency: 'visuals' },
 	],
 
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
+		
+		
+		
 		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
 	],
 
@@ -77,7 +88,7 @@ export const systemSchedule = {
 
 	Benchmark: [
 		/* { name: 'CPUBenchmark', frequency: 'logic' }, */
-		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */ 
+		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */
 
 		/* { name: 'RWMBenchmark', frequency: 'logic' },  */
 		
@@ -89,9 +100,13 @@ export const systemSchedule = {
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
 		/* { name: 'CustomJobTestSystem', frequency: 'logic' }, */
+
+		
 		/* 		{ name: 'DependencySystemA', frequency: 'visuals' },
 		{ name: 'DependencySystemB', frequency: 'visuals' },
 		{ name: 'DependencySystemC', frequency: 'visuals' }, */
+
+
 		/* { name: 'KernelArchitecture', frequency: 'logic' }, */
 	],
 

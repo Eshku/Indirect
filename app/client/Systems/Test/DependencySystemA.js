@@ -8,7 +8,7 @@ const { dependencyA } = ecs.getKernelIDs()
  * This system will write a known value to the 'velocity' component in parallel.
  */
 export class DependencySystemA {
-	static runsBefore = [DependencySystemB]
+	static runsBefore = DependencySystemB
 
 	static dependencies = {
 		dependencyA: {
@@ -22,7 +22,7 @@ export class DependencySystemA {
 	init() {
 		this.query = this.getQuery({ with: [position, velocity, dependencyTestTag] })
 
-		const { payload } = this.compiler.compileEntity({
+		const { payload } = this.compileEntity({
 			position: { x: 0, y: 0 },
 			velocity: { x: 0, y: 0 }, // Initial value is 0
 			dependencyTestTag: {},

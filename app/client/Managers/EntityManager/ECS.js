@@ -1,14 +1,11 @@
 import * as Schema from '../ComponentManager/ComponentSchema.js'
-const { ComponentManager } = await import('../ComponentManager/ComponentManager.js')
-import { entityStore } from './EntityManager.js'
-const { reconstruct } = await import('../ComponentManager/ComponentInterpreter.js')
-const { EntityManager } = await import('./EntityManager.js')
-const { queryManager } = await import('../../Managers/QueryManager/QueryManager.js')
-const { PrefabManager } = await import('../../Managers/PrefabManager/PrefabManager.js')
-const { SystemManager } = await import('../SystemManager/SystemManager.js')
-const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
-const { sharedDataManager } = await import(`${PATH_ECS}/SharedDataManager/SharedDataManager.js`)
+const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+const { reconstruct } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
+
+const { payloadCompiler } = await import(`${PATH_MANAGERS}/SystemManager/PayloadCompiler.js`)
+
+const { sharedDataManager } = await import(`${PATH_MANAGERS}/SharedDataManager/SharedDataManager.js`)
 
 /**
  * The central, immediate-mode public API for the entire ECS.
@@ -18,21 +15,6 @@ const { sharedDataManager } = await import(`${PATH_ECS}/SharedDataManager/Shared
  * It is the user-facing "World" object for the engine.
  */
 export class ECS {
-	constructor() {
-		this.componentManager = new ComponentManager()
-		this.queryManager = queryManager
-		this.entityManager = new EntityManager()
-		this.prefabManager = new PrefabManager()
-		this.systemManager = new SystemManager()
-
-		this.sharedDataManager = sharedDataManager
-
-		this.engine = null // To hold the reference to the main engine instance
-
-		// The payload compiler is a stateless service, so it's fine to keep it here.
-		this.payloadCompiler = payloadCompiler
-	}
-
 	/**
 	 * Initializes the core ECS managers in the correct dependency order.
 	 * This method is called by engine during the engine's startup sequence.
@@ -42,13 +24,12 @@ export class ECS {
 		// Initialize our own scoped managers in the correct dependency order.
 		this.engine = engine
 
-		await this.componentManager.init(this)
-		await this.entityManager.init(this) // EntityManager now depends on ComponentManager
-		await this.queryManager.init(this)
-		await this.prefabManager.init(this)
-		await this.sharedDataManager.init(this.componentManager)
-		await this.systemManager.init(this)
+		this.sharedDataManager = sharedDataManager
 
+		this.payloadCompiler = payloadCompiler
+
+		const { componentManager, entityManager, systemManager, prefabManager } = this.engine.getManagers()
+		Object.assign(this, { componentManager, entityManager, systemManager, prefabManager })
 		// Finally, initialize the payload compiler which depends on our managers.
 		this.payloadCompiler.init(this)
 		this.engine = engine

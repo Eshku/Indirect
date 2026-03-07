@@ -1,6 +1,7 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
-const { ecs, entityManager } = engine.getManagers()
-const { queryManager } = ecs // entityManager is now available at the top level
+const { ecs } = engine.getManagers()
+
+const { activeCooldown } = ecs.getTypeIDs()
 
 /**
  * Updates all active cooldowns in the world. This system embodies the "cooldown-as-an-entity" pattern.
@@ -56,18 +57,15 @@ const { queryManager } = ecs // entityManager is now available at the top level
  * performance (iterating a small, local list), and good update performance.
  */
 export class CooldownSystem {
-	constructor() {
-		const { activeCooldown } = ecs.getTypeIDs()
-		this.activeCooldown = activeCooldown
-
-		this.cooldownsQuery = queryManager.getQuery({
-			with: [activeCooldown],
+	init() {
+		this.cooldownsQuery = this.getQuery({
+			with: activeCooldown,
 		})
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.cooldownsQuery.iter()) {
-			const remainingTimes = chunk.componentData[this.activeCooldown].remainingTime
+			const remainingTimes = chunk.componentData[activeCooldown].remainingTime
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				remainingTimes[indexInChunk] -= deltaTime
@@ -75,7 +73,7 @@ export class CooldownSystem {
 				if (remainingTimes[indexInChunk] <= 0) this.commands.destroyEntity(chunk.entities[indexInChunk])
 			}
 
-			chunk.markAllDirty(this.activeCooldown, currentTick)
+			chunk.markAllDirty(activeCooldown, currentTick)
 		}
 	}
 

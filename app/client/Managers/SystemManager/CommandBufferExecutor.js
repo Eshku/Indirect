@@ -3,7 +3,6 @@ import { CommandBufferReader } from './CommandBufferReader.js'
 import * as Schema from '../ComponentManager/ComponentSchema.js'
 import { entityStore, MASK_PARTS } from '../EntityManager/EntityManager.js'
 
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 /**
  * Executes commands from a pre-sorted CommandBuffer using a consolidation and batching strategy.
  *
@@ -17,11 +16,11 @@ const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
  * Gather-and-Blit
  */
 export class CommandBufferExecutor {
-	constructor() {
-		this.entityManager = engine.getManager('ECS').entityManager
-		this.prefabManager = engine.getManager('ECS').prefabManager
-		this.queryManager = engine.getManager('ECS').queryManager
-		this._currentCommandBuffer = null // To avoid passing it down through every function call
+	constructor(entityManager, prefabManager, queryManager) {
+		this.entityManager = entityManager
+		this.prefabManager = prefabManager
+		this.queryManager = queryManager
+		this._currentCommandBuffer = null
 	}
 
 	/**

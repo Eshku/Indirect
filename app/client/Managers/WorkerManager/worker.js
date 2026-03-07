@@ -132,8 +132,8 @@ class WorkerEntry {
 		}
 
 		this.kernelMetadata = kernelMetadata
-		const jobLayoutModuleUrl = new URL('../../ECS/SystemManager/JobLayout.js', baseUrl)
-		const frameStateLayoutModuleUrl = new URL('../../ECS/SystemManager/FrameStateLayout.js', baseUrl)
+		const jobLayoutModuleUrl = new URL('../../Managers/SystemManager/JobLayout.js', baseUrl)
+		const frameStateLayoutModuleUrl = new URL('../../Managers/SystemManager/FrameStateLayout.js', baseUrl)
 
 		try {
 			const chunkViewModuleUrl = new URL('../../Managers/QueryManager/ChunkView.js', baseUrl)

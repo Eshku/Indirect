@@ -14,13 +14,11 @@ const {
  * This is a powerful tool for verifying that entities are being correctly added to the grid.
  */
 export class SpatialHashDebugSystem {
-	constructor() {
+	init() {
 		this.graphics = new PIXI.Graphics()
 		// Get a read-only API instance for the grid, using the same shared buffers.
 		this.grid = new SpatialHashGrid(physicsManager.getSpatialHashGridSABs())
-	}
 
-	init() {
 		// Add the graphics to the main game container so it inherits camera transforms (like Y-axis inversion).
 		const gameLayer = layerManager.getLayer('gameContainer')
 		if (gameLayer) {
@@ -38,7 +36,7 @@ export class SpatialHashDebugSystem {
 		const { gridWidth, gridHeight, cellSize, nodeNextIndexView, nodeEntityIdView } = this.grid
 
 		// --- 1. Draw Grid Lines ---
-		this.graphics.lineStyle(1, 0x444444, 0.4); // Thin, dark grey lines
+		this.graphics.lineStyle(1, 0x444444, 0.4) // Thin, dark grey lines
 
 		for (let y = 0; y <= gridHeight; y++) {
 			const worldY = originY + y * cellSize
@@ -54,30 +52,30 @@ export class SpatialHashDebugSystem {
 		// --- 2. Draw Cell Contents ---
 		for (let y = 0; y < gridHeight; y++) {
 			for (let x = 0; x < gridWidth; x++) {
-				const cellIndex = y * gridWidth + x;
-				const headNodeIndex = this.grid.gridCellsView[cellIndex];
+				const cellIndex = y * gridWidth + x
+				const headNodeIndex = this.grid.gridCellsView[cellIndex]
 
 				// If the cell is not empty, draw a highlight over it.
 				if (headNodeIndex !== -1) {
-					const cellWorldX = originX + x * cellSize;
-					const cellWorldY = originY + y * cellSize;
+					const cellWorldX = originX + x * cellSize
+					const cellWorldY = originY + y * cellSize
 
 					// For simplicity, we'll color the cell based on the first entity found.
-					const firstEntityId = nodeEntityIdView[headNodeIndex * NODE_ENTITY_ID_STRIDE_IN_U64];
+					const firstEntityId = nodeEntityIdView[headNodeIndex * NODE_ENTITY_ID_STRIDE_IN_U64]
 
-					let color;
+					let color
 					if (ecs.hasComponent(firstEntityId, 'playerTag')) {
-						color = 0x00ff00; // Green for player
+						color = 0x00ff00 // Green for player
 					} else {
-						color = 0xff0000; // Red for enemies
+						color = 0xff0000 // Red for enemies
 					}
 
 					// Draw a semi-transparent rectangle covering the entire cell.
 					// The Y coordinate is inverted to match the game's coordinate system.
 					// The rect's Y is its top edge, so we must offset by the cell height.
-					this.graphics.beginFill(color, 0.3);
-					this.graphics.drawRect(cellWorldX, -(cellWorldY + cellSize), cellSize, cellSize);
-					this.graphics.endFill();
+					this.graphics.beginFill(color, 0.3)
+					this.graphics.drawRect(cellWorldX, -(cellWorldY + cellSize), cellSize, cellSize)
+					this.graphics.endFill()
 				}
 			}
 		}

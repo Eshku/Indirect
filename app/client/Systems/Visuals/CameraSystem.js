@@ -1,16 +1,15 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, layerManager, gameManager } = engine.getManagers()
-const { queryManager } = ecs
+
 const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
+
+const { playerTag, position } = ecs.getTypeIDs()
 
 //! Going to need culling.
 
 export class CameraSystem {
-	constructor() {
-		const { playerTag, position } = ecs.getTypeIDs()
-		Object.assign(this, { playerTag, position })
-
-		this.playerQuery = queryManager.getQuery({
+	async init() {
+		this.playerQuery = this.getQuery({
 			with: [playerTag, position],
 		})
 
@@ -25,11 +24,9 @@ export class CameraSystem {
 
 		this.screenWidth = gameManager.getApp().screen.width
 		this.screenHeight = gameManager.getApp().screen.height
-	}
 
-	async init() {
 		findPlayer: for (const chunk of this.playerQuery.iter()) {
-			const positionArrays = chunk.componentData[this.position]
+			const positionArrays = chunk.componentData[position]
 			const posX = positionArrays.x
 			const posY = positionArrays.y
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
@@ -73,7 +70,7 @@ export class CameraSystem {
 		// By iterating the query, we follow the standard, efficient system pattern.
 		// For a singleton entity like the player, this loop will only run once.
 		for (const chunk of this.playerQuery.iter()) {
-			const positionArrays = chunk.componentData[this.position]
+			const positionArrays = chunk.componentData[position]
 
 			// We can assume the first entity in the first chunk is our player.
 			const indexInChunk = 0

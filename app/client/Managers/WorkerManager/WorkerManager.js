@@ -1,6 +1,6 @@
-import { eventEmitter } from '../../Core/Classes/EventEmitter.js'
-import { entityStore } from '../../ECS/EntityManager/EntityManager.js'
-import { kernelRegistry } from '../../ECS/SystemManager/KernelRegistry.js'
+const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
+const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+const { kernelRegistry } = await import(`${PATH_MANAGERS}/SystemManager/KernelRegistry.js`)
 
 /**
  * Manages a pool of Web Workers for parallel job execution.
@@ -67,15 +67,15 @@ export class WorkerManager {
 	 * The second stage of initialization. This is called by the GameLoop after the
 	 * Scheduler has created the SharedArrayBuffers. This method sends all necessary
 	 * shared data to the workers and waits for them to be ready.
-	 * @param {import('../../ECS/EntityManager/ECS.js').ECS} ecs
+	 * @param {import('../../client/Engine.js').Engine} engine
 	 */
-	async initializeWorkers(ecs) {
-		this.ecs = ecs
-		this.entityManager = ecs.entityManager
-		const { physicsManager } = ecs.engine.getManagers()
+	async initializeWorkers(engine) {
+		const { entityManager, physicsManager, systemManager } = engine.getManagers()
+
+		this.entityManager = entityManager
 
 		// Get the shared buffers from the scheduler.
-		const scheduler = ecs.systemManager.gameLoop.scheduler
+		const scheduler = systemManager.gameLoop.scheduler
 		this.sharedBuffers = scheduler.getSharedBuffers()
 
 		const sharedData = this.entityManager.getSharedData()
@@ -83,7 +83,7 @@ export class WorkerManager {
 		const workerPromises = []
 
 		const systemIdMap = {}
-		for (const [name, id] of this.ecs.systemManager.systemNameToId.entries()) {
+		for (const [name, id] of systemManager.systemNameToId.entries()) {
 			systemIdMap[name] = id
 		}
 
@@ -158,14 +158,15 @@ export class WorkerManager {
 	/**
 	 * Gathers and broadcasts the initial static context for all parallel systems.
 	 * This is called once after all systems have been instantiated.
+	 * @param {import('../../ECS/SystemManager/SystemManager.js').SystemManager} systemManager
 	 */
-	broadcastInitialSystemContexts() {
+	broadcastInitialSystemContexts(systemManager) {
 		const allContexts = {}
-		for (const systemName of this.ecs.systemManager.systemNameToId.keys()) {
-			const system = this.ecs.systemManager.getSystem(systemName)
+		for (const systemName of systemManager.systemNameToId.keys()) {
+			const system = systemManager.getSystem(systemName)
 			if (!system) continue
 
-			const metadata = this.ecs.systemManager.systemMetadataCache.get(systemName)
+			const metadata = systemManager.systemMetadataCache.get(systemName)
 			if (!metadata?.dependencies) continue
 
 			const systemContexts = {}
@@ -173,7 +174,7 @@ export class WorkerManager {
 
 			// Iterate over all declared dependencies (methods and kernels)
 			for (const kernelName in metadata.dependencies) {
-				const context = this.getSystemContext(system, kernelName)
+				const context = this.getSystemContext(system, kernelName, systemManager)
 				if (Object.keys(context).length > 0) {
 					systemContexts[kernelName] = context
 					hasAnyContext = true
@@ -230,11 +231,12 @@ export class WorkerManager {
 	 * This is used to gather static data to be sent to workers.
 	 * @param {object} system - The actual system instance.
 	 * @param {string} kernelName - The name of the kernel/method to get context for.
+	 * @param {import('../../ECS/SystemManager/SystemManager.js').SystemManager} systemManager
 	 * @returns {object}
 	 */
-	getSystemContext(system, kernelName) {
+	getSystemContext(system, kernelName, systemManager) {
 		const systemName = system.constructor.name
-		const metadata = this.ecs.systemManager.systemMetadataCache.get(systemName)
+		const metadata = systemManager.systemMetadataCache.get(systemName)
 		const kernelDeps = metadata?.dependencies?.[kernelName]
 
 		if (!kernelDeps || !kernelDeps.context) {
@@ -286,13 +288,14 @@ export class WorkerManager {
 	 * Gathers the new context from a hot-swapped system instance and broadcasts it to all workers.
 	 * @param {string} systemName The name of the system that was swapped.
 	 * @param {object} systemInstance The new instance of the system.
+	 * @param {import('../../ECS/SystemManager/SystemManager.js').SystemManager} systemManager
 	 */
-	hotSwapSystemContext(systemName, systemInstance) {
-		const metadata = this.ecs.systemManager.systemMetadataCache.get(systemName)
+	hotSwapSystemContext(systemName, systemInstance, systemManager) {
+		const metadata = systemManager.systemMetadataCache.get(systemName)
 		if (!metadata?.dependencies) return
 
 		for (const kernelName in metadata.dependencies) {
-			const newContext = this.getSystemContext(systemInstance, kernelName)
+			const newContext = this.getSystemContext(systemInstance, kernelName, systemManager)
 			if (Object.keys(newContext).length > 0) {
 				this.workers.forEach(worker => {
 					worker.postMessage({

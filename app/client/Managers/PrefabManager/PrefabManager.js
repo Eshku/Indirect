@@ -1,6 +1,6 @@
 const { LRUCache } = await import(`${PATH_CORE}/DataStructures/LRUCache.js`)
 
-import * as Schema from '../../ECS/ComponentManager/ComponentSchema.js'
+const { Schema } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentSchema.js`)
 
 const { PrefabLoader } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabLoader.js`)
 
@@ -477,3 +477,5 @@ export class PrefabManager {
 		return item && typeof item === 'object' && !Array.isArray(item)
 	}
 }
+
+export const prefabManager = new PrefabManager()

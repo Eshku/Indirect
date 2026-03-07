@@ -1,6 +1,7 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager } = ecs
+
+const { position, velocity } = ecs.getTypeIDs()
 
 /**
  * A final-pass physics system that integrates velocity into position.
@@ -9,21 +10,17 @@ const { queryManager } = ecs
  * This ensures final position is based on fully calculated velocity for frame.
  */
 export class ApplyVelocity {
-	constructor() {
-		const { position, velocity } = ecs.getTypeIDs()
-		Object.assign(this, { position, velocity })
-
-		this.query = queryManager.getQuery({
+	init() {
+		this.query = this.getQuery({
 			with: [position, velocity],
 		})
 	}
 
-	update({deltaTime, currentTick, lastTick}) {
-
+	update({ deltaTime, currentTick, lastTick }) {
 		for (const chunk of this.query.iter()) {
-			const posArrays = chunk.componentData[this.position]
-			const velArrays = chunk.componentData[this.velocity]
-			const posDirtyTicks = chunk.dirtyTicks[this.position]
+			const posArrays = chunk.componentData[position]
+			const velArrays = chunk.componentData[velocity]
+			const posDirtyTicks = chunk.dirtyTicks[position]
 
 			let wasModified = false
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
@@ -37,9 +34,8 @@ export class ApplyVelocity {
 					posDirtyTicks[indexInChunk] = currentTick
 					wasModified = true
 				}
-
 			}
-			if (wasModified) chunk.markChunkDirty(this.position, currentTick)
+			if (wasModified) chunk.markChunkDirty(position, currentTick)
 		}
 	}
 

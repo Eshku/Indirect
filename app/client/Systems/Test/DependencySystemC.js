@@ -9,7 +9,7 @@ const { DependencySystemB } = ecs.getSystemIDs()
  * It verifies that it runs after B and reads the correct data.
  */
 export class DependencySystemC {
-	static runsAfter = [DependencySystemB]
+	static runsAfter = DependencySystemB
 
 	static dependencies = {
 		dependencyC: {

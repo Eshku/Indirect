@@ -1,4 +1,3 @@
-const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
 const { extensions: systemExtensions } = await import('../../Core/Extends/systemExtends.js')
 const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
 
@@ -98,7 +97,7 @@ export class SystemManager {
 	 * 2. Registers system classes.
 	 * 3. Configures system execution order and frequencies.
 	 */
-	async init(ecs) {
+	async init(engine) {
 		this.gameLoop = new GameLoop()
 
 		// Sync the initial lastTick for all predefined groups from the GameLoop.
@@ -109,13 +108,21 @@ export class SystemManager {
 			}
 		}
 
-		// Get our manager dependencies from the ECS instance.
-		this.entityManager = ecs.entityManager
-		this.archetypeManager = ecs.archetypeManager
-		this.componentManager = ecs.componentManager
-		this.queryManager = ecs.queryManager
-		this.prefabManager = ecs.prefabManager
-		this.workerManager = ecs.engine.workerManager
+		// Get our manager dependencies from the engine instance.
+		const {
+			entityManager,
+			componentManager,
+			queryManager,
+			prefabManager,
+			workerManager,
+			gameManager,
+		} = engine.getManagers()
+
+		this.entityManager = entityManager
+		this.componentManager = componentManager
+		this.queryManager = queryManager
+		this.prefabManager = prefabManager
+		this.workerManager = workerManager
 
 		// Ensure we only ever have one listener attached, even if init() is called multiple times.
 		if (!this.hmrListenerId) {
@@ -126,7 +133,7 @@ export class SystemManager {
 		this.renderer = this.app.renderer
 		this.ticker = this.app.ticker
 
-		this.commandBufferExecutor = new CommandBufferExecutor()
+		this.commandBufferExecutor = new CommandBufferExecutor(this.entityManager, this.prefabManager, this.queryManager)
 
 		// --- Phase 1: Discovery & ID Assignment (No Imports) ---
 		const [systemFileTree, kernelFileTree] = await Promise.all([
@@ -165,7 +172,7 @@ export class SystemManager {
 		this._configureSystemFrequencies()
 
 		this._validateSystemConfiguration()
-		await this.gameLoop.init(ecs)
+		await this.gameLoop.init(engine)
 	}
 
 	/**
@@ -197,7 +204,7 @@ export class SystemManager {
 		this._sortAllGroups()
 
 		// Send the initial, static context data for all parallel systems to the workers.
-		this.workerManager.broadcastInitialSystemContexts()
+		this.workerManager.broadcastInitialSystemContexts(this)
 	}
 
 	enablePerformanceTimings() {
@@ -339,8 +346,11 @@ export class SystemManager {
 				hasUpdate: !!SystemClass.prototype.update,
 				hasProcess: !!SystemClass.prototype.process,
 				dependencies: this._analyzeSystemDependencies(SystemClass, systemName),
-				runsAfter: SystemClass.runsAfter || [],
-				runsBefore: SystemClass.runsBefore || [],
+				// --- DX Improvement: Normalize single values to arrays ---
+				runsAfter: SystemClass.runsAfter ? (Array.isArray(SystemClass.runsAfter) ? SystemClass.runsAfter : [SystemClass.runsAfter]) : [],
+				runsBefore: SystemClass.runsBefore
+					? Array.isArray(SystemClass.runsBefore) ? SystemClass.runsBefore : [SystemClass.runsBefore]
+					: [],
 				// Final ID arrays will be populated in the next pass.
 			}
 			this.systemMetadataCache.set(systemName, metadata)
@@ -707,7 +717,7 @@ export class SystemManager {
 		this._sortAllGroups()
 
 		// 7. Let workers know about the new system's context if it's parallel.
-		this.workerManager.broadcastInitialSystemContexts() // This re-broadcasts all contexts, which is safe.
+		this.workerManager.broadcastInitialSystemContexts(this) // This re-broadcasts all contexts, which is safe.
 
 		console.log(`[SystemManager] Dynamically added system: ${systemName}`)
 
@@ -964,7 +974,7 @@ export class SystemManager {
 		await newInstance.init?.()
 
 		// Broadcast the new context to workers to handle changes in constructor-defined properties.
-		this.workerManager.hotSwapSystemContext(systemName, newInstance)
+		this.workerManager.hotSwapSystemContext(systemName, newInstance, this)
 
 		// 5. Re-queue the new system instance into its correct update group.
 		// The frequency is still stored in _systemConfig from the initial load.
@@ -1064,3 +1074,5 @@ export class SystemManager {
 		eventEmitter.off(this.hmrListenerId, 'hmr:system-update')
 	}
 }
+
+export const systemManager = new SystemManager()

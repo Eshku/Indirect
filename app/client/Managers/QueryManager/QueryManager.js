@@ -1,5 +1,7 @@
 const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`)
-import { entityStore } from '../../ECS/EntityManager/EntityManager.js'
+
+const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+
 
 //! Query mutability going to be decided later on.
 export class QueryManager {
@@ -34,38 +36,56 @@ export class QueryManager {
 	 * This is core optimization. Instead of generating a new string on every call,
 	 * it uses a simple nested map to find or create key ONCE. All subsequent
 	 * calls for same configuration will be near-instant cache hits with zero allocation.
+	 *
+	 * This is a one-time cost during system initialization, not a runtime cost.
 	 * @param {object} options query options.
 	 * @returns {string} cached, canonical string key.
 	 * @private
 	 */
 	_getCachedQueryKey(options) {
-		// Simple two-level cache. First level is raw options object.
-		// This works for vast majority of cases where systems pass exact same
-		// literal object from their constructor every time.
+		// --- Fast Path ---
+		// The first level of caching uses the options object reference itself as the key.
+		// This is extremely fast and covers the common case where the same query object literal is reused.
 		if (this.keyCache.has(options)) {
 			return this.keyCache.get(options)
 		}
 
-		// If object reference is different, we fall back to generating key.
-		// This is "slow path" that will now be hit very rarely.
+		// --- Slow Path ---
+		// If the object reference is different, we fall back to generating a canonical string key.
+		// This handles cases where different systems define identical but separate query objects.
 		const key = this._generateQueryKey(options)
 
-		// We can try to cache it against a "deeper" key for subsequent lookups,
-		// though primary benefit comes from caching object reference.
-		// For now, we'll just cache the key against options object itself.
+		// Cache the generated key against the options object so the next call with this
+		// same object reference hits the fast path.
 		this.keyCache.set(options, key)
 
 		return key
 	}
 
+	/**
+	 * Generates a canonical, sorted string key from a query options object.
+	 * This is the "slow path" for query lookup, only run when the options object
+	 * reference isn't found in the first-level cache.
+	 * @param {object} options
+	 * @returns {string}
+	 * @private
+	 */
 	_generateQueryKey(options) {
-		const {
-			with: withComponents = [],
-			without: withoutComponents = [],
-			any: anyComponents = [],
-			react: reactComponents = [],
+		const { // Use different names to avoid shadowing
+			with: withInput = [],
+			without: withoutInput = [],
+			any: anyInput = [],
+			react: reactInput = [],
 			constants: constantsDef = {},
 		} = options
+
+		// --- DX Improvement: Normalize single values to arrays ---
+		// This must be done here because the key generation needs to iterate.
+		const normalize = comps => (comps ? (Array.isArray(comps) ? comps : [comps]) : [])
+		const withComponents = normalize(withInput)
+		const withoutComponents = normalize(withoutInput)
+		const anyComponents = normalize(anyInput)
+		const reactComponents = normalize(reactInput)
 
 		// Sort component IDs to ensure the key is canonical.
 		const withIdsString = [...withComponents].sort((a, b) => a - b).join(',')
@@ -88,6 +108,7 @@ export class QueryManager {
 	 * @param {number[]} [options.any=[]] - Component type IDs where at least one must be present.
 	 * @param {number[]} [options.react=[]] - Component type IDs that, if changed, will make entity match query.
 	 *
+	 * ! Constants are going to be either deprecated (define your own) or redone to be thread safe.
 	 * @example
 	 * // In a system's constructor or init method:
 	 * const { componentManager } = this.ecs;

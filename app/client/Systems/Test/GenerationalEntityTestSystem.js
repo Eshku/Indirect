@@ -4,9 +4,6 @@ const { entityManager } = ecs
 
 const { describe, it, expect } = await import(`${PATH_MANAGERS}/TestManager/TestAPI.js`)
 
-// Import component type IDs for clarity and consistency, even if not used directly as variables.
-const { position } = ecs.getTypeIDs()
-
 /**
  * A utility function to deconstruct and log an entity ID for human-readable validation.
  * @param {bigint} id The entity ID.
@@ -15,7 +12,7 @@ const { position } = ecs.getTypeIDs()
  */
 function logEntityId(id, label) {
 	if (typeof id !== 'bigint' || id < 0n) {
-		console.log(`${label}: Invalid ID provided.`);
+		console.log(`${label}: Invalid ID provided.`)
 		return { index: -1, generation: -1, placeholder: -1 }
 	}
 	const index = Number(id & 0xffffffffn)
@@ -28,7 +25,7 @@ function logEntityId(id, label) {
 		'color: #eee;', // ID style
 		'color: #5f5;', // Index style
 		'color: #f9a;', // Generation style
-		'color: #aaa;' // Placeholder style
+		'color: #aaa;', // Placeholder style
 	)
 
 	return { index, generation, placeholder }

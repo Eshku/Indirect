@@ -8,9 +8,6 @@ window.PATH_SYSTEMS = `${window.PATH_CLIENT}/Systems`
 window.PATH_KERNELS = `${window.PATH_CLIENT}/Kernels`
 window.PATH_SUBSYSTEMS = `${window.PATH_CLIENT}/Subsystems`
 
-
-window.PATH_ECS = `${window.PATH_CLIENT}/ECS`
-
 window.PATH_MANAGERS = `${window.PATH_CLIENT}/Managers`
 
 window.PATH_INDIRECT = `${window.PATH_CLIENT}/Indirect`

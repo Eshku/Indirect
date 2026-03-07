@@ -2,7 +2,6 @@ const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
 
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs, uiManager } = engine.getManagers()
-const { queryManager } = ecs
 
 const { playerTag, movementIntent, actionIntent } = ecs.getTypeIDs()
 
@@ -19,8 +18,8 @@ export class PlayerInputSystem {
 		},
 	}
 
-	constructor() {
-		this.playerQuery = queryManager.getQuery({
+	async init() {
+		this.playerQuery = this.getQuery({
 			with: [playerTag, movementIntent, actionIntent],
 		})
 
@@ -33,9 +32,7 @@ export class PlayerInputSystem {
 		}
 
 		this.playerId = null
-	}
 
-	async init() {
 		findPlayer: for (const chunk of this.playerQuery.iter()) {
 			for (let i = 0; i < chunk.size; i++) {
 				this.playerId = chunk.entities[i]

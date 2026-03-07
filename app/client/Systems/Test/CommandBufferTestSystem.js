@@ -44,10 +44,10 @@ export class CommandBufferTestSystem {
 		})
 
 		// --- Initialize Payloads ---
-		this.addComponentPayload = this.compiler.compileComponent(velocity, { x: 5, y: 5 }).payload
-		this.setVelocityPayload = this.compiler.compileComponent(velocity, { x: 999, y: -999 }).payload
-		this.setPositionPayload = this.compiler.compileComponent(position, { x: 100, y: 100 }).payload
-		this.generationalTestVelocityPayload = this.compiler.compileComponent(velocity, { x: 999, y: 999 })
+		this.addComponentPayload = this.compileComponent(velocity, { x: 5, y: 5 }).payload
+		this.setVelocityPayload = this.compileComponent(velocity, { x: 999, y: -999 }).payload
+		this.setPositionPayload = this.compileComponent(position, { x: 100, y: 100 }).payload
+		this.generationalTestVelocityPayload = this.compileComponent(velocity, { x: 999, y: 999 })
 
 		const flush = () => {
 			this.systemManager.commandBufferExecutor.execute(this.commands, this.systemManager.currentTick)
@@ -57,7 +57,7 @@ export class CommandBufferTestSystem {
 			// --- Test 1: createEntity ---
 			if (testConfig.runCreateEntityTest) {
 				it('should create an entity with components via createEntity', () => {
-					const { payload } = this.compiler.compileEntity({
+					const { payload } = this.compileEntity({
 						position: { x: 10, y: 20 },
 						testEntityTag: {},
 					})
@@ -155,7 +155,7 @@ export class CommandBufferTestSystem {
 						return
 					}
 					// Compile the prefab payload with overrides using the injected compiler.
-					const { payload } = this.compiler.compileEntity('test_prefab', { position: { x: 123, y: 456 } })
+					const { payload } = this.compileEntity('test_prefab', { position: { x: 123, y: 456 } })
 
 					this.commands.instantiate(payload, 0)
 					flush()
@@ -302,7 +302,7 @@ export class CommandBufferTestSystem {
 		describe('Command Buffer (Placeholder Entities)', () => {
 			it('should create a parent and child and link them using placeholders', () => {
 				// 1. Defer creation of parent and child, getting placeholder IDs back.
-				const { payload: parentPayload } = this.compiler.compileEntity({
+				const { payload: parentPayload } = this.compileEntity({
 					testEntityTag: {},
 					position: { x: 500, y: 500 },
 				})
@@ -310,14 +310,14 @@ export class CommandBufferTestSystem {
 
 				expect(parentPlaceholderId >> 63n === 1n).toBe(true) // Verify it's a placeholder
 
-				const { payload: childPayload } = this.compiler.compileEntity({
+				const { payload: childPayload } = this.compileEntity({
 					testEntityTag: {},
 					position: { x: 1, y: 1 },
 				})
 				const childPlaceholderId = this.commands.createEntity(childPayload)
 
 				// 2. Defer adding a 'Parent' component to the child, referencing the parent's placeholder.
-				const { payload: parentComponentPayload } = this.compiler.compileComponent(parent, {
+				const { payload: parentComponentPayload } = this.compileComponent(parent, {
 					entityId: parentPlaceholderId,
 				})
 				this.commands.addComponent(childPlaceholderId, parentComponentPayload)

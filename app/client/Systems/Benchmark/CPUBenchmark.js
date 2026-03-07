@@ -1,7 +1,5 @@
 const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
 const { ecs } = engine.getManagers()
-const { queryManager } = ecs
-const { payloadCompiler } = await import(`${PATH_ECS}/SystemManager/PayloadCompiler.js`)
 
 const { position, velocity, cpuTag } = ecs.getTypeIDs()
 
@@ -19,23 +17,21 @@ export class CPUBenchmark {
 		},
 	}
 
-	constructor() {
-		this.query = queryManager.getQuery({
+	init() {
+		this.query = this.getQuery({
 			with: [position, velocity, cpuTag],
 		})
 
 		this.entityCount = 2_000
 
-		const { payload } = payloadCompiler.compileEntity({
+		const { payload } = this.compileEntity({
 			position: { x: 0.1, y: 0.2 },
 			velocity: { x: 0.3, y: 0.4 },
 			cpuTag: {},
 		})
 
 		this.creationPayload = payload
-	}
 
-	init() {
 		this.spawnEntities()
 	}
 

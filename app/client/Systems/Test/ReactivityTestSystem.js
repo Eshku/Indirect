@@ -40,11 +40,11 @@ export class ReactivityTestSystem {
 		})
 
 		// --- Payloads ---
-		this.componentAPayload = this.compiler.compileComponent(componentA, {}).payload
+		this.componentAPayload = this.compileComponent(componentA, {}).payload
 
 		for (let i = 0; i < this.totalEntities; i++) {
 			// Compile the payload once.
-			const { payload } = this.compiler.compileEntity({
+			const { payload } = this.compileEntity({
 				ReactivityTarget: {},
 				ReactivityComponent: { value: 0 },
 			})

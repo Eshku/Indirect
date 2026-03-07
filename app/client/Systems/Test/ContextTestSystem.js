@@ -4,6 +4,9 @@ const { contextTest } = ecs.getKernelIDs()
 
 const { contextTestTag } = ecs.getTypeIDs()
 
+// --- Define shared resources in the module scope ---
+const sharedState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+
 /**
  * A system to test that properties passed via the `schedule` context are correctly
  * shared between the main thread and worker threads, with a focus on SharedArrayBuffer.
@@ -15,25 +18,23 @@ const { contextTestTag } = ecs.getTypeIDs()
  */
 export class ContextTestSystem {
 	static dependencies = {
-		update: {},
 		contextTest: {
+			// Pass the module-scoped buffer into the context for the kernel.
 			context: {
-				sharedState: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+				sharedState: sharedState,
 			},
 		},
-		process: {},
-	}
-
-	constructor() {
-		this.sharedState = ContextTestSystem.dependencies.contextTest.context.sharedState
 	}
 
 	init() {
+		// Main thread methods now access the buffer directly.
+		this.sharedState = sharedState
+
 		this.query = this.getQuery({
 			with: [contextTestTag],
 		})
 
-		const { payload } = this.compiler.compileEntity({
+		const { payload } = this.compileEntity({
 			contextTestTag: {},
 		})
 		this.creationPayload = payload

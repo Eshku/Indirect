@@ -35,7 +35,7 @@ export class PayloadCompilerTestSystem {
 			// Test compileComponent
 			describe('compileComponent()', () => {
 				it('should compile a single component payload and mutators', () => {
-					const { payload, mutators } = this.compiler.compileComponent(position, { x: 123, y: 456 })
+					const { payload, mutators } = this.compileComponent(position, { x: 123, y: 456 })
 
 					// Verify payload structure
 					expect(payload).toBeDefined()
@@ -64,7 +64,7 @@ export class PayloadCompilerTestSystem {
 				})
 
 				it('should compile a component with default values', () => {
-					const { mutators } = this.compiler.compileComponent(position, { x: 50 })
+					const { mutators } = this.compileComponent(position, { x: 50 })
 
 					expect(mutators.position.x[0]).toBe(50)
 					// The 'y' value was not provided, so it should fall back to the schema default, which is 0.
@@ -72,7 +72,7 @@ export class PayloadCompilerTestSystem {
 				})
 
 				it('should compile a flat array component correctly', () => {
-					const { payload, mutators } = this.compiler.compileComponent(flatArrayComponent, {
+					const { payload, mutators } = this.compileComponent(flatArrayComponent, {
 						primitiveArray: [10, 20, 30],
 					})
 
@@ -116,7 +116,7 @@ export class PayloadCompilerTestSystem {
 						u8: 8,
 						boolean: true,
 					}
-					const { mutators } = this.compiler.compileComponent(primitiveComponent, data)
+					const { mutators } = this.compileComponent(primitiveComponent, data)
 
 					expect(mutators.primitiveComponent.f64[0]).toBe(1.1)
 					// f32 will have precision loss
@@ -131,7 +131,7 @@ export class PayloadCompilerTestSystem {
 				})
 
 				it('should compile a string component', () => {
-					const { mutators } = this.compiler.compileComponent(stringComponent, { value: 'test_string' })
+					const { mutators } = this.compileComponent(stringComponent, { value: 'test_string' })
 					const internedId = stringInterningTable.intern('test_string')
 					expect(mutators.stringComponent.value[0]).toBe(internedId)
 				})
@@ -139,27 +139,27 @@ export class PayloadCompilerTestSystem {
 				it('should compile an enum component from a string', () => {
 					// The interpreter no longer supports string-to-number conversion for enums.
 					// Data must be provided in its raw, numeric form.
-					const { mutators } = this.compiler.compileComponent(enumComponent, { state: 2 })
+					const { mutators } = this.compileComponent(enumComponent, { state: 2 })
 					expect(mutators.enumComponent.state[0]).toBe(2)
 				})
 
 				it('should compile a bitmask component from a string array', () => {
 					// The interpreter no longer supports string-to-number conversion for bitmasks.
 					// Data must be provided in its raw, numeric form (1 | 4 = 5).
-					const { mutators } = this.compiler.compileComponent(bitmaskComponent, { flags: 5 })
+					const { mutators } = this.compileComponent(bitmaskComponent, { flags: 5 })
 					expect(mutators.bitmaskComponent.flags[0]).toBe(5)
 				})
 
 				it('should compile an entity reference component', () => {
 					const entityId = 1234567890123456789n
-					const { mutators } = this.compiler.compileComponent(entityRefComponent, { target: entityId })
+					const { mutators } = this.compileComponent(entityRefComponent, { target: entityId })
 
 					expect(mutators.entityRefComponent.target).toBeInstanceOf(BigUint64Array)
 					expect(mutators.entityRefComponent.target[0]).toBe(entityId)
 				})
 
 				it('should compile an RPN component', () => {
-					const { mutators } = this.compiler.compileComponent(rpnComponent, {
+					const { mutators } = this.compileComponent(rpnComponent, {
 						formulas: ['10 * BASE'],
 					})
 
@@ -189,7 +189,7 @@ export class PayloadCompilerTestSystem {
 				it('should compile a flat array of enums from strings', () => {
 					// The interpreter no longer supports string-to-number conversion for enums in arrays.
 					// Data must be provided in its raw, numeric form.
-					const { mutators } = this.compiler.compileComponent(flatArrayComponent, { enumArray: [1, 0] })
+					const { mutators } = this.compileComponent(flatArrayComponent, { enumArray: [1, 0] })
 
 					const eaMutator = mutators.flatArrayComponent.enumArray
 					const eaCountMutator = mutators.flatArrayComponent.enumArray_count
@@ -203,7 +203,7 @@ export class PayloadCompilerTestSystem {
 				})
 
 				it('should compile a flat array of strings', () => {
-					const { mutators } = this.compiler.compileComponent(flatArrayComponent, {
+					const { mutators } = this.compileComponent(flatArrayComponent, {
 						stringArray: ['a', 'b'],
 					})
 
@@ -228,7 +228,7 @@ export class PayloadCompilerTestSystem {
 						Position: { x: 10, y: 20 },
 						Velocity: { x: 1, y: 2 },
 					}
-					const { payload, mutators } = this.compiler.compileEntity(source)
+					const { payload, mutators } = this.compileEntity(source)
 
 					// Verify payload structure
 					expect(payload).toBeDefined()
@@ -259,7 +259,7 @@ export class PayloadCompilerTestSystem {
 				})
 
 				it('should compile an entity from a prefab name', () => {
-					const { payload, mutators } = this.compiler.compileEntity('test_prefab')
+					const { payload, mutators } = this.compileEntity('test_prefab')
 
 					// Prefab has Position: {x:0, y:0}, Velocity: {x:0, y:0}, TestEntityTag: {}
 					expect(mutators.position.x[0]).toBe(0)
@@ -286,7 +286,7 @@ export class PayloadCompilerTestSystem {
 						Position: { y: 99 },
 						Velocity: { x: -10 },
 					}
-					const { payload, mutators } = this.compiler.compileEntity('test_prefab', overrides)
+					const { payload, mutators } = this.compileEntity('test_prefab', overrides)
 
 					// Prefab has Position: {x:0, y:0}, Velocity: {x:0, y:0}
 					// Overrides change y to 99 and x to -10
@@ -314,7 +314,7 @@ export class PayloadCompilerTestSystem {
 						Position: { x: 10, y: 20 },
 						Velocity: { x: 1, y: 2 },
 					}
-					const { payload, mutators } = this.compiler.compileEntities(source)
+					const { payload, mutators } = this.compileEntities(source)
 
 					// Verify payload structure
 					expect(payload).toBeDefined()
