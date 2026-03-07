@@ -36,20 +36,12 @@ This is a foundation for what could become an engine, built around a hybrid para
 
 ## Architecture
 
-Engine's architecture is composed of several core concepts that work together.
-
 - **Entity**: A simple ID representing a game object.
 - **Component**: A schema defining a piece of data associated with an entity.
 - **Archetype**: A unique combination of components. All entities with same set of components belong to same archetype.
 - **[System](app/client/Systems)**: A class containing game logic that operates on entities.
 - **[Kernel](app/client/Kernels)**: A pure function containing logic designed to be run in parallel on worker threads.
 - **[Manager](app/client/Managers)**: A class that owns a resource and provides an API to interact with it.
-
-### Archetypes and Chunks
-
-Engine's core is a data-oriented design using **Archetypes** and **Chunks**.
-
-An archetype's data is organized into fixed-size **Chunks**. A chunk is a contiguous block of memory that stores entities and their component data in a **Structure of Arrays (SoA)** layout. Component data is allocated in `SharedArrayBuffer`s, enabling zero-copy data access for worker threads. Systems iterate over these chunks, processing data in a cache-friendly manner.
 
 ## Key Features
 
@@ -58,17 +50,22 @@ An archetype's data is organized into fixed-size **Chunks**. A chunk is a contig
 Components are defined as plain JavaScript objects that act as a schema, dictating how data is stored.
 
 - **`PlayerTag` (Tag Component):**
+
   ```javascript
   export const PlayerTag = {}
   ```
+
 - **`Health` (Primitive Types):**
+
   ```javascript
   export const Health = {
   	value: { type: 'f32', default: 100 },
   	max: { type: 'f32', default: 100 },
   }
   ```
+
 - **`Name` (String):**
+
   ```javascript
   export const Name = {
   	name: { type: 'string', default: 'No Name' },
@@ -214,9 +211,9 @@ export class PhysicsSystem {
 }
 ```
 
-### System API Extensions
+### [System API Extensions](app/client/Core/Extends/systemExtends.js)
 
-To reduce boilerplate, common functionalities are automatically added to every system instance before its `init()` method is called.
+To reduce boilerplate, common functionalities are automatically added to every system by instance before its `init()` method is called.
 
 Injected properties include:
 
