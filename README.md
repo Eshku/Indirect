@@ -165,7 +165,7 @@ export function applyGravityAndMove(payload, systemContext, kernelContext) {
 }
 ```
 
-**2. System (`/app/client/Systems/Gameplay/PhysicsSystem.js`)**
+**2. System (`/app/client/Systems/`)**
 
 The System class orchestrates work from main thread.
 
