@@ -104,7 +104,10 @@ class PayloadCompiler {
 		const { payload, mutators } = this._compile(archetypeId, componentDataMap)
 
 		return {
-			payload: { typeID, data: payload.data },
+			payload: {
+				typeID,
+				data: payload.data,
+			},
 			mutators,
 		}
 	}
@@ -170,7 +173,6 @@ class PayloadCompiler {
 			const componentName = Schema.componentNames[typeID]
 			const compiledDefaults = Schema.compiledDefaults[typeID]
 			const initialData = componentDataMap.get(typeID) || {}
-
 			mutators[componentName] = {}
 
 			// Execute the pre-compiled mutator factory functions from the schema.

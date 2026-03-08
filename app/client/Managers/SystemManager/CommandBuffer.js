@@ -16,11 +16,20 @@ export class CommandBuffer {
 	constructor() {
 		this.rawBuffer = new RawCommandBuffer()
 		this.sortableBuffer = new SortableCommandBuffer()
-		// Counter for generating unique placeholder IDs.
 		// We use a BigInt to match the entity ID type.
 		this.placeholderIdCounter = 0n
 	}
 
+	/**
+	 * Clears the buffers for the next frame. Called by the CommandBufferExecutor after a flush.
+	 */
+	clear() {
+		this.rawBuffer.reset()
+		this.sortableBuffer.clear()
+		this.dynamicArray._reset()
+		this.placeholderIdCounter = 0n
+	}
+	
 	/**
 	 * Clears the buffers for the next frame. Called by the SystemManager after a flush.
 	 */
@@ -217,6 +226,7 @@ export class CommandBuffer {
 		this.rawBuffer.writeU8(OpCodes.CREATE_ENTITY)
 		this.rawBuffer.writeU64(placeholderId) // Write the placeholder for resolution
 		this.rawBuffer.writeU16(payload.archetypeId)
+		// Main component data
 		this.rawBuffer.writeU16(payload.data.byteLength)
 		this.rawBuffer.writeBuffer(payload.data)
 

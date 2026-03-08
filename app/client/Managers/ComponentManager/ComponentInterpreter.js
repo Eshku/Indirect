@@ -72,6 +72,11 @@ export function interpret(typeID, data) {
 				rawData[propName] = BigInt(propValue || 0)
 				break
 			case 'flat_array': {
+				// This block is for the write path of flat_array.
+				// It unnests a designer-friendly array into individual properties
+				// (e.g., `myArray: [1,2]` -> `myArray0: 1, myArray1: 2, myArray_count: 2`).
+				// Dynamic arrays are handled differently and don't need this transformation.
+
 				const { capacity, lengthProperty, itemRepresentation } = rep
 				const sourceArray = propValue || []
 				const liveLength = Math.min(sourceArray.length, capacity)

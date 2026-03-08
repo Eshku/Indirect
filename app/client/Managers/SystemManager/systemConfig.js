@@ -78,9 +78,7 @@ export const systemSchedule = {
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
-		
-		
-		
+
 		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
 	],
 
@@ -91,6 +89,8 @@ export const systemSchedule = {
 		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */
 
 		/* { name: 'RWMBenchmark', frequency: 'logic' },  */
+		/* { name: 'MemoryBenchmark', frequency: 'logic' }, */
+
 		
 		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
@@ -111,9 +111,9 @@ export const systemSchedule = {
 	],
 
 	CoreTests: [
-		/* { name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
+/* 		{ name: 'SchemaTestSystem', frequency: 'none' },
+		{ name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
-		/* { name: 'SchemaTestSystem', frequency: 'none' }, */
 		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */
 	],
 

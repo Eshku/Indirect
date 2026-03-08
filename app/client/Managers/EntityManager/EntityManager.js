@@ -100,10 +100,8 @@ export const entityStore = {
 // Initialize atomic nextArchetypeId to 0. The first archetype will be ID 0.
 Atomics.store(entityStore.nextArchetypeId, 0, 0)
 
-
 //! xxhash for archetypes
 //TODO move store out at some point
-
 
 export class EntityManager {
 	constructor() {
@@ -903,7 +901,6 @@ export class EntityManager {
 		if (!targetComponentIdArray) return plan
 
 		for (const typeID of targetComponentIdArray) {
-
 			// Use the new, fast binary search `hasComponentType`
 			if (this.hasComponentType(sourceArchetypeId, typeID)) {
 				// Pre-calculate flattened list of properties to copy.
@@ -1274,9 +1271,7 @@ export class EntityManager {
 					propArrays[propKey] = new constructor(buffer)
 				}
 				newComponentData[typeID] = propArrays
-				newDirtyTicks[typeID] = new Uint32Array(
-					new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT),
-				)
+				newDirtyTicks[typeID] = new Uint32Array(new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT))
 			}
 		}
 

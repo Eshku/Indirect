@@ -16,7 +16,6 @@ This is a foundation for what could become an engine, built around a hybrid para
 
 ## Potential future improvements:
 
-- Dynamic (packed) arrays
 - Relational Queries
 - Thread-safe Command Buffer
 - Thread-safe Shared Component Data / prototypes.
@@ -74,7 +73,7 @@ Components are defined as plain JavaScript objects that act as a schema, dictati
 
 **Schema Types:**
 
-- **Primitives**: `f64`, `f32`, `i32`, `u32`, `i16`, `u16`, `i8`, `u8`, `boolean`, `u64`, `entity`.
+- **Primitives**: `f64`, `f32`, `i32`, `u32`, `i16`, `u16`, `i8`, `u8`, `u64`.
 - **`string`**: Interned string data, stored as a `u32` reference.
 - **`enum`**: For mutually exclusive states, defined with a key-value object.
 - **`bitmask`**: For properties that can have multiple states simultaneously.
