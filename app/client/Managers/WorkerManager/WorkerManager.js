@@ -1,6 +1,6 @@
-const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
-const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
-const { kernelRegistry } = await import(`${PATH_MANAGERS}/SystemManager/KernelRegistry.js`)
+const { eventEmitter } = await import(`@core/Classes/EventEmitter.js`)
+const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
+const { kernelRegistry } = await import(`@managers/SystemManager/KernelRegistry.js`)
 
 /**
  * Manages a pool of Web Workers for parallel job execution.
@@ -35,9 +35,9 @@ export class WorkerManager {
 		this.workerCount = Math.max(1, hardwareConcurrency - 1)
 		this.totalThreads = this.workerCount + 1
 
-		const { createURLFromString } = await import(`${PATH_CORE}/utils/blob.js`)
+		const { createURLFromString } = await import(`@core/utils/blob.js`)
 		// This is a dynamic import that will only be resolved in a dev environment
-		this.importFromString = (await import(`${PATH_CORE}/utils/blob.js`)).importFromString
+		this.importFromString = (await import(`@core/utils/blob.js`)).importFromString
 
 		const workerURL = new URL(`./worker.js`, import.meta.url)
 

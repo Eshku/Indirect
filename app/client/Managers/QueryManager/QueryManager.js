@@ -1,6 +1,6 @@
-const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`)
+const { Query } = await import(`@managers/QueryManager/Query.js`)
 
-const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 
 
 //! Query mutability going to be decided later on.

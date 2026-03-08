@@ -1,9 +1,9 @@
-const { ChunkView } = await import(`${PATH_MANAGERS}/QueryManager/ChunkView.js`)
-const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
-const { kernelRegistry } = await import(`${PATH_MANAGERS}/SystemManager/KernelRegistry.js`)
-const { MPSCQueue, MPSC_QUEUE_CAPACITY } = await import(`${PATH_CORE}/Algorithms/MPSCQueue.js`)
+const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
+const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
+const { kernelRegistry } = await import(`@managers/SystemManager/KernelRegistry.js`)
+const { MPSCQueue, MPSC_QUEUE_CAPACITY } = await import(`@core/Algorithms/MPSCQueue.js`)
 const { WorkStealingDeque, NO_JOB_AVAILABLE, DEQUE_CAPACITY } = await import(
-	`${PATH_CORE}/Algorithms/WorkStealingDeque.js`
+	`@core/Algorithms/WorkStealingDeque.js`
 )
 
 import {

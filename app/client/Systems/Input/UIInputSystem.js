@@ -1,6 +1,6 @@
-const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
+const { eventEmitter } = await import(`@core/Classes/EventEmitter.js`)
 
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 
 const { uiManager, inputManager } = engine.getManagers()
 

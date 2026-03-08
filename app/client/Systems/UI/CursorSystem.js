@@ -1,10 +1,10 @@
-const { Cursor } = await import(`${PATH_UI}/Cursor.js`)
-const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
-const { Easing } = await import(`${PATH_CORE}/utils/easing.js`)
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { Cursor } = await import(`@ui/Cursor.js`)
+const { lerp } = await import(`@core/utils/lerp.js`)
+const { Easing } = await import(`@core/utils/easing.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
-const { lerpColor } = await import(`${PATH_CORE}/utils/lerp.js`)
-const { CursorState: CursorStateDef } = await import(`${PATH_CLIENT}/Components/UI/CursorState.js`)
+const { lerpColor } = await import(`@core/utils/lerp.js`)
+const { CursorState: CursorStateDef } = await import(`@client/Components/UI/CursorState.js`)
 
 const DEFAULT_STATES = {
 	// Default "aiming" state when over empty ground.

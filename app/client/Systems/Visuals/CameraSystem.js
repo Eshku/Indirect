@@ -1,7 +1,7 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs, layerManager, gameManager } = engine.getManagers()
 
-const { lerp } = await import(`${PATH_CORE}/utils/lerp.js`)
+const { lerp } = await import(`@core/utils/lerp.js`)
 
 const { playerTag, position } = ecs.getTypeIDs()
 

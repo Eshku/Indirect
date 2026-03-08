@@ -71,10 +71,10 @@
  *   vector component (-1, 0, or 1).
  *
  */
-const { loadAllComponents } = await import(`${PATH_MANAGERS}/ComponentManager/componentLoader.js`)
+const { loadAllComponents } = await import(`@managers/ComponentManager/componentLoader.js`)
 const { schemaCompiler } = await import('./SchemaCompiler.js')
 const { reconstruct } = await import('./ComponentInterpreter.js')
-const { toCamelCase } = await import(`${PATH_CORE}/utils/stringUtils.js`)
+const { toCamelCase } = await import(`@core/utils/stringUtils.js`)
 
 import * as Schema from './ComponentSchema.js'
 

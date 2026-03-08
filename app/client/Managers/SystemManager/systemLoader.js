@@ -16,7 +16,7 @@ export async function loadAllSystems() {
 	for (const category in systemTree) {
 		for (const moduleName of systemTree[category]) {
 			try {
-				const modulePath = `${PATH_SYSTEMS}/${category}/${moduleName}.js`
+				const modulePath = `@systems/${category}/${moduleName}.js`
 				const module = await import(modulePath)
 				loadedModules.set(moduleName, module)
 			} catch (error) {

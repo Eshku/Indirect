@@ -29,7 +29,7 @@ const MANAGER_INIT_ORDER = [
 	'TestManager',
 ]
 
-const { toCamelCase } = await import(`${PATH_CORE}/utils/stringUtils.js`)
+const { toCamelCase } = await import('@core/utils/stringUtils.js')
 
 export class Engine {
 	constructor() {
@@ -119,52 +119,51 @@ export class Engine {
 	async loadAllManagers() {
 		const loadedManagers = new Map()
 		//! prep for restructure, no auto-load for now
-
-		const { ecs } = await import(`${PATH_MANAGERS}/EntityManager/ECS.js`)
+		const { ecs } = await import('@managers/EntityManager/ECS.js')
 		loadedManagers.set('ecs', ecs)
 
-		const { componentManager } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentManager.js`)
+		const { componentManager } = await import('@managers/ComponentManager/ComponentManager.js')
 		loadedManagers.set('ComponentManager', componentManager)
 
-		const { entityManager } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+		const { entityManager } = await import('@managers/EntityManager/EntityManager.js')
 		loadedManagers.set('EntityManager', entityManager)
 
-		const { queryManager } = await import(`${PATH_MANAGERS}/QueryManager/QueryManager.js`)
+		const { queryManager } = await import('@managers/QueryManager/QueryManager.js')
 		loadedManagers.set('QueryManager', queryManager)
 
-		const { prefabManager } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabManager.js`)
+		const { prefabManager } = await import('@managers/PrefabManager/PrefabManager.js')
 		loadedManagers.set('PrefabManager', prefabManager)
 
-		const { systemManager } = await import(`${PATH_MANAGERS}/SystemManager/SystemManager.js`)
+		const { systemManager } = await import('@managers/SystemManager/SystemManager.js')
 		loadedManagers.set('SystemManager', systemManager)
 
-		const { layerManager } = await import(`${PATH_MANAGERS}/LayerManager/LayerManager.js`)
+		const { layerManager } = await import('@managers/LayerManager/LayerManager.js')
 		loadedManagers.set('LayerManager', layerManager)
 
-		const { gameManager } = await import(`${PATH_MANAGERS}/GameManager/GameManager.js`)
+		const { gameManager } = await import('@managers/GameManager/GameManager.js')
 		loadedManagers.set('GameManager', gameManager)
 
-		const { assetManager } = await import(`${PATH_MANAGERS}/AssetManager/AssetManager.js`)
+		const { assetManager } = await import('@managers/AssetManager/AssetManager.js')
 		loadedManagers.set('AssetManager', assetManager)
 
 		// --- User-Facing systems ---
-		const { uiManager } = await import(`${PATH_MANAGERS}/UiManager/UiManager.js`)
+		const { uiManager } = await import('@managers/UiManager/UiManager.js')
 		loadedManagers.set('UiManager', uiManager)
 
-		const { inputManager } = await import(`${PATH_MANAGERS}/InputManager/InputManager.js`)
+		const { inputManager } = await import('@managers/InputManager/InputManager.js')
 		loadedManagers.set('InputManager', inputManager)
 
 		// --- Utility & Development ---
-		const { testManager } = await import(`${PATH_MANAGERS}/TestManager/TestManager.js`)
+		const { testManager } = await import('@managers/TestManager/TestManager.js')
 		loadedManagers.set('TestManager', testManager)
 
-		const { workerManager } = await import(`${PATH_MANAGERS}/WorkerManager/WorkerManager.js`)
+		const { workerManager } = await import('@managers/WorkerManager/WorkerManager.js')
 		loadedManagers.set('WorkerManager', workerManager)
 
-		const { physicsManager } = await import(`${PATH_MANAGERS}/PhysicsManager/PhysicsManager.js`)
+		const { physicsManager } = await import('@managers/PhysicsManager/PhysicsManager.js')
 		loadedManagers.set('PhysicsManager', physicsManager)
 
-		const { sharedDataManager } = await import(`${PATH_MANAGERS}/SharedDataManager/SharedDataManager.js`)
+		const { sharedDataManager } = await import('@managers/SharedDataManager/SharedDataManager.js')
 		loadedManagers.set('SharedDataManager', sharedDataManager)
 
 		return loadedManagers

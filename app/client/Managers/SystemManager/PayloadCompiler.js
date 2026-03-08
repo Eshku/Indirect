@@ -19,19 +19,12 @@
  * provided by the `SchemaCompiler` to create the final payload and its mutators.
  */
 
-const { interpret } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
+const { interpret } = await import(`@managers/ComponentManager/ComponentInterpreter.js`)
 
-const Schema = await import(`${PATH_MANAGERS}/ComponentManager/ComponentSchema.js`)
+const Schema = await import(`@managers/ComponentManager/ComponentSchema.js`)
 
 class PayloadCompiler {
-	constructor() {
-		this.componentManager = null
-		this.prefabManager = null
-		this.sharedDataManager = null
-	}
-
 	init(ecs) {
-		this.componentManager = ecs.engine.componentManager
 		this.entityManager = ecs.engine.entityManager
 		this.prefabManager = ecs.engine.prefabManager
 		this.sharedDataManager = ecs.engine.sharedDataManager

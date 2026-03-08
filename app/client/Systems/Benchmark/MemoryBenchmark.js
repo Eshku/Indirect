@@ -1,4 +1,4 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
 const { memoryComponent, memoryTag } = ecs.getTypeIDs()
@@ -23,7 +23,6 @@ export class MemoryBenchmark {
 			with: [memoryComponent, memoryTag],
 		})
 
-		// Would heavily depend on RAM.
 		this.entityCount = 8_000_000
 
 		const { payload } = this.compileEntity({

@@ -16,7 +16,7 @@ export async function loadAllComponents() {
 	for (const category in componentTree) {
 		for (const moduleName of componentTree[category]) {
 			try {
-				const modulePath = `${PATH_COMPONENTS}/${category}/${moduleName}.js`
+				const modulePath = `@components/${category}/${moduleName}.js`
 				const module = await import(modulePath)
 				// The component definition is now expected to be the main export,
 				// or an export with the same name as the module.

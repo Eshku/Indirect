@@ -1,6 +1,6 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs, layerManager, assetManager } = engine.getManagers()
-const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
+const { stringInterningTable } = await import(`@indirect/StringInterningTable.js`)
 
 const { viewable, layer } = ecs.getTypeIDs()
 

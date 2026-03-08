@@ -1,4 +1,4 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 
 /**
  * Manages UI elements that can be interacted with, for effects like hovering.

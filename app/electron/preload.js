@@ -6,11 +6,11 @@ const { contextBridge, ipcRenderer } = require('electron')
  * direct exposure of `ipcRenderer` or other Node.js modules.
  */
 contextBridge.exposeInMainWorld('electronAPI', {
-	// Prefab & Data Loading 
+	// Prefab & Data Loading
 	getPrefabData: prefabPath => ipcRenderer.invoke('get-prefab-data', prefabPath),
 	getPrefabManifest: () => ipcRenderer.invoke('get-prefab-manifest'),
 
-	// Filesystem & Metadata 
+	// Filesystem & Metadata
 	getRootDirectory: () => ipcRenderer.invoke('get-root-directory'),
 	getEnv: () => ipcRenderer.invoke('get-env'),
 	saveFile: (filePath, data) => ipcRenderer.invoke('save-file', filePath, data),
@@ -20,12 +20,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	getKernelSource: fileName => ipcRenderer.invoke('get-kernel-source', fileName),
 	getManagerTree: () => ipcRenderer.invoke('get-manager-tree'),
 
-	// Workers 
-	getWorkerCode: relativeWorkerPath => ipcRenderer.invoke('get-worker-code', relativeWorkerPath),
-
-	// Dev Tools 
+	// Dev Tools
 	toggleDevTools: () => ipcRenderer.send('toggle-dev-tools'),
 
 	// HMR (Hot Module Replacement)
-	onHmrUpdate: (callback) => ipcRenderer.on('hmr-update', (event, data) => callback(data)),
+	onHmrUpdate: callback => ipcRenderer.on('hmr-update', (event, data) => callback(data)),
 })

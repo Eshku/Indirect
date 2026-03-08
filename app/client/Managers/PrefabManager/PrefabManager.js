@@ -1,8 +1,8 @@
-const { LRUCache } = await import(`${PATH_CORE}/DataStructures/LRUCache.js`)
+const { LRUCache } = await import(`@core/DataStructures/LRUCache.js`)
 
-const { Schema } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentSchema.js`)
+const { Schema } = await import(`@managers/ComponentManager/ComponentSchema.js`)
 
-const { PrefabLoader } = await import(`${PATH_MANAGERS}/PrefabManager/PrefabLoader.js`)
+const { PrefabLoader } = await import(`@managers/PrefabManager/PrefabLoader.js`)
 
 /**
  * Manages prefab definitions, which serve as templates for creating entities.
@@ -46,8 +46,7 @@ export class PrefabManager {
 		// --- Permanent Caches for Prefab Templates ---
 		// These store the canonical, processed data for prefabs defined in files.
 		// They are now stored in arrays, indexed by a numeric prefab ID for O(1) access.
-		this.processedPrefabCache = []
-		this.processedChildrenCache = []
+		this.processedPrefabCache = [] // This now stores the final component data object.
 		// Cache for raw data from files to avoid repeated file system access.
 		this.rawPrefabDataCache = new Map()
 
@@ -112,12 +111,12 @@ export class PrefabManager {
 	 * This method does NOT perform file I/O and will only return data that
 	 * has been pre-loaded. It is used for the high-performance creation path.
 	 * @param {string} prefabName - The name of the prefab from the manifest.
-	 * @returns {{components: object, children: object[]} | null} The cached data or null if not found.
+	 * @returns {object | null} The cached component data object or null if not found.
 	 */
 	getPrefabData(prefabName) {
 		const id = this.getPrefabId(prefabName)
 		if (id === undefined) {
-			// This can be a valid case for external callers, so we don't error, just return null.
+			// This can be a valid case for external callers, so we don't error, just return null
 			return null
 		}
 		return this.getPrefabDataById(id)
@@ -144,15 +143,15 @@ export class PrefabManager {
 	/**
 	 * The new internal, high-performance way to get prefab data, used by the CommandBufferExecutor.
 	 * @param {number} id The numeric ID of the prefab.
-	 * @returns {{components: object, children: object[]} | null}
+	 * @returns {object | null} The cached component data object or null if not found.
 	 */
 	getPrefabDataById(id) {
 		const components = this.processedPrefabCache[id]
 		if (components === undefined) {
 			console.error(`PrefabManager: Prefab with id '${id}' was not preloaded. Use preload() during setup.`)
-			return null
+			return null // Return null to indicate the prefab data is not available.
 		}
-		return { components, children: this.processedChildrenCache[id] || [] }
+		return components
 	}
 
 	/**
@@ -160,7 +159,7 @@ export class PrefabManager {
 	 * This is intended to be used during a loading phase.
 	 * @param {string} prefabName - The name of the prefab (e.g., 'Items/Skills/Fireball').
 	 * @param {Set<string>} [visited=new Set()] - Used internally to detect circular dependencies.
-	 * @returns {Promise<{components: object, children: object[]}|null>} The resolved prefab data or null if not found.
+	 * @returns {Promise<object|null>} The resolved component data object or null if not found.
 	 * @private
 	 */
 	async _processPrefabData(prefabName, visited = new Set()) {
@@ -178,10 +177,7 @@ export class PrefabManager {
 		// Check cache for final, merged data first.
 		const cachedComponents = this.processedPrefabCache[id]
 		if (cachedComponents) {
-			return {
-				components: cachedComponents,
-				children: this.processedChildrenCache[id] || [],
-			}
+			return cachedComponents
 		}
 
 		if (visited.has(prefabName)) {
@@ -210,19 +206,13 @@ export class PrefabManager {
 		}
 
 		let baseComponents = {}
-		let baseChildren = []
 		if (rawData.extends) {
 			const extendNames = Array.isArray(rawData.extends) ? rawData.extends : [rawData.extends]
 
 			for (const extendName of extendNames) {
 				const basePrefabData = await this._processPrefabData(extendName, new Set(visited))
 				if (basePrefabData) {
-					if (basePrefabData.components) {
-						baseComponents = this._deepMerge(baseComponents, basePrefabData.components)
-					}
-					if (basePrefabData.children) {
-						baseChildren = [...baseChildren, ...basePrefabData.children]
-					}
+					baseComponents = this._deepMerge(baseComponents, basePrefabData)
 				} else {
 					console.warn(`PrefabManager: Could not resolve extended prefab '${extendName}' for prefab '${prefabName}'.`)
 				}
@@ -234,21 +224,13 @@ export class PrefabManager {
 
 		const mergedComponents = this._deepMerge(baseComponents, processedOwnComponents)
 
-		const resolvedOwnChildren = await this._resolveChildren(rawData.children || [], new Set(visited), prefabName)
-		const finalChildren = [...baseChildren, ...resolvedOwnChildren]
-
-		// --- Pre-processing Optimization ---
-		// Pre-process the final components into a typeID-keyed map and cache it.
-		// This avoids this expensive conversion on every `instantiate` call.
-
 		// Automatically add the Prefab component to the root entity's data.
 		// This ensures every instantiated entity knows its numeric prefab ID.
 		mergedComponents.Prefab = { id: id }
 
 		this.processedPrefabCache[id] = mergedComponents
-		this.processedChildrenCache[id] = finalChildren
 
-		return { components: mergedComponents, children: finalChildren }
+		return mergedComponents
 	}
 
 	/**
@@ -308,103 +290,6 @@ export class PrefabManager {
 	}
 
 	/**
-	 * [DEPRECATION CANDIDATE]
-	 *
-	 * ---
-	 * ### Architectural Discussion: Declarative vs. System-Driven Hierarchies
-	 *
-	 * This method, and the `children` property in prefabs, represents a **declarative** approach to
-	 * creating entity hierarchies. The entire object graph is defined in data (`Player.json`), and `ECS.instantiate`
-	 * creates the whole tree in a single, atomic operation.
-	 *
-	 * **Pros of the current approach:**
-	 * - **Simplicity:** `ECS.instantiate('player')` creates the player and all their skills at once.
-	 * - **Data-Purity:** The structure is entirely defined in the JSON, which is great for simple, static objects (e.g., a crate with a lid).
-	 *
-	 * **Cons & Future Direction:**
-	 * - **Rigidity:** This approach is inflexible. It cannot handle dynamic hierarchies, such as a player whose skills are determined by saved game data or in-game choices. The hierarchy is baked into the prefab data.
-	 * - **Complexity Misplacement:** It pushes significant recursive complexity into the core `PrefabManager` and instantiation logic, which should ideally be generic.
-	 *
-	 * The long-term, more flexible solution is a **system-driven** approach. In this model:
-	 * 1.  A prefab like `Player.json` would be simplified to only contain the player's core components, plus a new component like `InitialLoadout: { skills: ['fireball', 'searing_boulder'] }`. It would have no `children` array.
-	 * 2.  A new, dedicated system (e.g., `InitialLoadoutSystem`) would query for entities with an `InitialLoadout` component.
-	 * 3.  This system would then read the `skills` array and use `this.commands.instantiate()` to create the child skill entities, assigning the player as their parent.
-	 *
-	 * This moves the responsibility of "assembling a player" from the generic `PrefabManager` into a specific, logical `InitialLoadoutSystem`, which is a much cleaner design. It gives developers the power to build complex, state-dependent hierarchies using code, which is far more expressive than static JSON.
-	 *
-	 * **Prerequisite:** This superior system-driven approach is currently blocked by the lack of **placeholder entity IDs**. Without them, a system cannot create a parent and child in the same frame and establish a relationship between them before they have actual IDs.
-	 *
-	 * **Conclusion:** The `children` property is considered a temporary solution for simple, static hierarchies. It will be deprecated for complex entities once placeholder IDs are implemented, in favor of the more robust and flexible system-driven pattern.
-	 * ---
-	 *
-	 * Recursively resolves `extends` within an array of child entity definitions.
-	 * This allows for prefab inheritance at any level of the entity hierarchy.
-	 * @param {object[]} children - The array of child entity definitions.
-	 * @param {Set<string>} visited - Used to detect circular dependencies in prefab inheritance.
-	 * @param {string} rootPrefabName - The name of the top-level prefab being processed, for logging.
-	 * @returns {Promise<object[]>} The resolved array of child definitions.
-	 * @private
-	 */
-	async _resolveChildren(children, visited, rootPrefabName) {
-		if (!children || !Array.isArray(children)) {
-			return []
-		}
-
-		const resolvedChildren = []
-		for (const childDef of children) {
-			let currentChild = { ...childDef }
-			let prefabIdForChild = null
-
-			if (currentChild.extends) {
-				prefabIdForChild = currentChild.extends
-				const basePrefabData = await this._processPrefabData(currentChild.extends, new Set(visited))
-
-				if (basePrefabData) {
-					// The base prefab data is the foundation.
-					// The child definition in the parent prefab acts as a set of overrides.
-					// _deepMerge will handle merging 'components' and 'children' arrays correctly.
-					const mergedChild = this._deepMerge(basePrefabData, currentChild)
-					delete mergedChild.extends // Clean up the extends property after merging
-					currentChild = mergedChild
-				} else {
-					console.warn(
-						`PrefabManager: In prefab '${rootPrefabName}', could not resolve extended child prefab '${childDef.extends}'.`,
-					)
-					delete currentChild.extends
-				}
-			}
-
-			// If the child was extended, we should ensure it has a PrefabId component
-			// pointing to the prefab it was extended from. This is crucial for systems
-			// that need to identify the type of a child entity (e.g., for cooldowns).
-			if (prefabIdForChild) {
-				currentChild.components = currentChild.components || {}
-				const childId = this.getPrefabId(prefabIdForChild)
-				if (!currentChild.components.Prefab && childId !== undefined) {
-					currentChild.components.Prefab = { id: BigInt(childId) }
-				}
-			}
-
-			// If the child has a `key`, automatically add a `PrefabChildKey` component
-			// to it. This is crucial for relational lookups by systems like the TooltipSystem.
-			if (currentChild.key) {
-				currentChild.components = currentChild.components || {}
-				if (!currentChild.components.PrefabChildKey) {
-					currentChild.components.PrefabChildKey = { key: currentChild.key }
-				}
-			}
-
-			// Now, recursively resolve the children of this newly merged child definition.
-			if (currentChild.children) {
-				currentChild.children = await this._resolveChildren(currentChild.children, new Set(visited), rootPrefabName)
-			}
-
-			resolvedChildren.push(currentChild)
-		}
-		return resolvedChildren
-	}
-
-	/**
 	 * Deeply merges source object into target object without mutating the target.
 	 * @param {object} target - The target object.
 	 * @param {object} source - The source object.
@@ -417,54 +302,14 @@ export class PrefabManager {
 			Object.keys(source).forEach(key => {
 				if (this._isObject(source[key]) && key in target && this._isObject(target[key])) {
 					// Recursive merge for nested objects
-					output[key] = this._deepMerge(target[key], source[key])
-				} else if (Array.isArray(source[key]) && key in target && Array.isArray(target[key])) {
-					// Custom array merging logic for arrays of objects with a 'key'
-					output[key] = this._mergeArrayByKey(target[key], source[key])
+					output[key] = this._deepMerge(target[key], source[key]);
 				} else {
 					// Default behavior: source property overwrites target property
 					output[key] = source[key]
 				}
 			})
-		}
-		return output
-	}
-
-	/**
-	 * Merges two arrays of objects, using a `key` property to identify objects for merging.
-	 * If an object in `sourceArray` has a key that exists in `targetArray`, the objects are deep-merged.
-	 * If the key does not exist, the object is added to the array. This preserves the order of the target array
-	 * and appends new, non-keyed, or un-matched-key items from the source array.
-	 * @param {object[]} targetArray - The base array.
-	 * @param {object[]} sourceArray - The array with overrides/additions.
-	 * @returns {object[]} The merged array.
-	 * @private
-	 */
-	_mergeArrayByKey(targetArray, sourceArray) {
-		const sourceMap = new Map(sourceArray.filter(item => item && item.key).map(item => [item.key, item]))
-		const merged = []
-		const processedSourceKeys = new Set()
-
-		// Iterate through target array to merge with matching source items
-		targetArray.forEach(targetItem => {
-			const key = targetItem && targetItem.key
-			if (key && sourceMap.has(key)) {
-				merged.push(this._deepMerge(targetItem, sourceMap.get(key)))
-				processedSourceKeys.add(key)
-			} else {
-				merged.push(targetItem)
-			}
-		})
-
-		// Add new items from source array that were not used for merging
-		sourceArray.forEach(sourceItem => {
-			const key = sourceItem && sourceItem.key
-			if (!key || !processedSourceKeys.has(key)) {
-				merged.push(sourceItem)
-			}
-		})
-
-		return merged
+		} 
+		return output;
 	}
 
 	/**

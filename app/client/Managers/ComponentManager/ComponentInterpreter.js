@@ -15,8 +15,8 @@
  * the reverse "reconstruction" process. It is stateless and has no manager dependencies.
  */
 
-const { compileFormulaToRPN } = await import(`${PATH_CORE}/Algorithms/FormulaParser.js`)
-const { stringInterningTable } = await import(`${PATH_INDIRECT}/StringInterningTable.js`)
+const { compileFormulaToRPN } = await import(`@core/Algorithms/FormulaParser.js`)
+const { stringInterningTable } = await import(`@indirect/StringInterningTable.js`)
 import * as Schema from './ComponentSchema.js'
 
 let RPN_CONFIG = null
@@ -29,8 +29,19 @@ function getRpnConfig() {
 		RPN_OP,
 		FORMULA_PARSER_CONFIG: {
 			opcodes: RPN_OP,
-			variables: { BASE: [RPN_OP.PUSH_BASE], STR: [RPN_OP.PUSH_STAT, STAT_MAP.STR], DEX: [RPN_OP.PUSH_STAT, STAT_MAP.DEX], INT: [RPN_OP.PUSH_STAT, STAT_MAP.INT], VIT: [RPN_OP.PUSH_STAT, STAT_MAP.VIT] },
-			operators: { '+': { precedence: 1, opcode: RPN_OP.ADD }, '-': { precedence: 1, opcode: RPN_OP.SUBTRACT }, '*': { precedence: 2, opcode: RPN_OP.MULTIPLY }, '/': { precedence: 2, opcode: RPN_OP.DIVIDE } },
+			variables: {
+				BASE: [RPN_OP.PUSH_BASE],
+				STR: [RPN_OP.PUSH_STAT, STAT_MAP.STR],
+				DEX: [RPN_OP.PUSH_STAT, STAT_MAP.DEX],
+				INT: [RPN_OP.PUSH_STAT, STAT_MAP.INT],
+				VIT: [RPN_OP.PUSH_STAT, STAT_MAP.VIT],
+			},
+			operators: {
+				'+': { precedence: 1, opcode: RPN_OP.ADD },
+				'-': { precedence: 1, opcode: RPN_OP.SUBTRACT },
+				'*': { precedence: 2, opcode: RPN_OP.MULTIPLY },
+				'/': { precedence: 2, opcode: RPN_OP.DIVIDE },
+			},
 		},
 	}
 	return RPN_CONFIG
@@ -72,11 +83,6 @@ export function interpret(typeID, data) {
 				rawData[propName] = BigInt(propValue || 0)
 				break
 			case 'flat_array': {
-				// This block is for the write path of flat_array.
-				// It unnests a designer-friendly array into individual properties
-				// (e.g., `myArray: [1,2]` -> `myArray0: 1, myArray1: 2, myArray_count: 2`).
-				// Dynamic arrays are handled differently and don't need this transformation.
-
 				const { capacity, lengthProperty, itemRepresentation } = rep
 				const sourceArray = propValue || []
 				const liveLength = Math.min(sourceArray.length, capacity)
@@ -101,7 +107,9 @@ export function interpret(typeID, data) {
 			case 'rpn': {
 				const { FORMULA_PARSER_CONFIG } = getRpnConfig()
 				const { streamProperty, startsProperty, lengthsProperty, instanceCapacity } = rep
-				const rpnStream = [], formulaStarts = [], formulaLengths = []
+				const rpnStream = [],
+					formulaStarts = [],
+					formulaLengths = []
 				const liveLength = Math.min(propValue.length, instanceCapacity)
 				for (let i = 0; i < liveLength; i++) {
 					const rpn = propValue[i] ? compileFormulaToRPN(propValue[i], FORMULA_PARSER_CONFIG) : []

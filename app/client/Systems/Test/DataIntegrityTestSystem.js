@@ -1,4 +1,4 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 const { churnTag, churnData, verification } = ecs.getTypeIDs()
 const { dataIntegrity } = ecs.getKernelIDs()

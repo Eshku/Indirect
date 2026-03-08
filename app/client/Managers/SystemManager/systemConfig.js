@@ -13,10 +13,21 @@
  * Any system listed in this file will be loaded, instantiated, and initialized by `SystemManager`.
  * Systems not listed here will not run.
  *
- * ### Execution Order
- * Order of systems within this file **DOES NOT** define the execution order. Execution
- * order is determined dynamically by `Scheduler` based on static dependencies (`runsAfter`, `reads`/`writes`)
- * declared in each system's class. This file's purpose is only to group systems by their update frequency.
+ * ### Initialization and Execution Order
+ *
+ * **1. Initialization Order (init())**
+ *    The order of systems in this file **explicitly defines the `init()` order**. Systems are instantiated
+ *    and initialized sequentially as they appear below. This is critical for systems that have `init()`-time
+ *    dependencies on others (e.g., `CameraSystem` needs `BackgroundSystem` to create a sprite first).
+ *
+ * **2. Execution Order (update())**
+ *    The order here defines the **base order** for the `Scheduler`'s dependency analysis. The final execution
+ *    order is determined by three factors in this priority:
+ *
+ *    - **Highest Priority: `runsAfter`**. An explicit `runsAfter: [OtherSystem]` in a system's class is a hard rule that the `Scheduler` must follow.
+ *    - **Medium Priority: Data Dependencies (`reads`/`writes`)**. The `Scheduler` analyzes the base order from this file. If `SystemA` is listed before `SystemB`, and `B` reads a component that `A` writes, a dependency `A -> B` is automatically created.
+ *    - **Lowest Priority: This File's Order**. If there are no other dependencies, systems will tend to run in the order they are listed here.
+ *
  *
  * ### Update Frequencies
  * `Frequency` property determines how often a system's `update` method is called:
@@ -39,8 +50,10 @@
  *   infrequent tasks that don't need to run every frame, like periodic UI refreshes.
  */
 export const systemSchedule = {
-	// Systems that only need to be initialized (e.g., for event listeners)
-		Initialization: [{ name: 'UIInputSystem', frequency: 'none' }],
+	Initialization: [
+		{ name: 'UIInputSystem', frequency: 'none' },
+		{ name: 'BackgroundSystem', frequency: 'none' },
+	],
 
 	Cursor: [{ name: 'CursorSystem', frequency: 'input' }],
 
@@ -68,11 +81,6 @@ export const systemSchedule = {
 		{ name: 'RenderLayerSystem', frequency: 'visuals' },
 		{ name: 'CameraSystem', frequency: 'visuals' },
 		{ name: 'SyncTransforms', frequency: 'visuals' },
-
-
-
-		//!legacy, but could be useful at some point to redo properly.
-		//{ name: 'TooltipSystem', frequency: 'visuals' },
 	],
 
 	Debug: [
@@ -87,11 +95,8 @@ export const systemSchedule = {
 	Benchmark: [
 		/* { name: 'CPUBenchmark', frequency: 'logic' }, */
 		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */
-
 		/* { name: 'RWMBenchmark', frequency: 'logic' },  */
 		/* { name: 'MemoryBenchmark', frequency: 'logic' }, */
-
-		
 		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
@@ -100,18 +105,14 @@ export const systemSchedule = {
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
 		/* { name: 'CustomJobTestSystem', frequency: 'logic' }, */
-
-		
 		/* 		{ name: 'DependencySystemA', frequency: 'visuals' },
 		{ name: 'DependencySystemB', frequency: 'visuals' },
 		{ name: 'DependencySystemC', frequency: 'visuals' }, */
-
-
 		/* { name: 'KernelArchitecture', frequency: 'logic' }, */
 	],
 
 	CoreTests: [
-/* 		{ name: 'SchemaTestSystem', frequency: 'none' },
+		/* 		{ name: 'SchemaTestSystem', frequency: 'none' },
 		{ name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
 		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */

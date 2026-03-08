@@ -1,8 +1,8 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs, testManager } = engine.getManagers()
 const { entityManager } = ecs
 
-const { describe, it, expect } = await import(`${PATH_MANAGERS}/TestManager/TestAPI.js`)
+const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`)
 
 /**
  * A utility function to deconstruct and log an entity ID for human-readable validation.

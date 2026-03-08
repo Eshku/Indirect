@@ -1,5 +1,5 @@
-const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
-const { ControlSchemeLoader } = await import(`${PATH_MANAGERS}/InputManager/ControlSchemeLoader.js`)
+const { eventEmitter } = await import(`@core/Classes/EventEmitter.js`)
+const { ControlSchemeLoader } = await import(`@managers/InputManager/ControlSchemeLoader.js`)
 
 class InputManager {
 	/**

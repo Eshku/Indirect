@@ -1,5 +1,5 @@
 const { extensions: systemExtensions } = await import('../../Core/Extends/systemExtends.js')
-const { eventEmitter } = await import(`${PATH_CORE}/Classes/EventEmitter.js`)
+const { eventEmitter } = await import(`@core/Classes/EventEmitter.js`)
 
 import { GameLoop } from './GameLoop.js'
 import { loadAllSystems } from './systemLoader.js'
@@ -16,8 +16,8 @@ import { commandBuffer } from './CommandBuffer.js'
 import { CommandBufferExecutor } from './CommandBufferExecutor.js'
 import { payloadCompiler } from './PayloadCompiler.js'
 
-const { Sequence } = await import(`${PATH_CORE}/DataStructures/Sequence.js`)
-const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`)
+const { Sequence } = await import(`@core/DataStructures/Sequence.js`)
+const { Query } = await import(`@managers/QueryManager/Query.js`)
 
 /**
  * Manages the lifecycle and execution of all game systems.
@@ -152,7 +152,7 @@ export class SystemManager {
 		const systemModules = new Map()
 		for (const category in systemFileTree) {
 			for (const moduleName of systemFileTree[category]) {
-				const modulePath = `${PATH_SYSTEMS}/${category}/${moduleName}.js`
+				const modulePath = `@systems/${category}/${moduleName}.js`
 				const module = await import(modulePath)
 				systemModules.set(moduleName, module)
 			}
@@ -286,14 +286,18 @@ export class SystemManager {
 			}
 		}
 
-		// Create a canonically sorted list of all active systems by their ID.
-		// This list becomes the single source of truth for execution order,
-		// decoupling it from the layout of `systemConfig.js`.
-		const sortedNames = Array.from(allSystemNames).sort((a, b) => {
-			return this.systemNameToId.get(a) - this.systemNameToId.get(b)
-		})
-		for (const name of sortedNames) {
-			this._systemList.insert(name)
+		// The order of systems in `systemSchedule` now defines the initialization order.
+		// We iterate through the groups and systems as defined in the config file
+		// to build a list that respects that explicit ordering.
+		for (const groupName of Object.keys(systemSchedule)) {
+			const systemList = systemSchedule[groupName]
+			if (Array.isArray(systemList)) {
+				for (const systemConfig of systemList) {
+					if (allSystemNames.has(systemConfig.name)) {
+						this._systemList.insert(systemConfig.name)
+					}
+				}
+			}
 		}
 	}
 

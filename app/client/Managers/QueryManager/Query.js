@@ -18,9 +18,9 @@
  */
 
 import { ChunkView } from './ChunkView.js'
-const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 
-const { NULL_CHUNK_ID, MAX_COMPONENTS, MASK_PARTS } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
+const { NULL_CHUNK_ID, MAX_COMPONENTS, MASK_PARTS } = await import(`@managers/EntityManager/EntityManager.js`)
 
 export class Query {
 	static _createSimpleMask(componentTypeIDs, categoryName) {

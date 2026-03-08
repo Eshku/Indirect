@@ -13,7 +13,7 @@ export async function loadAllKernels(kernelFiles) {
 	const kernelCode = {}
 
 	for (const fileName of kernelFiles) {
-		const modulePath = `${PATH_KERNELS}/${fileName}`
+		const modulePath = `@kernels/${fileName}`
 		const module = await import(modulePath)
 		const moduleNameWithoutExt = fileName.replace('.js', '')
 		loadedModules.set(moduleNameWithoutExt, module)

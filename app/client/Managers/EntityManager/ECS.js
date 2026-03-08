@@ -1,11 +1,11 @@
 import * as Schema from '../ComponentManager/ComponentSchema.js'
 
-const { entityStore } = await import(`${PATH_MANAGERS}/EntityManager/EntityManager.js`)
-const { reconstruct } = await import(`${PATH_MANAGERS}/ComponentManager/ComponentInterpreter.js`)
+const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
+const { reconstruct } = await import(`@managers/ComponentManager/ComponentInterpreter.js`)
 
-const { payloadCompiler } = await import(`${PATH_MANAGERS}/SystemManager/PayloadCompiler.js`)
+const { payloadCompiler } = await import(`@managers/SystemManager/PayloadCompiler.js`)
 
-const { sharedDataManager } = await import(`${PATH_MANAGERS}/SharedDataManager/SharedDataManager.js`)
+const { sharedDataManager } = await import(`@managers/SharedDataManager/SharedDataManager.js`)
 
 /**
  * The central, immediate-mode public API for the entire ECS.
@@ -109,47 +109,24 @@ export class ECS {
 	 * Instantiates an entity from a prefab immediately.
 	 */
 	instantiate(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
-		const prefabData = this.prefabManager.getPrefabData(prefabName)
+		const prefabComponents = this.prefabManager.getPrefabData(prefabName)
 
-		if (!prefabData) {
+		if (!prefabComponents) {
 			console.error(
 				`ECS: Failed to sync-instantiate entity. Prefab '${prefabName}' is not pre-loaded or registered in the manifest.`,
 			)
 			return undefined
 		}
-		return this._instantiateChildRecursive(prefabData, { rootPrefabName: prefabName, overrides, parentId, ownerId })
-	}
-
-	/**
-	 */
-	_instantiateChildRecursive(
-		prefabData,
-		{ rootPrefabName = null, overrides = {}, parentId = null, ownerId = null } = {},
-	) {
-		const isRoot = rootPrefabName !== null
-		const componentData = { ...prefabData.components }
-
-		if (isRoot && overrides) {
-			// Deep merge overrides
-			for (const compName in overrides) {
-				componentData[compName] = { ...(componentData[compName] || {}), ...overrides[compName] }
-			}
+		const componentData = { ...prefabComponents }
+		// Deep merge overrides for the root entity
+		for (const compName in overrides) {
+			componentData[compName] = { ...(componentData[compName] || {}), ...overrides[compName] }
 		}
 
 		if (parentId) componentData.Parent = { entityId: parentId }
 		if (ownerId) componentData.Owner = { entityId: ownerId }
 
-		const entityId = this.createEntity(componentData)
-		if (entityId === undefined) return undefined
-
-		const childrenOwnerId = ownerId || entityId
-
-		if (prefabData.children && prefabData.children.length > 0) {
-			for (const childData of prefabData.children) {
-				this._instantiateChildRecursive(childData, { parentId: entityId, ownerId: childrenOwnerId })
-			}
-		}
-		return entityId
+		return this.createEntity(componentData)
 	}
 
 	/**

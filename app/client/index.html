@@ -2,13 +2,40 @@
 <html>
 	<head>
 		<meta charset="UTF-8" />
+
+		<script type="importmap">
+			{
+				"imports": {
+					"@client/": "./",
+					"@assets/": "./assets/",
+					"@components/": "./Components/",
+					"@systems/": "./Systems/",
+					"@kernels/": "./Kernels/",
+					"@subsystems/": "./Subsystems/",
+					"@managers/": "./Managers/",
+					"@indirect/": "./Indirect/",
+					"@archetypes/": "./Archetypes/",
+					"@prefabs/": "./Prefabs/",
+					"@icons/": "./assets/icons/",
+					"@core/": "./Core/",
+					"@ui/": "./UI/",
+					"@services/": "./Services/"
+				}
+			}
+		</script>
+
 		<link rel="stylesheet" href="./assets/web/page_resets.css" />
 		<link rel="stylesheet" href="./assets/web/page_styles.css" />
 
 		<script type="module" src="../hmr/client-hmr.js"></script>
 		<script src="./assets/library/Logger.js"></script>
 
+		<!-- We have to import libraries from npm either as umd
+		 or expose node modules to client so it can load them directly
+		 bypassing electron bridge overhead for function calls -->
+
 		<script src="./../../node_modules/pixi.js/dist/pixi.min.js"></script>
+		<script src="./../../node_modules/xxhash-wasm/umd/xxhash-wasm.js"></script>
 
 		<script src="./client.js" type="module"></script>
 	</head>

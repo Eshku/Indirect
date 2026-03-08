@@ -1,5 +1,5 @@
 const { SpatialHashGrid, SPATIAL_GRID_CONFIG, NODE_BYTE_STRIDE } = await import(
-	`${PATH_CORE}/DataStructures/SpatialHashGrid.js`
+	`@core/DataStructures/SpatialHashGrid.js`
 )
 
 /**

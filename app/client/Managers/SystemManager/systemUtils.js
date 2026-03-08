@@ -1,4 +1,4 @@
-const { Query } = await import(`${PATH_MANAGERS}/QueryManager/Query.js`);
+const { Query } = await import(`@managers/QueryManager/Query.js`);
 
 /**
  * Iterates over a system instance's properties and releases any queries it owns.

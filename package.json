@@ -1,6 +1,6 @@
 {
   "name": "indirect-engine",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "main": "./app/app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -22,6 +22,7 @@
     "electron-builder": "^26.0.12"
   },
   "dependencies": {
-    "pixi.js": "^8.9.1"
+    "pixi.js": "^8.9.1",
+    "xxhash-wasm": "^1.1.0"
   }
 }

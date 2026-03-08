@@ -1,8 +1,8 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 
 const { ecs, physicsManager, queryManager } = engine.getManagers()
 
-const { SpatialHashGrid, SPATIAL_GRID_CONFIG } = await import(`${PATH_CORE}/DataStructures/SpatialHashGrid.js`)
+const { SpatialHashGrid, SPATIAL_GRID_CONFIG } = await import(`@core/DataStructures/SpatialHashGrid.js`)
 
 /**
  * Manages the spatial hash grid on the main thread.

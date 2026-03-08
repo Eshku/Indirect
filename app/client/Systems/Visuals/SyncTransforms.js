@@ -1,4 +1,4 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs, assetManager } = engine.getManagers()
 
 const { viewable, position, rotation, scale } = ecs.getTypeIDs()

@@ -1,4 +1,4 @@
-const { layerManager } = await import(`${PATH_MANAGERS}/LayerManager/LayerManager.js`)
+const { layerManager } = await import(`@managers/LayerManager/LayerManager.js`)
 
 /**
  * Manages the core PIXI.Application instance and provides centralized access to it and other high-level game objects like layers.

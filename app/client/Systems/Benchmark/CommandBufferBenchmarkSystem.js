@@ -1,13 +1,10 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 
 const { ecs } = engine.getManagers()
 
 const benchmarkConfig = {
-	// Select ONE benchmark to run by setting its name here.
 	// Options: 'creation', 'destruction', 'structuralChange', 'setData'
 	activeBenchmark: 'creation',
-
-	//! add chunk-based commands to replace (now deleted) single-threaded query-based commands.
 
 	creation: {
 		entityCount: 0, // Not used for this test as it starts with an empty world.

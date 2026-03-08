@@ -1,9 +1,9 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 const { componentManager } = ecs
 
-const { testManager } = await import(`${PATH_CLIENT}/Managers/TestManager/TestManager.js`)
-const { describe, it, expect } = await import(`${PATH_CLIENT}/Managers/TestManager/TestAPI.js`)
+const { testManager } = await import(`@client/Managers/TestManager/TestManager.js`)
+const { describe, it, expect } = await import(`@client/Managers/TestManager/TestAPI.js`)
 
 /**
  * A system dedicated to testing the functionality of the SchemaParser and data layer.

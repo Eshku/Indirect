@@ -1,4 +1,4 @@
-const { getCatmullRomPoint } = await import(`${PATH_CORE}/utils/spline.js`)
+const { getCatmullRomPoint } = await import(`@core/utils/spline.js`)
 
 /**
  * A class representing the visual elements of the cursor.

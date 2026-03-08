@@ -1,6 +1,6 @@
-const { payloadCompiler } = await import(`${PATH_MANAGERS}/SystemManager/PayloadCompiler.js`)
-const { commandBuffer } = await import(`${PATH_MANAGERS}/SystemManager/CommandBuffer.js`)
-const { queryManager } = await import(`${PATH_MANAGERS}/QueryManager/QueryManager.js`)
+const { payloadCompiler } = await import(`@managers/SystemManager/PayloadCompiler.js`)
+const { commandBuffer } = await import(`@managers/SystemManager/CommandBuffer.js`)
+const { queryManager } = await import(`@managers/QueryManager/QueryManager.js`)
 
 /**
  * A central configuration file for extending system instances.

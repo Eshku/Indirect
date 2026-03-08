@@ -1,8 +1,8 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs, testManager } = engine.getManagers()
 
 const { entityManager, queryManager, prefabManager, systemManager } = ecs
-const { describe, it, expect } = await import(`${PATH_MANAGERS}/TestManager/TestAPI.js`)
+const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`)
 
 const { position, velocity, testEntityTag, parent } = ecs.getTypeIDs()
 

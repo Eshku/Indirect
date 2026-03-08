@@ -1,16 +1,24 @@
-# JavaScript Hybrid ECS Game Engine
+# JavaScript Hybrid ECS Game Engine Thing
 
 ## Table of Contents
 
-- [Introduction](#introduction)
+- [Introduction](#Vision & Principles)
 - [Tech Stack](#tech-stack)
 - [Architecture](#architecture)
 - [Key Features](#key-features)
 - [Acknowledgements](#acknowledgements)
 
-## Introduction
+## Vision & Principles
 
-This is a foundation for what could become an engine, built around a hybrid parallel Entity-Component-System (ECS) architecture.
+Long-term vision is to build a high-performance, **data-oriented**, and **parallel** Entity-Component-System (ECS) in JavaScript.
+
+#### Guiding Principles
+
+1.  **Performance Over "Comfort"**: Design decisions will always prioritize raw performance and efficient data access patterns. This means API WILL be "ugly" and lower-level if affect on performance is substantial. High-level, "comfy" features are low priority and ONLY if they can be implemented without cost to the core.
+
+2.  **Maximum Developer Control**: Goal is to provide as much control to developers as possible. I expect you to take those buffers and do what you need, even if that means shooting yourself in the foot repeatedly.
+
+3.  **Zero-Cost Abstractions (Pay Only For What You Use)**: Actively avoiding adding features to the core engine if they impose a performance penalty on _all_ users, regardless of whether they use the feature. New abstractions are only acceptable if they have a negligible or zero-cost for those who don't opt into them.
 
 **Current Stage**: Experimental, constantly changing. Expect breaking changes and bugs.
 
@@ -127,7 +135,7 @@ A system declares its data access patterns and dependencies in a `static depende
 
 This example shows a `PhysicsSystem` that schedules a kernel to apply gravity.
 
-**1. Kernel (`/app/client/Kernels/physicsKernels.js`)**
+**1. Kernel (`/app/client/Kernels/`)**
 
 A kernel is a pure function that runs on a worker, receiving all its data via arguments. Frame-specific data is available on `self.frameContext`.
 
@@ -169,7 +177,7 @@ export function applyGravityAndMove(payload, systemContext, kernelContext) {
 The System class orchestrates work from main thread.
 
 ```javascript
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
 // Get numeric IDs for components and kernels at initialization.

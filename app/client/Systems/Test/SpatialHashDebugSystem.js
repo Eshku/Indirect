@@ -1,4 +1,4 @@
-const { engine } = await import(`${PATH_CLIENT}/Engine.js`)
+const { engine } = await import(`@client/Engine.js`)
 const { ecs, layerManager, physicsManager } = engine.getManagers()
 const {
 	SpatialHashGrid,
@@ -6,7 +6,7 @@ const {
 	NODE_NEXT_INDEX_STRIDE_IN_I32,
 	NODE_NEXT_INDEX_OFFSET_IN_I32,
 	NODE_ENTITY_ID_STRIDE_IN_U64,
-} = await import(`${PATH_CORE}/DataStructures/SpatialHashGrid.js`)
+} = await import(`@core/DataStructures/SpatialHashGrid.js`)
 
 /**
  * A debug system to visualize the state of the SpatialHashGrid in real-time.

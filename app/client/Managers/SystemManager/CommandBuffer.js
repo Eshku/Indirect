@@ -29,7 +29,7 @@ export class CommandBuffer {
 		this.dynamicArray._reset()
 		this.placeholderIdCounter = 0n
 	}
-	
+
 	/**
 	 * Clears the buffers for the next frame. Called by the SystemManager after a flush.
 	 */
@@ -178,10 +178,7 @@ export class CommandBuffer {
 	 * @param {number} [layer=0] The execution layer.
 	 */
 	instantiate(payload, layer = 0) {
-		// Instantiate is just an alias for creating a single entity from a pre-compiled payload.
-		// DEV-NOTE: Recursive children instantiation will be deprecated once placeholder entities are implemented.
 		this.createEntity(payload, layer)
-		//! Recursive children instantiation will be deprecated once we have placeholder entities implemented.
 	}
 
 	/**

@@ -16,7 +16,7 @@ export class ControlSchemeLoader {
 
 	async loadDefaultControlScheme() {
 		try {
-			const response = await fetch(`${PATH_MANAGERS}/InputManager/ControlScheme.json`)
+			const response = await fetch(`./Managers/InputManager/ControlScheme.json`)
 
 			if (!response.ok) {
 				throw new Error(`HTTP error! status: ${response.status}`)
