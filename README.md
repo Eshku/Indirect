@@ -2,7 +2,7 @@
 
 ## Table of Contents
 
-- [Introduction](#Vision & Principles)
+- [Vision & Principles](#vision--principles)
 - [Tech Stack](#tech-stack)
 - [Architecture](#architecture)
 - [Key Features](#key-features)
