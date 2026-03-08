@@ -14,7 +14,7 @@ Long-term vision is to build a high-performance, **data-oriented**, and **parall
 
 #### Guiding Principles
 
-1.  **Performance Over "Comfort"**: Design decisions will always prioritize raw performance and efficient data access patterns. This means API WILL be "ugly" and lower-level if affect on performance is substantial. High-level, "comfy" features are low priority and ONLY if they can be implemented without cost to the core.
+1.  **Performance Over "Comfort"**: Design decisions will always prioritize raw performance and efficient data access patterns. This means API WILL be "ugly" if affect on performance is substantial. High-level, "comfy" features are low priority and ONLY ever considered if they can be implemented without cost to the core.
 
 2.  **Maximum Developer Control**: Goal is to provide as much control to developers as possible. I expect you to take those buffers and do what you need, even if that means shooting yourself in the foot repeatedly.
 
