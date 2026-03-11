@@ -22,7 +22,7 @@ export class DependencySystemA {
 	init() {
 		this.query = this.getQuery({ with: [position, velocity, dependencyTestTag] })
 
-		const { payload } = this.compileEntity({
+		const { payload } = this.compile({
 			position: { x: 0, y: 0 },
 			velocity: { x: 0, y: 0 }, // Initial value is 0
 			dependencyTestTag: {},
@@ -32,10 +32,10 @@ export class DependencySystemA {
 		// This init runs once when the system is first loaded.
 		// To make the test repeatable across hot-swaps, we first destroy any entities
 		// from a previous run of this test system before creating new ones.
-		for (const chunk of this.query.iter()) this.commands.destroyEntitiesInChunk(chunk)
+		for (const chunk of this.query.iter()) this.destroyEntitiesInChunk(chunk)
 
 		// Create a batch of identical entities for the test.
-		this.commands.createEntities(this.creationPayload, 1000)
+		this.createEntities(this.creationPayload, 1000)
 	}
 
 	schedule() {

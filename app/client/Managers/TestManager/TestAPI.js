@@ -39,8 +39,12 @@ export function expect(actual) {
 		 * @param {*} expected - The expected object/array.
 		 */
 		toEqual(expected) {
-			const actualStr = JSON.stringify(actual)
-			const expectedStr = JSON.stringify(expected)
+			// Add a replacer to handle BigInts, which JSON.stringify does not support by default.
+			const replacer = (key, value) => (typeof value === 'bigint' ? value.toString() : value)
+
+			const actualStr = JSON.stringify(actual, replacer)
+			const expectedStr = JSON.stringify(expected, replacer)
+
 			const passed = actualStr === expectedStr
 			if (passed === inverted) {
 				throw new AssertionError(

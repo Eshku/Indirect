@@ -21,7 +21,7 @@ export class SpriteFactorySystem {
 		})
 
 		// Pre-compile the payload and cache the payload/mutator objects separately.
-		const { payload, mutators } = this.compileComponent(viewable, { spriteRef: 0 })
+		const { payload, mutators } = this.compile(viewable, { spriteRef: 0 })
 		this.viewablePayload = payload
 		this.viewableMutators = mutators
 		this.stringStorage = stringInterningTable.storage
@@ -48,7 +48,7 @@ export class SpriteFactorySystem {
 						// This system's only job is to create the sprite and update the Viewable component.
 						// It does NOT add it to the scene. Another system will handle that.
 						this.viewableMutators.viewable.spriteRef[0] = newSpriteRef
-						this.commands.setComponentData(entityId, this.viewablePayload)
+						this.setComponentData(entityId, this.viewablePayload)
 					}
 				}
 			}

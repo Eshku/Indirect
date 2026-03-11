@@ -8,19 +8,9 @@
 - [Key Features](#key-features)
 - [Acknowledgements](#acknowledgements)
 
-## Vision & Principles
+## Current Stage:
 
-Long-term vision is to build a high-performance, **data-oriented**, and **parallel** Entity-Component-System (ECS) in JavaScript.
-
-#### Guiding Principles
-
-1.  **Performance Over "Comfort"**: Design decisions will always prioritize raw performance and efficient data access patterns. This means API WILL be "ugly" if affect on performance is substantial. High-level, "comfy" features are low priority and ONLY ever considered if they can be implemented without cost to the core.
-
-2.  **Maximum Developer Control**: Goal is to provide as much control to developers as possible. I expect you to take those buffers and do what you need, even if that means shooting yourself in the foot repeatedly.
-
-3.  **Zero-Cost Abstractions (Pay Only For What You Use)**: Actively avoiding adding features to the core engine if they impose a performance penalty on _all_ users, regardless of whether they use the feature. New abstractions are only acceptable if they have a negligible or zero-cost for those who don't opt into them.
-
-**Current Stage**: Experimental, constantly changing. Expect breaking changes and bugs.
+Experimental, constantly changing. Expect breaking changes and bugs.
 
 ## Potential future improvements:
 
@@ -35,6 +25,18 @@ Long-term vision is to build a high-performance, **data-oriented**, and **parall
 - Allow to redefine default execution order within systems.
 - HMR
 - Demo and proper documentation
+
+## Vision & Principles
+
+Long-term vision is to build a high-performance, **data-oriented**, and **parallel** Entity-Component-System (ECS) in JavaScript.
+
+#### Guiding Principles
+
+1.  **Performance Over "Comfort"**: Design decisions always prioritize raw performance and efficient data access patterns. This means ugly API if affect on performance is substantial. 
+
+2.  **Maximum Developer Control**: Goal is to provide as much control to developers as possible.
+
+3.  **Zero-Cost Abstractions (Pay Only For What You Use)**: Actively avoiding adding features to the core engine if they impose runtime performance penalty on _all_ users, regardless of whether they use the feature. New abstractions are only acceptable if they have a negligible or zero-cost for those who don't opt into them.
 
 ## Tech Stack
 
@@ -220,36 +222,18 @@ export class PhysicsSystem {
 
 ### [System API Extensions](app/client/Core/Extends/systemExtends.js)
 
-To reduce boilerplate, common functionalities are automatically added to every system by instance before its `init()` method is called.
+Set of common methods are injected into every system instance. These provide direct access to core engine features like queries and deferred commands.
 
-Injected properties include:
+Key injected methods include:
 
-- **`this.getQuery()`**: Creates a query.
-- **`this.commands`**: Access to the deferred command buffer for structural changes.
-- **`this.compileEntity()`**: Compiles an entity definition into a binary payload for `commands`.
+- **`getQuery()`**: Retrieves a cached query.
+- **`createEntity()`**: Queue an entity to be created.
+- **`destroyEntity()`**: Queue an entity to be destroyed.
+- **`addComponent()`**: Queue component to be added.
 
-### Command Buffer: Safe Structural Changes
+### Deferred Structural Changes
 
-The `commands` object, available in a system's `update` and `process` methods, provides a deferred, thread-safe way to perform structural changes (creating/destroying entities, adding/removing components). Changes are queued and executed at a safe point in the frame.
-
-```javascript
-// In a system's init method:
-const { payload, mutators } = this.compileEntity({
-	position: { x: 0, y: 0 },
-})
-this.entityPayload = payload
-this.entityMutators = mutators
-
-// In an update or process method:
-this.entityMutators.position.x[0] = 10
-this.entityMutators.position.y[0] = 20
-this.commands.createEntity(this.entityPayload) // Queue entity creation
-
-// Other commands:
-this.commands.setComponentData(entityId, componentPayload)
-this.commands.removeComponent(entityId, positionTypeID)
-this.commands.destroyEntity(entityId)
-```
+All structural changes (creating/destroying entities, adding/removing components) are deferred. When a system calls a method like `createEntity`, it records a command in a `CommandBuffer` to be executed at the end of a frame.
 
 ### Prefab Definitions
 

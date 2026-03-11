@@ -5,8 +5,5 @@ export const DistanceTraveled = {
 	/**
 	 * The total distance traveled.
 	 */
-	value: {
-		type: 'f32',
-		default: 0,
-	},
+	value: { type: 'f32', default: 0 },
 }

@@ -35,13 +35,6 @@ export class ECS {
 		this.engine = engine
 	}
 
-	// ### Deferred vs. Immediate Mode
-	//
-	// - **Immediate Mode (this API):** Use these methods for one-off actions. They execute
-	//   immediately and are more costly.
-	// - **Deferred Mode (`commands`):** Inside a system's `update` loop, you should **always**
-	//   use the `commands` object (the CommandBuffer) to queue structural changes. This is vastly more performant.
-
 	/**
 	 * Returns a debug-friendly object for inspecting an entity's state.
 	 * This is intended for debugging and console interaction, not for performance-critical code.
@@ -90,8 +83,8 @@ export class ECS {
 
 		// Binary path as the command buffer,
 		// but executes immediately. This ensures all entity creation is consistent. We use the SoA path for single entity creation as it's the most efficient.
-		const { payload } = this.payloadCompiler.compileEntity(componentsInput)
-		const entityID = this.entityManager.createEntityFromBinarySoAPayload(
+		const { payload } = this.payloadCompiler.compile(componentsInput)
+		const entityID = this.entityManager.createEntityFromAosPayload(
 			payload.archetypeId,
 			payload.data,
 			this.systemManager.currentTick,
@@ -109,24 +102,18 @@ export class ECS {
 	 * Instantiates an entity from a prefab immediately.
 	 */
 	instantiate(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
-		const prefabComponents = this.prefabManager.getPrefabData(prefabName)
+		const finalOverrides = { ...overrides }
+		if (parentId) finalOverrides.Parent = { entityId: parentId }
+		if (ownerId) finalOverrides.Owner = { entityId: ownerId }
 
-		if (!prefabComponents) {
-			console.error(
-				`ECS: Failed to sync-instantiate entity. Prefab '${prefabName}' is not pre-loaded or registered in the manifest.`,
-			)
-			return undefined
-		}
-		const componentData = { ...prefabComponents }
-		// Deep merge overrides for the root entity
-		for (const compName in overrides) {
-			componentData[compName] = { ...(componentData[compName] || {}), ...overrides[compName] }
-		}
-
-		if (parentId) componentData.Parent = { entityId: parentId }
-		if (ownerId) componentData.Owner = { entityId: ownerId }
-
-		return this.createEntity(componentData)
+		// Use the compiler to handle prefab logic and all overrides consistently.
+		const { payload } = this.payloadCompiler.compile(prefabName, finalOverrides)
+		const entityID = this.entityManager.createEntityFromAosPayload(
+			payload.archetypeId,
+			payload.data,
+			this.systemManager.currentTick,
+		)
+		return entityID
 	}
 
 	/**
@@ -145,7 +132,7 @@ export class ECS {
 			return false
 		}
 		// Use the payload compiler to create the minimal binary payload for the new component.
-		const { payload } = this.payloadCompiler.compileComponent(componentTypeId, data)
+		const { payload } = this.payloadCompiler.compile(componentTypeId, data)
 		return this.entityManager.addComponent(entityId, componentTypeId, payload.data, this.systemManager.currentTick)
 	}
 
@@ -242,26 +229,6 @@ export class ECS {
 	 */
 	getKernelIDs() {
 		return this.systemManager.getKernelIds()
-	}
-
-	/**
-	 * A utility to destructure component type IDs directly onto a system's `this` context.
-	 * This replaces the common two-line pattern of getting IDs and using Object.assign.
-	 * @param {object} context - The `this` context of the class instance.
-	 * @param {string[]} componentNames - An array of component names to assign.
-	 * @example ecs.assignComponents(this, ['position', 'velocity'])
-	 */
-	assignComponents(context, componentNames) {
-		const typeIDs = this.componentManager.getTypeIDs()
-
-		for (const name of componentNames) {
-			// Use hasOwnProperty for safety, though typeIDs is a clean object.
-			if (Object.prototype.hasOwnProperty.call(typeIDs, name)) {
-				context[name] = typeIDs[name]
-			} else {
-				console.warn(`[ECS.assignComponents] Component name "${name}" not found.`)
-			}
-		}
 	}
 }
 

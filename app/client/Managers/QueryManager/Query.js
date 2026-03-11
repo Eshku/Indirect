@@ -144,6 +144,20 @@ export class Query {
 	}
 
 	/**
+	 * Gets the entity ID of the first entity that matches this query.
+	 * This is a convenience method for queries that are expected to match only one entity (e.g., singletons like a player or director).
+	 * @returns {bigint | undefined} The entity ID, or undefined if the query is empty.
+	 */
+	getSingleEntity() {
+		for (const chunk of this.iter()) {
+			if (chunk.size > 0) {
+				return chunk.entities[0]
+			}
+		}
+		return undefined
+	}
+
+	/**
 	 * Gets the total number of entities matching this query.
 	 * @returns {number}
 	 */
@@ -165,43 +179,45 @@ export class Query {
 
 	registerArchetype(archetype) {
 		if (this.archetypeMatches(archetype)) {
-			// Ensure we don't add archetypes we already know about.
-			if (!this.matchingArchetypeIds.has(archetype)) {
-				// Traverse the archetype's linked list of chunks and add them.
-				let chunkId = entityStore.archetypeHeadChunkIds[archetype]
-				while (chunkId !== NULL_CHUNK_ID) {
-					this.matchingChunkIds.push(chunkId)
-					chunkId = entityStore.chunkNextInArchetype[chunkId]
-				}
-				this.matchingArchetypeIds.add(archetype)
+			// If we already know about this archetype, do nothing.
+			if (this.matchingArchetypeIds.has(archetype)) {
+				return
+			}
 
-				// Notify the QueryManager so it can add this query to its archetype-based index.
-				this.queryManager._addQueryToArchetypeIndex(this, archetype)
+			// Traverse the archetype's linked list of chunks and add them.
+			let chunkId = entityStore.archetypeHeadChunkIds[archetype]
+			while (chunkId !== NULL_CHUNK_ID) {
+				this.matchingChunkIds.push(chunkId)
+				chunkId = entityStore.chunkNextInArchetype[chunkId]
+			}
+			this.matchingArchetypeIds.add(archetype)
 
-				if (this.isReactiveQuery) {
-					const componentIdArray = this.queryManager.entityManager.getComponentTypeIDsForArchetype(archetype)
-					const count = componentIdArray.length
-					const indices = []
+			// Notify the QueryManager so it can add this query to its archetype-based index.
+			this.queryManager._addQueryToArchetypeIndex(this, archetype)
 
-					for (const typeId of this.react) {
-						// Perform a binary search to find the index of the component in the archetype's sorted list.
-						let low = 0,
-							high = count - 1
-						while (low <= high) {
-							const mid = (low + high) >>> 1
-							const midVal = componentIdArray[mid]
-							if (midVal === typeId) {
-								indices.push(mid) // The index in the dirty tick array is 0-based.
-								break
-							} else if (midVal < typeId) {
-								low = mid + 1
-							} else {
-								high = mid - 1
-							}
+			if (this.isReactiveQuery) {
+				const componentIdArray = this.queryManager.entityManager.getComponentTypeIDsForArchetype(archetype)
+				const count = componentIdArray.length
+				const indices = []
+
+				for (const typeId of this.react) {
+					// Perform a binary search to find the index of the component in the archetype's sorted list.
+					let low = 0,
+						high = count - 1
+					while (low <= high) {
+						const mid = (low + high) >>> 1
+						const midVal = componentIdArray[mid]
+						if (midVal === typeId) {
+							indices.push(mid) // The index in the dirty tick array is 0-based.
+							break
+						} else if (midVal < typeId) {
+							low = mid + 1
+						} else {
+							high = mid - 1
 						}
 					}
-					this._reactiveIndicesByArchetype[archetype] = indices
 				}
+				this._reactiveIndicesByArchetype[archetype] = indices
 			}
 		}
 	}

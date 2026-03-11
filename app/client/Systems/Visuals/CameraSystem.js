@@ -81,8 +81,13 @@ export class CameraSystem {
 			}
 
 			const { desiredX, desiredY } = this.calculateTargetPosition(playerPosition)
-			this.camera.x = lerp(this.camera.x, desiredX, this.smoothingFactorX * deltaTime)
-			this.camera.y = lerp(this.camera.y, desiredY, this.smoothingFactorY * deltaTime)
+			//this.camera.x = lerp(this.camera.x, desiredX, this.smoothingFactorX * deltaTime)
+			//this.camera.y = lerp(this.camera.y, desiredY, this.smoothingFactorY * deltaTime)
+
+			//no lerp
+			this.camera.x = desiredX
+			this.camera.y = desiredY
+
 
 			// Update the tiling background position to create the illusion of movement.
 			if (this.starfieldSprite) {

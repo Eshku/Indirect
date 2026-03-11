@@ -45,17 +45,17 @@ export class CommandBufferBenchmarkSystem {
 		this.removeQuery = this.getQuery({ with: [commandBufferBenchmarkTag, componentA, componentB] })
 
 		// --- Payloads ---
-		this.creationPayload = this.compileEntity({
+		this.creationPayload = this.compile({
 			commandBufferBenchmarkTag: {},
 			componentA: {},
 			position: { x: 1, y: 2 },
 			velocity: { x: 3, y: 4 },
 		}).payload
 
-		this.addComponentPayload = this.compileComponent(componentB, {}).payload
+		this.addComponentPayload = this.compile(componentB, {}).payload
 
 		// 'set' payload is also pre-compiled. We will use its mutators in the loop.
-		const { payload, mutators } = this.compileComponent(position, { x: 99, y: 99 })
+		const { payload, mutators } = this.compile(position, { x: 99, y: 99 })
 		this.setComponentPayload = payload
 		this.setComponentMutators = mutators
 
@@ -64,7 +64,7 @@ export class CommandBufferBenchmarkSystem {
 
 		if (benchmarkConfig.activeBenchmark !== 'creation') {
 			const config = benchmarkConfig[benchmarkConfig.activeBenchmark]
-			this.commands.createEntities(this.creationPayload, config.entityCount)
+			this.createEntities(this.creationPayload, config.entityCount)
 		}
 	}
 
@@ -89,24 +89,24 @@ export class CommandBufferBenchmarkSystem {
 		const config = benchmarkConfig.creation
 		// Destroy all entities from the previous frame and create a new batch.
 		for (const chunk of this.benchmarkQuery.iter()) {
-			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
+			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
 		}
 		for (let i = 0; i < config.batchSize; i++) {
 			// This part remains the same
-			this.commands.createEntity(this.creationPayload)
+			this.createEntity(this.creationPayload)
 		}
 	}
 
 	_updateDestruction() {
 		const config = benchmarkConfig.destruction
 		// Create entities to replace the ones destroyed in the previous frame.
-		this.commands.createEntities(this.creationPayload, config.batchSize)
+		this.createEntities(this.creationPayload, config.batchSize)
 
 		let destroyedCount = 0
 		for (const chunk of this.benchmarkQuery.iter()) {
 			for (let i = 0; i < chunk.size; i++) {
 				if (destroyedCount >= config.batchSize) break
-				this.commands.destroyEntity(chunk.entities[i])
+				this.destroyEntity(chunk.entities[i])
 				destroyedCount++
 			}
 			if (destroyedCount >= config.batchSize) break
@@ -120,7 +120,7 @@ export class CommandBufferBenchmarkSystem {
 			for (const chunk of this.addQuery.iter()) {
 				for (let i = 0; i < chunk.size; i++) {
 					if (processedCount >= config.batchSize) break
-					this.commands.addComponent(chunk.entities[i], this.addComponentPayload)
+					this.addComponent(chunk.entities[i], this.addComponentPayload)
 					processedCount++
 				}
 				if (processedCount >= config.batchSize) break
@@ -134,7 +134,7 @@ export class CommandBufferBenchmarkSystem {
 			for (const chunk of this.removeQuery.iter()) {
 				for (let i = 0; i < chunk.size; i++) {
 					if (processedCount >= config.batchSize) break
-					this.commands.removeComponent(chunk.entities[i], componentB)
+					this.removeComponent(chunk.entities[i], componentB)
 					processedCount++
 				}
 				if (processedCount >= config.batchSize) break
@@ -157,7 +157,7 @@ export class CommandBufferBenchmarkSystem {
 		for (const chunk of this.benchmarkQuery.iter()) {
 			for (let i = 0; i < chunk.size; i++) {
 				if (processedCount >= config.batchSize) break
-				this.commands.setComponentData(chunk.entities[i], this.setComponentPayload)
+				this.setComponentData(chunk.entities[i], this.setComponentPayload)
 				processedCount++
 			}
 			if (processedCount >= config.batchSize) break

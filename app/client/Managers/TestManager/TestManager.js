@@ -234,7 +234,10 @@ export class TestManager {
 			// Failing tests also show their duration.
 			console.log(`  ${red}✖${reset} ${blue}${testName}${reset} ${durationText}`)
 			if (errorInfo) {
-				const stringify = value => JSON.stringify(value, null, 2)
+				// Add a replacer to handle BigInts, which JSON.stringify does not support by default.
+				// We append 'n' to make it clear in the output that it's a BigInt.
+				const replacer = (key, value) => (typeof value === 'bigint' ? `${value.toString()}n` : value)
+				const stringify = value => JSON.stringify(value, replacer, 2)
 
 				// Use original color scheme for details.
 				if (errorInfo.expected !== undefined && errorInfo.actual !== undefined) {

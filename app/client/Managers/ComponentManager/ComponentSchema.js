@@ -26,6 +26,7 @@ export const TYPED_ARRAY_MAP = {
 	u64: BigUint64Array,
 	entity: BigUint64Array, // Explicit type for entity IDs
 	string: Uint32Array, // Strings are stored as u32 references
+	component: Uint16Array, // Component IDs are stored as u16 references
 }
 
 export const componentInfo = [] // Indexed by typeID, stores parsed schema info

@@ -48,6 +48,51 @@ function getRpnConfig() {
 }
 
 /**
+ * Expands shorthands and applies schema defaults to a component data object.
+ * This produces a "fully-specified" high-level data object.
+ * It does NOT convert values (e.g. string to ID).
+ * @param {number} typeID The component's type ID.
+ * @param {object | primitive} data The high-level data.
+ * @returns {object} A new object with shorthands expanded and defaults applied.
+ */
+export function resolveComponentData(typeID, data) {
+	const info = Schema.componentInfo[typeID]
+	if (!info) {
+		// If we don't know the component, we can't resolve it. Return as-is.
+		return data
+	}
+
+	let objectData = data
+
+	// Step 1: Handle shorthand.
+	const dataType = typeof objectData
+	if (dataType === 'number' || dataType === 'string' || dataType === 'boolean') {
+		if (info.originalSchemaKeys && info.originalSchemaKeys.length > 0) {
+			const firstPropKey = info.originalSchemaKeys[0]
+			objectData = { [firstPropKey]: objectData }
+		} else {
+			console.error(`ComponentInterpreter: Invalid shorthand for component "${info.componentName}". Tag components cannot have data.`)
+			objectData = {}
+		}
+	} else if (objectData === null || typeof objectData !== 'object') {
+		// Handle null or other invalid types by treating them as an empty object,
+		// which will then be filled with defaults.
+		objectData = {}
+	}
+
+	// Step 2: Apply high-level defaults from the schema.
+	const highLevelDefaults = {}
+	for (const propName of info.originalSchemaKeys) {
+		const rep = info.representations[propName]
+		if (rep && rep.default !== undefined) {
+			highLevelDefaults[propName] = rep.default
+		}
+	}
+
+	return { ...highLevelDefaults, ...objectData }
+}
+
+/**
  * WRITE PATH:
  * Interprets a high-level data object for a given component, returning a new
  * object with raw, engine-friendly values.
@@ -74,6 +119,15 @@ export function interpret(typeID, data) {
 			case 'string':
 				rawData[propName] = stringInterningTable.intern(propValue)
 				break
+			case 'component':
+				const typeId = Schema.componentNameToTypeID.get(propValue.toLowerCase())
+				if (typeId === undefined) {
+					console.warn(`ComponentInterpreter: Unknown component name "${propValue}" for property "${propName}".`)
+					rawData[propName] = 0 // Use 0 as a sentinel for unknown component
+				} else {
+					rawData[propName] = typeId
+				}
+				break
 			case 'boolean':
 			case 'bool':
 				rawData[propName] = propValue ? 1 : 0
@@ -94,6 +148,17 @@ export function interpret(typeID, data) {
 						// Interpret string-based values for enums and strings within the array.
 						if (itemRepresentation.originalType === 'string' && typeof value === 'string') {
 							interpretedValue = stringInterningTable.intern(value)
+						} else if (itemRepresentation.originalType === 'component' && typeof value === 'string') {
+							const typeId = Schema.componentNameToTypeID.get(value.toLowerCase())
+							if (typeId === undefined) {
+								console.warn(`ComponentInterpreter: Unknown component name "${value}" in flat_array "${propName}".`)
+								interpretedValue = 0 // Use 0 as a sentinel
+							} else {
+								interpretedValue = typeId
+							}
+						} else if (itemRepresentation.originalType === 'entity') {
+							// Ensure entity IDs are always BigInts.
+							interpretedValue = BigInt(value || 0)
 						}
 						rawData[key] = interpretedValue
 					} else {
@@ -154,39 +219,32 @@ export function reconstruct(typeID, rawData) {
 			case 'string':
 				highLevelData[propName] = stringInterningTable.get(rawValue)
 				break
+			case 'component':
+				// Return the component's string name. Returns undefined if ID is invalid.
+				highLevelData[propName] = Schema.componentNames[rawValue]
+				break
 			case 'flat_array': {
 				const sourceArray = []
 				const len = rawData[rep.lengthProperty]
 				const itemRep = rep.itemRepresentation
 				for (let i = 0; i < len; i++) {
 					const value = rawData[`${propName}${i}`]
-					// Enums/bitmasks are now returned as numbers. The consumer can use the constants to interpret them.
-					sourceArray.push(itemRep.originalType === 'string' ? stringInterningTable.get(value) : value)
+					let reconstructedValue = value
+					if (itemRep.originalType === 'string') {
+						reconstructedValue = stringInterningTable.get(value)
+					} else if (itemRep.originalType === 'component') {
+						reconstructedValue = Schema.componentNames[value]
+					} else if (itemRep.originalType === 'entity') {
+						reconstructedValue = value // Already a BigInt, pass through
+					}
+					sourceArray.push(reconstructedValue)
 				}
 				highLevelData[propName] = sourceArray
 				break
 			}
 			case 'rpn': {
-				// Reconstruct the three underlying flat arrays for the RPN type.
-				const streamRep = info.representations[rep.streamProperty]
-				const startsRep = info.representations[rep.startsProperty]
-				const lengthsRep = info.representations[rep.lengthsProperty]
-
-				const streamArray = []
-				const streamLen = rawData[streamRep.lengthProperty]
-				for (let i = 0; i < streamLen; i++) streamArray.push(rawData[`${rep.streamProperty}${i}`])
-
-				const startsArray = []
-				const startsLen = rawData[startsRep.lengthProperty]
-				for (let i = 0; i < startsLen; i++) startsArray.push(rawData[`${rep.startsProperty}${i}`])
-
-				const lengthsArray = []
-				const lengthsLen = rawData[lengthsRep.lengthProperty]
-				for (let i = 0; i < lengthsLen; i++) lengthsArray.push(rawData[`${rep.lengthsProperty}${i}`])
-
-				highLevelData[rep.streamProperty] = streamArray
-				highLevelData[rep.startsProperty] = startsArray
-				highLevelData[rep.lengthsProperty] = lengthsArray
+				// This is a no-op. The 'rpn' type is virtual on the read path.
+				// The underlying flat arrays (`_rpnStream`, etc.) are reconstructed by their own 'flat_array' case.
 				break
 			}
 			default: // Primitives

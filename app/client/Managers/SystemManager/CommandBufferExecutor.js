@@ -52,7 +52,7 @@ export class CommandBufferExecutor {
 			remove: new Map(), // Map<componentTypeID, number[]>
 			set: new Map(), // Map<componentTypeID, { entityIds: number[], soaIndices: number[] }>
 		}
-		const deferredModifications = { add: [], set: [], remove: [] }
+		const deferredModifications = { add: [], set: [], remove: [], addComponents: [] }
 		const placeholderResolutionMap = new Map()
 		const deletions = new Set()
 		const chunkDeletions = new Set()
@@ -96,6 +96,44 @@ export class CommandBufferExecutor {
 					addBatch.dataOffsets.push(dataOffset)
 					break
 				}
+				case OpCodes.ADD_COMPONENTS: {
+					const entityId = reader.readU64()
+					if ((entityId >> 63n) === 1n) {
+						// Defer modifications on placeholder entities
+						deferredModifications.addComponents.push(sortedOffsets[i])
+						continue
+					}
+					if (deletions.has(entityId)) continue // Skip mods on deleted entities
+
+					const payloadArchetypeId = reader.readU16()
+					reader.readU16() // Skip dataLength
+					const payloadDataOffset = reader.offset // The offset where the AoS binary data starts
+
+					const componentIds = this.entityManager.getComponentTypeIDsForArchetype(payloadArchetypeId)
+					if (!componentIds) continue
+
+					let componentRelativeOffset = 0
+					for (const componentTypeID of componentIds) {
+						const info = Schema.componentInfo[componentTypeID]
+						if (!info) continue
+
+						// Handle alignment within the AoS payload
+						const alignment = info.alignment
+						if (alignment > 0 && componentRelativeOffset % alignment !== 0) {
+							componentRelativeOffset += alignment - (componentRelativeOffset % alignment)
+						}
+
+						if (!modifications.add.has(componentTypeID)) {
+							modifications.add.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+						}
+						const addBatch = modifications.add.get(componentTypeID)
+						addBatch.entityIds.push(entityId)
+						addBatch.dataOffsets.push(payloadDataOffset + componentRelativeOffset)
+						addBatch.dataLengths.push(info.byteSize)
+						componentRelativeOffset += info.byteSize
+					}
+					break
+				}
 				case OpCodes.REMOVE_COMPONENT: {
 					const entityId = reader.readU64()
 					if ((entityId >> 63n) === 1n) {
@@ -136,6 +174,9 @@ export class CommandBufferExecutor {
 				case OpCodes.CREATE_ENTITY: {
 					// Reads the new format with a placeholder ID.
 					const placeholderId = reader.readU64()
+					if (deletions.has(placeholderId)) {
+						break // Don't add to creation list. Loop will advance to next command.
+					}
 					const archetypeId = reader.readU16()
 					const dataSize = reader.readU16()
 					const payload = reader.readBuffer(dataSize)
@@ -169,7 +210,7 @@ export class CommandBufferExecutor {
 
 		// --- Creation & Placeholder Resolution ---
 		for (const { placeholderId, archetypeId, payload } of creations.varied) {
-			const realEntityId = this.entityManager.createEntityFromBinarySoAPayload(archetypeId, payload, currentTick)
+			const realEntityId = this.entityManager.createEntityFromAosPayload(archetypeId, payload, currentTick)
 			placeholderResolutionMap.set(placeholderId, realEntityId)
 		}
 
@@ -181,6 +222,7 @@ export class CommandBufferExecutor {
 		if (
 			deferredModifications.add.length > 0 ||
 			deferredModifications.set.length > 0 ||
+			deferredModifications.addComponents.length > 0 ||
 			deferredModifications.remove.length > 0
 		) {
 			this._executeDeferredModifications(deferredModifications, placeholderResolutionMap, reader, currentTick)
@@ -197,7 +239,7 @@ export class CommandBufferExecutor {
 	 * @private
 	 */
 	_executeDeferredModifications(deferredCommands, resolutionMap, reader, currentTick) {
-		const modifications = { add: new Map(), remove: new Map(), set: new Map() }
+		const modifications = { add: new Map(), remove: new Map(), set: new Map(), addComponents: [] }
 		const resolve = id => resolutionMap.get(id) ?? id
 
 		// In-place patch payloads in the command buffer to resolve nested placeholders.
@@ -208,6 +250,45 @@ export class CommandBufferExecutor {
 		for (const offset of deferredCommands.set) {
 			this._patchCommandPayload(offset, OpCodes.SET_COMPONENT_DATA, resolutionMap, reader)
 		}
+
+		// Unpack and consolidate deferred ADD_COMPONENTS commands
+		for (const offset of deferredCommands.addComponents) {
+			reader.seek(offset)
+			reader.readU8() // Skip OpCode
+			const placeholderId = reader.readU64()
+			const entityId = resolve(placeholderId)
+			if (!entityId) continue // Entity was created and destroyed in the same frame
+
+			const payloadArchetypeId = reader.readU16()
+			reader.readU16() // Skip dataLength
+			const payloadDataOffset = reader.offset
+
+			const componentIds = this.entityManager.getComponentTypeIDsForArchetype(payloadArchetypeId)
+			if (!componentIds) continue
+
+			let componentRelativeOffset = 0
+			for (const componentTypeID of componentIds) {
+				const info = Schema.componentInfo[componentTypeID]
+				if (!info) continue
+
+				// Handle alignment
+				const alignment = info.alignment
+				if (alignment > 0 && componentRelativeOffset % alignment !== 0) {
+					componentRelativeOffset += alignment - (componentRelativeOffset % alignment)
+				}
+
+				if (!modifications.add.has(componentTypeID)) {
+					modifications.add.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+				}
+				const addBatch = modifications.add.get(componentTypeID)
+				addBatch.entityIds.push(entityId)
+				addBatch.dataOffsets.push(payloadDataOffset + componentRelativeOffset)
+				addBatch.dataLengths.push(info.byteSize)
+
+				componentRelativeOffset += info.byteSize
+			}
+		}
+
 
 		// Now, consolidate these resolved commands into batches.
 		const processDeferred = (offsets, opCode, batchMap, hasPayload) => {
@@ -259,11 +340,15 @@ export class CommandBufferExecutor {
 		const view = new DataView(reader.buffer)
 		for (const propKey of info.propertyKeys) {
 			const propInfo = info.properties[propKey]
-			if (propInfo.type === 'entity' || propInfo.type === 'u64') {
+			// Only patch properties explicitly defined as 'entity' type.
+			if (propInfo.type === 'entity') {
 				const propOffset = reader.offset + 2 + propInfo.offset // +2 for dataLength
 				const placeholderId = view.getBigUint64(propOffset, true)
-				if (resolutionMap.has(placeholderId)) {
-					view.setBigUint64(propOffset, resolutionMap.get(placeholderId), true)
+				// Check if the ID is a placeholder (MSB is 1).
+				if ((placeholderId >> 63n) === 1n) {
+					// Resolve to the real ID, or default to 0n (null entity) if the placeholder was for a destroyed entity.
+					const resolvedId = resolutionMap.get(placeholderId) ?? 0n
+					view.setBigUint64(propOffset, resolvedId, true)
 				}
 			}
 		}
@@ -391,17 +476,22 @@ export class CommandBufferExecutor {
 				)
 
 				// Defer the removal by adding the entities to a final removal batch.
-				if (!removalsByArchetype.has(sourceArchetypeId)) {
-					removalsByArchetype.set(sourceArchetypeId, [])
+				if (!removalsByArchetype.has(sourceArchetypeId)) removalsByArchetype.set(sourceArchetypeId, [])
+				const removalBatch = removalsByArchetype.get(sourceArchetypeId)
+				// Instead of just pushing entityIds, we push an object containing the ID and its original location.
+				// This prevents a race condition where the entity's location is updated by the copy operation
+				// before the removal operation can read the old location.
+				for (let i = 0; i < entityIds.length; i++) {
+					removalBatch.push({ entityId: entityIds[i], location: sourceLocations[i] })
 				}
-				removalsByArchetype.get(sourceArchetypeId).push(...entityIds)
 			}
 		}
 
 		// --- Pass 3b: All Removals ---
 		// Now that all data has been safely copied, execute the batched removals.
-		for (const [sourceArchetypeId, entityIdsToRemove] of removalsByArchetype.entries()) {
-			this.entityManager._removeEntitiesBatch(sourceArchetypeId, entityIdsToRemove)
+		for (const [sourceArchetypeId, entitiesWithLocations] of removalsByArchetype.entries()) {
+			// Call the modified _removeEntitiesBatch with the original locations.
+			this.entityManager._removeEntitiesBatch(sourceArchetypeId, entitiesWithLocations)
 		}
 	}
 

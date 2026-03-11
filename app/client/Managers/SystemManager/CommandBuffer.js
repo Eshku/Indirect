@@ -18,41 +18,26 @@ export class CommandBuffer {
 		this.sortableBuffer = new SortableCommandBuffer()
 		// We use a BigInt to match the entity ID type.
 		this.placeholderIdCounter = 0n
+		this.executor = null
+		this.systemManager = null
 	}
 
-	/**
-	 * Clears the buffers for the next frame. Called by the CommandBufferExecutor after a flush.
-	 */
-	clear() {
-		this.rawBuffer.reset()
-		this.sortableBuffer.clear()
-		this.dynamicArray._reset()
-		this.placeholderIdCounter = 0n
+	init(executor, systemManager) {
+		this.executor = executor
+		this.systemManager = systemManager
 	}
 
-	/**
-	 * Clears the buffers for the next frame. Called by the SystemManager after a flush.
-	 */
-	clear() {
-		this.rawBuffer.reset()
-		this.sortableBuffer.clear()
-		this.placeholderIdCounter = 0n
-	}
-
-	/**
-	 * Generates a new, temporary placeholder ID.
-	 * These IDs are marked with the most significant bit set to 1.
-	 * @returns {bigint} A new placeholder entity ID.
-	 */
-	_generatePlaceholderId() {
-		// Set the MSB to 1 to mark it as a placeholder.
-		return (1n << 63n) | this.placeholderIdCounter++
+	flush() {
+		if (!this.executor || !this.systemManager) {
+			throw new Error('CommandBuffer has not been initialized. Cannot flush.')
+		}
+		this.executor.execute(this, this.systemManager.currentTick)
 	}
 
 	/**
 	 * Records a command to add a component to an entity using a pre-compiled binary payload.
 	 * @param {bigint} entityId The entity to modify.
-	 * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload from `payloadCompiler.compileComponentData`.
+	 * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload from `payloadCompiler.compile`.
 	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
 	 */
 	addComponent(entityId, payload, layer = 0) {
@@ -71,9 +56,32 @@ export class CommandBuffer {
 	}
 
 	/**
+	 * Records a command to add multiple components to an entity using a single pre-compiled payload.
+	 * This is more efficient than calling `addComponent` multiple times for the same entity.
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {{archetypeId: number, data: ArrayBuffer}} payload The pre-compiled payload from `payloadCompiler.compile`.
+	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
+	 */
+	addComponents(entityId, payload, layer = 0) {
+		const offset = this.rawBuffer.offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(OpCodes.ADD_COMPONENTS)
+		this.rawBuffer.writeU64(entityId)
+		// The archetypeId tells the executor which components are packed in the data buffer.
+		this.rawBuffer.writeU16(payload.archetypeId)
+		this.rawBuffer.writeU16(payload.data.byteLength)
+		this.rawBuffer.writeBuffer(payload.data)
+
+		const length = this.rawBuffer.offset - offset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 0)
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
 	 * Records a command to set a component's data on an entity.
 	 * Assumes the component already exists. For performance, this is not checked here.
-	 * @param {bigint} entityId The entity to modify. * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload from `payloadCompiler.compileComponentData`.
+	 * @param {bigint} entityId The entity to modify. * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload from `payloadCompiler.compile`.
 	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
 	 */
 	setComponentData(entityId, payload, layer = 0) {
@@ -149,10 +157,10 @@ export class CommandBuffer {
 	}
 
 	/**
-	 * Records a command to create a new entity from a pre-compiled SoA payload.
-	 * This is the primary, high-performance "fast path" for single entity creation,
-	 * as it bypasses all runtime data processing.
-	 * @param {{archetypeId: number, componentIdMap: Map<number, object>}} payload - The payload from `payloadCompiler.compileEntity`.
+	 * Records a command to create a batch of identical entities from a single pre-compiled AoS payload.
+	 * This is a highly efficient way to stamp out many identical entities.
+	 * The payload should be created with `compile`.
+	 * @param {{archetypeId: number, data: ArrayBuffer}} payload - The pre-compiled AoS payload for a single entity template.
 	 * @param {number} count The number of entities to create.
 	 * @param {number} [layer=0]
 	 */
@@ -174,7 +182,7 @@ export class CommandBuffer {
 	/**
 	 * Records a command to instantiate an entity from a prefab.
 	 * This is the high-performance path that expects a pre-compiled payload.
-	 * @param {{archetypeId: number, data: ArrayBuffer}} payload The pre-compiled payload from `payloadCompiler.compilePrefabPayload`.
+	 * @param {{archetypeId: number, data: ArrayBuffer}} payload The pre-compiled payload from `compile('prefabName', ...)`.
 	 * @param {number} [layer=0] The execution layer.
 	 */
 	instantiate(payload, layer = 0) {
@@ -207,8 +215,8 @@ export class CommandBuffer {
 
 	/**
 	 * Records a command to create a single new entity from a pre-compiled binary payload.
-	 * This is the unified, high-performance "fast path" for single entity creation.
-	 * It expects a payload compiled by `PayloadCompiler.compileEntity()`.
+	 * This is the unified, high-performance path for single entity creation.
+	 * It expects an AoS payload compiled by `compile`.
 	 * @param {{archetypeId: number, data: ArrayBuffer}} payload - The pre-compiled payload.
 	 * @param {number} layer The execution layer.
 	 * @returns {bigint} A temporary placeholder ID for the entity being created.
@@ -239,6 +247,25 @@ export class CommandBuffer {
 			sortedOffsets: this.sortableBuffer.getSortedOffsets(),
 			sortedLengths: this.sortableBuffer.getSortedLengths(),
 		}
+	}
+
+	/**
+	 * Clears the buffers for the next frame. Called by the CommandBufferExecutor after a flush.
+	 */
+	clear() {
+		this.rawBuffer.reset()
+		this.sortableBuffer.clear()
+		this.placeholderIdCounter = 0n
+	}
+
+	/**
+	 * Generates a new, temporary placeholder ID.
+	 * These IDs are marked with the most significant bit set to 1.
+	 * @returns {bigint} A new placeholder entity ID.
+	 */
+	_generatePlaceholderId() {
+		// Set the MSB to 1 to mark it as a placeholder.
+		return (1n << 63n) | this.placeholderIdCounter++
 	}
 }
 

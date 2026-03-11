@@ -5,8 +5,5 @@ export const Range = {
 	/**
 	 * The maximum distance.
 	 */
-	value: {
-		type: 'f32',
-		default: 1,
-	},
+	value: { type: 'f32', default: 1000 },
 }

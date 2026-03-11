@@ -18,6 +18,8 @@ export class SchemaTestSystem {
 			bitmaskComponent: bitmaskComponentID,
 			flatArrayComponent: flatArrayComponentID,
 			rpnComponent: rpnComponentID,
+			componentRefComponent: componentRefComponentID,
+			entityRefArrayComponent: entityRefArrayComponentID,
 		} = componentManager.getTypeIDs()
 
 		// Get the canonical string names for the high-level ECS API.
@@ -33,6 +35,8 @@ export class SchemaTestSystem {
 			flatArrayEnums: true,
 			flatArrayStrings: true,
 			flatArrayPartial: true,
+			flatArrayEntities: true,
+			componentRef: true,
 			rpn: true,
 		}
 	}
@@ -199,6 +203,44 @@ export class SchemaTestSystem {
 					expect(retrievedData.primitiveArray).toEqual([5])
 					expect(retrievedData.enumArray).toEqual([])
 					expect(retrievedData.stringArray).toEqual(['one', 'two'])
+
+					ECS.destroyEntity(entityId)
+				})
+			}
+
+			if (this.testConfig.flatArrayEntities) {
+				it('should correctly store and retrieve a flat array of entity references', () => {
+					const e1 = ECS.createEntity()
+					const e2 = ECS.createEntity()
+
+					const initialData = {
+						targets: [e1, e2],
+					}
+					const entityId = ECS.createEntity({ EntityRefArrayComponent: initialData })
+					const retrievedData = ECS.getComponent(entityId, 'EntityRefArrayComponent')
+
+					expect(retrievedData.targets).toEqual([e1, e2])
+
+					ECS.destroyEntity(e1)
+					ECS.destroyEntity(e2)
+					ECS.destroyEntity(entityId)
+				})
+			}
+
+			if (this.testConfig.componentRef) {
+				it('should correctly store and retrieve component references', () => {
+					// This test assumes a `ComponentRefComponent` with `{ ref: { type: 'component' } }` is defined.
+					const initialData = { ref: 'position' } // Use string name
+					const entityId = ECS.createEntity({ ComponentRefComponent: initialData })
+
+					const retrievedData = ECS.getComponent(entityId, 'ComponentRefComponent')
+
+					// Add a check to ensure the component was retrieved before accessing its properties.
+					// This will give a more informative test failure message.
+					expect(retrievedData).toBeDefined()
+
+					// The `reconstruct` function (called by getComponent) should convert the stored typeID back to its string name.
+					expect(retrievedData.ref).toBe('position')
 
 					ECS.destroyEntity(entityId)
 				})

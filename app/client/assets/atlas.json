@@ -3,7 +3,7 @@
     "image": "atlas.png",
     "size": {
       "w": 128,
-      "h": 128
+      "h": 64
     }
   },
   "frames": {
@@ -23,24 +23,24 @@
       "frame": {
         "x": 36,
         "y": 2,
-        "w": 64,
-        "h": 64
+        "w": 32,
+        "h": 32
       },
       "sourceSize": {
-        "w": 64,
-        "h": 64
+        "w": 32,
+        "h": 32
       }
     },
-    "projectile_player": {
+    "projectile": {
       "frame": {
-        "x": 102,
+        "x": 70,
         "y": 2,
-        "w": 4,
-        "h": 4
+        "w": 8,
+        "h": 8
       },
       "sourceSize": {
-        "w": 4,
-        "h": 4
+        "w": 8,
+        "h": 8
       }
     }
   }

@@ -28,17 +28,14 @@ const { ecs } = engine.getManagers()
  */
 export class EventEntityCleanupSystem {
 	init() {
-		const { landedEvent, leftSurfaceEvent } = ecs.getTypeIDs()
-
-		this.transientEventQuery = this.getQuery({
-			any: [landedEvent, leftSurfaceEvent],
-		})
+		//this.transientEventQuery = this.getQuery({})
 	}
 
 	update() {
-		for (const chunk of this.transientEventQuery.iter()) {
-			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
-		}
+		//! No transient entities yet.
+		/* for (const chunk of this.transientEventQuery.iter()) {
+			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
+		} */
 	}
 
 	destroy() {}

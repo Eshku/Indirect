@@ -25,7 +25,7 @@ export class MemoryBenchmark {
 
 		this.entityCount = 8_000_000
 
-		const { payload } = this.compileEntity({
+		const { payload } = this.compile({
 			memoryComponent: { value: 1 },
 			memoryTag: {},
 		})
@@ -48,12 +48,12 @@ export class MemoryBenchmark {
 	}
 
 	spawnEntities() {
-		this.commands.createEntities(this.creationPayload, this.entityCount)
+		this.createEntities(this.creationPayload, this.entityCount)
 	}
 
 	destroy() {
 		for (const chunk of this.query.iter()) {
-			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
+			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
 		}
 	}
 }

@@ -19,7 +19,7 @@
  * provided by the `SchemaCompiler` to create the final payload and its mutators.
  */
 
-const { interpret } = await import(`@managers/ComponentManager/ComponentInterpreter.js`)
+const { interpret, resolveComponentData } = await import(`@managers/ComponentManager/ComponentInterpreter.js`)
 
 const Schema = await import(`@managers/ComponentManager/ComponentSchema.js`)
 
@@ -31,103 +31,70 @@ class PayloadCompiler {
 	}
 
 	/**
-	 * Compiles a single entity definition into a binary payload.
-	 * The payload is in a "flattened SoA" format, optimized for single entity creation.
-	 * Use with `commands.createEntity()`.
-	 * @param {string|object} source - A prefab name or a component data object.
-	 * @param {object} [overrides={}] - Component data to override prefab defaults.
-	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}}
+	 * The universal compiler method. It creates a binary payload from a high-level definition.
+	 * Its behavior is overloaded based on the type of the `source` argument.
+	 *
+	 * - **`compile(prefabName, overrides)`**: Compiles an entity from a prefab with optional overrides.
+	 * - **`compile(componentObject)`**: Compiles an entity from a component data object.
+	 * - **`compile(componentTypeID, data)`**: Compiles a single component's data.
+	 *
+	 * @param {string|object|number} source - The source to compile from.
+	 * @param {object} [dataOrOverrides={}] - Overrides for a prefab or data for a single component.
+	 * @returns {{payload: object, mutators: object}} The compiled payload and its mutators.
 	 */
-	compileEntity(source, overrides = {}) {
+	compile(source, dataOrOverrides = {}) {
+		// Case 1: Prefab name (string)
 		if (typeof source === 'string') {
-			return this._compilePrefab(source, overrides, this._compile.bind(this))
-		} else if (typeof source === 'object' && source !== null) {
+			return this._compilePrefab(source, dataOrOverrides, this._compile.bind(this))
+		}
+		// Case 2: Component data object for an entity
+		else if (typeof source === 'object' && source !== null) {
 			return this._compileFromObject(source, this._compile.bind(this))
-		} else {
+		}
+		// Case 3: Single component type ID (number)
+		else if (typeof source === 'number') {
+			const typeID = source
+			const data = dataOrOverrides
+
+			const info = Schema.componentInfo[typeID]
+			if (!info) {
+				throw new Error(`PayloadCompiler.compile: Component with typeID ${typeID} not found.`)
+			}
+
+			const archetypeId = this.entityManager.getArchetype([typeID])
+			const resolvedData = resolveComponentData(typeID, data)
+			const rawData = interpret(typeID, resolvedData)
+			const componentDataMap = new Map([[typeID, rawData]])
+			const { payload, mutators } = this._compile(archetypeId, componentDataMap)
+
+			return {
+				payload: { typeID, data: payload.data },
+				mutators,
+			}
+		}
+		// Error case
+		else {
 			throw new TypeError(
-				'PayloadCompiler.compileEntity: First argument must be a prefab name (string) or a component data object.',
+				'PayloadCompiler.compile: First argument must be a prefab name (string), a component data object, or a component type ID (number).',
 			)
 		}
 	}
 
 	/**
-	 * Compiles a batch of identical entities into a binary payload.
-	 * The payload is in an "AoS" format, optimized for batch creation.
-	 * Use with `commands.createEntities()`.
-	 * @param {string|object} source - A prefab name or a component data object.
-	 * @param {object} [overrides={}] - Component data to override prefab defaults.
+	 * [PLANNED] Compiles component data for a BATCH of entities, each with varying data for the same component type.
+	 * This is intended for a future `commands.setComponentsData(payload)` command.
+	 *
+	 * This method produces a **Structure-of-Arrays (SoA)** payload, which is fundamentally
+	 * different from the AoS payload produced by `compile`. SoA is highly efficient
+	* for batch-updating a single component across many entities, as it mirrors the engine's
+	 * internal chunk storage format.
+	 *
+	 * @example
+	 * // const positionPayload = compileComponentsForEntities({ Position: [{x:1}, {x:2}, ...] });
+	 * @param {object} componentsObject - An object where keys are component names and values are arrays of data for each entity.
 	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}}
 	 */
-	compileEntities(source, overrides = {}) {
-		if (typeof source === 'string') {
-			return this._compilePrefab(source, overrides, this._compile.bind(this))
-		} else if (typeof source === 'object' && source !== null) {
-			return this._compileFromObject(source, this._compile.bind(this))
-		} else {
-			throw new TypeError(
-				'PayloadCompiler.compileEntities: First argument must be a prefab name (string) or a component data object.',
-			)
-		}
-	}
-
-	/**
-	 * Compiles the data for a single component into a binary payload with mutators.
-	 * This is the "fast path" for `commands.addComponent()` and `commands.setComponentData()`.
-	 * You compile once in `init()` and then use the mutators in the hot loop.
-	 * @param {number} typeID The component's type ID.
-	 * @param {object} [data={}] The high-level data object to use as a template.
-	 * @returns {{payload: {typeID: number, data: ArrayBuffer}, mutators: object}}
-	 */
-	compileComponent(typeID, data = {}) {
-		const info = Schema.componentInfo[typeID]
-		if (!info) {
-			throw new Error(`PayloadCompiler.compileComponent: Component with typeID ${typeID} not found.`)
-		}
-
-		// The "archetype" for a single component is just that component itself.
-		const archetypeId = this.entityManager.getArchetype([typeID])
-
-		// Interpret the high-level data into a raw, flattened data object.
-		const rawData = interpret(typeID, data)
-
-		// Create the componentDataMap needed by the internal compiler.
-		const componentDataMap = new Map([[typeID, rawData]])
-
-		// Use the SoA compiler, as this is for a single component payload.
-		const { payload, mutators } = this._compile(archetypeId, componentDataMap)
-
-		return {
-			payload: {
-				typeID,
-				data: payload.data,
-			},
-			mutators,
-		}
-	}
-
-	/**
-	 * [FUTURE] Pre-compiles a payload for one or more components for a single entity.
-	 * This will be the primary way to get a payload for `commands.addComponent` or `commands.setComponent`.
-	 * @param {number[]} typeIDs - An array of component type IDs.
-	 * @param {object} [data={}] - A data object where keys are component names.
-	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}}
-	 */
-	compileComponents(typeIDs, data = {}) {
-		// This will be the main way of pre-compiling data for a single entity's components.
-		// It will be SoA-based for efficient single-entity structural changes.
-		// `compileComponent` will become an alias for this with a single typeID.
-		throw new Error('compileComponents is not yet implemented.')
-	}
-
-	/**
-	 * [FUTURE] Pre-compiles a payload for one or more components for a BATCH of entities.
-	 * This will be used for efficient, query-based batch modifications.
-	 * @param {number[]} typeIDs - An array of component type IDs.
-	 * @param {object} [data={}] - A data object where keys are component names.
-	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}}
-	 */
-	compileComponentsForEntities(typeIDs, data = {}) {
-		// This will be AoS-based for efficient batch creation/modification of many entities.
+	compileComponentsForEntities(componentsObject) {
 		throw new Error('compileComponentsForEntities is not yet implemented.')
 	}
 
@@ -228,9 +195,18 @@ class PayloadCompiler {
 		}
 
 		// Merge prefab data with overrides.
-		const finalComponentData = { ...prefabData.components }
+		const finalComponentData = { ...prefabData }
 		for (const compName in overrides) {
-			finalComponentData[compName] = { ...(finalComponentData[compName] || {}), ...overrides[compName] }
+			const overrideData = overrides[compName]
+			const prefabCompData = finalComponentData[compName]
+
+			// This logic correctly handles both partial object overrides and primitive/shorthand overrides.
+			if (typeof overrideData === 'object' && overrideData !== null && !Array.isArray(overrideData) &&
+				typeof prefabCompData === 'object' && prefabCompData !== null && !Array.isArray(prefabCompData)) {
+				finalComponentData[compName] = { ...prefabCompData, ...overrideData }
+			} else {
+				finalComponentData[compName] = overrideData
+			}
 		}
 
 		// Run the merged data through the interpreter.
@@ -298,10 +274,10 @@ class PayloadCompiler {
 			const info = Schema.componentInfo[typeId]
 			if (!info) continue
 
-			let rawData = interpret(typeId, componentsInput[componentName])
-
-			const defaults = Schema.compiledDefaults[typeId]
-			rawData = { ...defaults, ...rawData }
+			// Step 1: Resolve shorthands and apply high-level defaults.
+			const resolvedData = resolveComponentData(typeId, componentsInput[componentName])
+			// Step 2: Interpret the fully-specified high-level data into low-level raw data.
+			const rawData = interpret(typeId, resolvedData)
 
 			const perEntityPart = {}
 			const sharedPart = {}

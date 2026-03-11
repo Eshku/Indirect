@@ -141,6 +141,15 @@ export class ChunkView {
 	 * @param {number} indexInChunk The entity's index within the chunk.
 	 * @param {number} tick The current game tick.
 	 */
+
+	//! entity-level dirty tracking going to be removed
+	//! and replaced with manually defined, as part of components.
+	//! it is rarely useful to mark per entity in a loop 
+	//! benefits only if amount of entities marked <10% of whole iteration
+	//! while it adds engine complexity, including command buffer.
+
+	//! engine-level support will stay only on broad-phase.
+
 	markEntityDirty(typeId, indexInChunk, tick) {
 		// 1. Update the per-entity tick.
 		this.dirtyTicks[typeId][indexInChunk] = tick

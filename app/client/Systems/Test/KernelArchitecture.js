@@ -62,12 +62,12 @@ export class KernelArchitecture {
 	init() {
 		this.query = this.getQuery({ with: [position, velocity] })
 
-		const { payload } = this.compileEntity({
+		const { payload } = this.compile({
 			position: { x: 100, y: 100 },
 			velocity: { x: 1, y: 0 },
 		})
 		this.creationPayload = payload
-		this.commands.createEntity(this.creationPayload)
+		this.createEntity(this.creationPayload)
 	}
 
 	update(frameContext) {

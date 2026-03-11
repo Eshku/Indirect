@@ -3,7 +3,7 @@ const { lerp } = await import(`@core/utils/lerp.js`)
 const { Easing } = await import(`@core/utils/easing.js`)
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
-const { lerpColor } = await import(`@core/utils/lerp.js`)
+const { lerpColor, getCatmullRomPoint } = await import(`@core/utils/lerp.js`)
 const { CursorState: CursorStateDef } = await import(`@client/Components/UI/CursorState.js`)
 
 const DEFAULT_STATES = {
@@ -77,8 +77,6 @@ const DEFAULT_STATES = {
 
 const TRANSITION_DURATION = 0.25 // seconds
 
-//TODO use cursor entity, so data can be read by other systems
-
 /**
  * A system dedicated to creating, managing, and updating the cursor.
  * It controls the cursor's position, visual state, and special effects
@@ -86,18 +84,22 @@ const TRANSITION_DURATION = 0.25 // seconds
  * - It hooks into the renderer's 'prerender' event to update its position with low latency.
  * - It runs in the main update loop to check for interactions with UI elements and change state accordingly.
  */
+
+const { position, cursorTag, cursorState, playerTag } = ecs.getTypeIDs()
 export class CursorSystem {
 	/**
 	 * Initializes the system. This is called by the SystemManager once.
 	 */
 	async init() {
 		// --- Component/Entity State ---
-		const { position, cursorTag, cursorState } = ecs.getTypeIDs()
+
 		this.cursorStateComponent = cursorState
 		this.cursorQuery = this.getQuery({ with: [cursorTag] })
 		this.cursorEntityId = null
 		this.positionPayload = null
 		this.cursorStatePayload = null
+		this.playerQuery = this.getQuery({ with: [playerTag, position] })
+		this.playerId = null
 
 		// --- Visual State Management ---
 		this.states = DEFAULT_STATES
@@ -144,9 +146,14 @@ export class CursorSystem {
 			return // Stop initialization if the entity isn't found
 		}
 
+		this.playerId = this.playerQuery.getSingleEntity()
+		if (!this.playerId) {
+			console.error('CursorSystem: Could not find player entity for camera reference.')
+		}
+
 		// Pre-compile payloads for updating components. This is a one-time setup.
-		this.positionPayload = this.compileComponent(position, { x: 0, y: 0 })
-		this.cursorStatePayload = this.compileComponent(this.cursorStateComponent, { flags: 0 })
+		this.positionPayload = this.compile(position, { x: 0, y: 0 })
+		this.cursorStatePayload = this.compile(this.cursorStateComponent, { flags: 0 })
 
 		// Pre-generate all state textures
 		await this._generateAllStateTextures()
@@ -189,42 +196,47 @@ export class CursorSystem {
 		const dy = this.hardwarePosition.y - this.visualPosition.y
 		this.isSettled = Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1
 
-		const isTransitioning = this.transition.progress < 1.0
-
-		// If the cursor hasn't moved, is visually settled, and not transitioning,
-		// we can significantly reduce the work done per frame.
-		if (!positionChanged && this.isSettled && !isTransitioning) {
-			// The trail still needs to be updated to fade out.
-			// Once the trail is empty, this call becomes very cheap.
-			this.updateTrail(this.visualPosition)
-			return
+		// 2. Update visual state and position only if the cursor has moved or is transitioning.
+		if (positionChanged || !this.isSettled || this.transition.progress < 1.0) {
+			if (positionChanged) {
+				this.updateState()
+			}
+			this.updatePosition(deltaTime)
+			this.updateTransition(deltaTime)
 		}
 
-		// 2. Detect and set the target state based on what's under the cursor
-		// Only check for state changes if the cursor has moved.
-		if (positionChanged) {
-			this.updateState()
-		}
-
-		// 3. Update smoothed visual position
-		this.updatePosition(deltaTime)
-
-		// 4. Write data to the cursor entity
+		// 3. ALWAYS update the world position of the cursor entity.
+		// This is the critical fix: this block now runs every frame, ensuring the
+		// cursor's world coordinates are correct even when the player moves and the mouse is still.
 		if (this.cursorEntityId !== null) {
+			const playerPosition = this.getComponent(this.playerId, position)
+			const { gameManager } = engine.getManagers()
+			const screenWidth = gameManager.getApp().screen.width
+			const screenHeight = gameManager.getApp().screen.height
+
+			let worldX = this.visualPosition.x
+			let worldY = this.visualPosition.y
+
+			if (playerPosition) {
+				// Convert screen-space visual position to world-space coordinates.
+				// This accounts for camera panning by using the player's position as the camera's focus.
+				worldX = this.visualPosition.x + playerPosition.x - screenWidth / 2
+				worldY = -this.visualPosition.y + playerPosition.y + screenHeight / 2
+			}
+
 			// Update position component
 			const posMutators = this.positionPayload.mutators.position
-			posMutators.x[0] = this.visualPosition.x
-			posMutators.y[0] = this.visualPosition.y
-			this.commands.setComponentData(this.cursorEntityId, this.positionPayload.payload)
+			posMutators.x[0] = worldX
+			posMutators.y[0] = worldY
+			this.setComponentData(this.cursorEntityId, this.positionPayload.payload)
 
 			// Update state component
 			const stateFlag = this.cursorStateFlags[this.targetStateName.toUpperCase()] || this.cursorStateFlags.DEFAULT
 			this.cursorStatePayload.mutators.cursorState.flags[0] = stateFlag
-			this.commands.setComponentData(this.cursorEntityId, this.cursorStatePayload.payload)
+			this.setComponentData(this.cursorEntityId, this.cursorStatePayload.payload)
 		}
 
-		// 5. Update visual transitions and effects
-		this.updateTransition(deltaTime)
+		// 4. ALWAYS update the trail effect.
 		this.updateTrail(this.visualPosition)
 	}
 

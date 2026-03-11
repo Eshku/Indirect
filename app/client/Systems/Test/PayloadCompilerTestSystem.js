@@ -16,6 +16,7 @@ const {
 	bitmaskComponent,
 	rpnComponent,
 	entityRefComponent,
+	shorthandDefaultComponent,
 } = componentManager.getTypeIDs()
 
 /**
@@ -24,18 +25,17 @@ const {
  */
 export class PayloadCompilerTestSystem {
 	constructor() {
-		// No constructor logic needed for this test system.
+		this.systemManager = ecs.systemManager
 	}
 
 	async init() {
 		// Preload the test prefab for the prefab-related tests.
-		await prefabManager.preload(['test_prefab'])
+		await prefabManager.preload(['test_prefab', 'ShorthandDefaultTest.prefab'])
 
 		describe('PayloadCompiler', () => {
-			// Test compileComponent
-			describe('compileComponent()', () => {
-				it('should compile a single component payload and mutators', () => {
-					const { payload, mutators } = this.compileComponent(position, { x: 123, y: 456 })
+			describe('compile(typeID, data) - Single Component Payloads', () => {
+				it('should compile a basic component payload', () => {
+					const { payload, mutators } = this.compile(position, { x: 123, y: 456 })
 
 					// Verify payload structure
 					expect(payload).toBeDefined()
@@ -63,16 +63,15 @@ export class PayloadCompilerTestSystem {
 					expect(view.getFloat64(8, true)).toBe(456) // y is at offset 8
 				})
 
-				it('should compile a component with default values', () => {
-					const { mutators } = this.compileComponent(position, { x: 50 })
+				it('should apply schema defaults for missing properties', () => {
+					const { mutators } = this.compile(position, { x: 50 })
 
 					expect(mutators.position.x[0]).toBe(50)
 					// The 'y' value was not provided, so it should fall back to the schema default, which is 0.
 					expect(mutators.position.y[0]).toBe(0)
 				})
-
-				it('should compile a flat array component correctly', () => {
-					const { payload, mutators } = this.compileComponent(flatArrayComponent, {
+				it('should correctly compile a flat array of primitives', () => {
+					const { payload, mutators } = this.compile(flatArrayComponent, {
 						primitiveArray: [10, 20, 30],
 					})
 
@@ -101,10 +100,8 @@ export class PayloadCompilerTestSystem {
 					expect(paMutator[1]).toBe(-99)
 					expect(paCountMutator[0]).toBe(2)
 				})
-			})
 
-			describe('Data Type Coverage', () => {
-				it('should compile all primitive types', () => {
+				it('should correctly compile all primitive types', () => {
 					const data = {
 						f64: 1.1,
 						f32: 2.2,
@@ -116,7 +113,7 @@ export class PayloadCompilerTestSystem {
 						u8: 8,
 						boolean: true,
 					}
-					const { mutators } = this.compileComponent(primitiveComponent, data)
+					const { mutators } = this.compile(primitiveComponent, data)
 
 					expect(mutators.primitiveComponent.f64[0]).toBe(1.1)
 					// f32 will have precision loss
@@ -130,36 +127,36 @@ export class PayloadCompilerTestSystem {
 					expect(mutators.primitiveComponent.boolean[0]).toBe(1)
 				})
 
-				it('should compile a string component', () => {
-					const { mutators } = this.compileComponent(stringComponent, { value: 'test_string' })
+				it('should correctly compile a string component', () => {
+					const { mutators } = this.compile(stringComponent, { value: 'test_string' })
 					const internedId = stringInterningTable.intern('test_string')
 					expect(mutators.stringComponent.value[0]).toBe(internedId)
 				})
 
-				it('should compile an enum component from a string', () => {
+				it('should correctly compile an enum component', () => {
 					// The interpreter no longer supports string-to-number conversion for enums.
 					// Data must be provided in its raw, numeric form.
-					const { mutators } = this.compileComponent(enumComponent, { state: 2 })
+					const { mutators } = this.compile(enumComponent, { state: 2 })
 					expect(mutators.enumComponent.state[0]).toBe(2)
 				})
 
-				it('should compile a bitmask component from a string array', () => {
+				it('should correctly compile a bitmask component', () => {
 					// The interpreter no longer supports string-to-number conversion for bitmasks.
 					// Data must be provided in its raw, numeric form (1 | 4 = 5).
-					const { mutators } = this.compileComponent(bitmaskComponent, { flags: 5 })
+					const { mutators } = this.compile(bitmaskComponent, { flags: 5 })
 					expect(mutators.bitmaskComponent.flags[0]).toBe(5)
 				})
 
-				it('should compile an entity reference component', () => {
+				it('should correctly compile an entity reference component', () => {
 					const entityId = 1234567890123456789n
-					const { mutators } = this.compileComponent(entityRefComponent, { target: entityId })
+					const { mutators } = this.compile(entityRefComponent, { target: entityId })
 
 					expect(mutators.entityRefComponent.target).toBeInstanceOf(BigUint64Array)
 					expect(mutators.entityRefComponent.target[0]).toBe(entityId)
 				})
 
-				it('should compile an RPN component', () => {
-					const { mutators } = this.compileComponent(rpnComponent, {
+				it('should correctly compile an RPN component', () => {
+					const { mutators } = this.compile(rpnComponent, {
 						formulas: ['10 * BASE'],
 					})
 
@@ -186,10 +183,10 @@ export class PayloadCompilerTestSystem {
 					expect(stream[3]).toBe(-6) // MULTIPLY
 				})
 
-				it('should compile a flat array of enums from strings', () => {
+				it('should correctly compile a flat array of enums', () => {
 					// The interpreter no longer supports string-to-number conversion for enums in arrays.
 					// Data must be provided in its raw, numeric form.
-					const { mutators } = this.compileComponent(flatArrayComponent, { enumArray: [1, 0] })
+					const { mutators } = this.compile(flatArrayComponent, { enumArray: [1, 0] })
 
 					const eaMutator = mutators.flatArrayComponent.enumArray
 					const eaCountMutator = mutators.flatArrayComponent.enumArray_count
@@ -202,8 +199,8 @@ export class PayloadCompilerTestSystem {
 					expect(eaMutator[1]).toBe(0)
 				})
 
-				it('should compile a flat array of strings', () => {
-					const { mutators } = this.compileComponent(flatArrayComponent, {
+				it('should correctly compile a flat array of strings', () => {
+					const { mutators } = this.compile(flatArrayComponent, {
 						stringArray: ['a', 'b'],
 					})
 
@@ -221,14 +218,63 @@ export class PayloadCompilerTestSystem {
 				})
 			})
 
-			// Test compileEntity (SoA)
-			describe('compileEntity() - SoA', () => {
+			describe('compile(object | prefab) - Entity Payloads', () => {
+				it('should apply defaults when a prefab uses a shorthand', () => {
+					const { payload, mutators } = this.compile('ShorthandDefaultTest.prefab')
+
+					// Verify mutators
+					expect(mutators.shorthandDefaultComponent).toBeDefined()
+
+					// Check the shorthand value
+					expect(mutators.shorthandDefaultComponent.value[0]).toBe(123)
+
+					// Check the default value
+					const internedDefaultText = stringInterningTable.intern('default_text')
+					expect(mutators.shorthandDefaultComponent.text[0]).toBe(internedDefaultText)
+
+					// Verify by creating an entity
+					const entityId = entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, 0)
+					const compData = ecs.getComponent(entityId, 'ShorthandDefaultComponent')
+
+					expect(compData).toBeDefined()
+					expect(compData.value).toBe(123)
+					expect(compData.text).toBe('default_text')
+
+					ecs.destroyEntity(entityId)
+				})
+
+				it('should apply defaults when an object uses a shorthand', () => {
+					const { payload, mutators } = this.compile({
+						ShorthandDefaultComponent: 456,
+					})
+
+					// Verify mutators
+					expect(mutators.shorthandDefaultComponent).toBeDefined()
+
+					// Check the shorthand value
+					expect(mutators.shorthandDefaultComponent.value[0]).toBe(456)
+
+					// Check the default value
+					const internedDefaultText = stringInterningTable.intern('default_text')
+					expect(mutators.shorthandDefaultComponent.text[0]).toBe(internedDefaultText)
+
+					// Verify by creating an entity
+					const entityId = entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, 0)
+					const compData = ecs.getComponent(entityId, 'ShorthandDefaultComponent')
+
+					expect(compData).toBeDefined()
+					expect(compData.value).toBe(456)
+					expect(compData.text).toBe('default_text')
+
+					ecs.destroyEntity(entityId)
+				})
+
 				it('should compile an entity from a component object', () => {
 					const source = {
 						Position: { x: 10, y: 20 },
 						Velocity: { x: 1, y: 2 },
 					}
-					const { payload, mutators } = this.compileEntity(source)
+					const { payload, mutators } = this.compile(source)
 
 					// Verify payload structure
 					expect(payload).toBeDefined()
@@ -248,7 +294,7 @@ export class PayloadCompilerTestSystem {
 					expect(mutators.position.x[0]).toBe(-5)
 
 					// Verify by creating an entity
-					const entityId = entityManager.createEntityFromBinarySoAPayload(payload.archetypeId, payload.data, 0)
+					const entityId = entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, 0)
 					const pos = ecs.getComponent(entityId, 'Position')
 					const vel = ecs.getComponent(entityId, 'Velocity')
 
@@ -259,7 +305,7 @@ export class PayloadCompilerTestSystem {
 				})
 
 				it('should compile an entity from a prefab name', () => {
-					const { payload, mutators } = this.compileEntity('test_prefab')
+					const { payload, mutators } = this.compile('test_prefab')
 
 					// Prefab has Position: {x:0, y:0}, Velocity: {x:0, y:0}, TestEntityTag: {}
 					expect(mutators.position.x[0]).toBe(0)
@@ -269,7 +315,7 @@ export class PayloadCompilerTestSystem {
 					expect(mutators.testEntityTag).toEqual({})
 
 					// Verify by creating an entity
-					const entityId = entityManager.createEntityFromBinarySoAPayload(payload.archetypeId, payload.data, 0)
+					const entityId = entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, 0)
 					const pos = ecs.getComponent(entityId, 'Position')
 					const vel = ecs.getComponent(entityId, 'Velocity')
 					const hasTag = ecs.hasComponent(entityId, 'TestEntityTag')
@@ -281,12 +327,12 @@ export class PayloadCompilerTestSystem {
 					ecs.destroyEntity(entityId)
 				})
 
-				it('should compile an entity from a prefab with overrides', () => {
+				it('should compile an entity from a prefab with object overrides', () => {
 					const overrides = {
 						Position: { y: 99 },
 						Velocity: { x: -10 },
 					}
-					const { payload, mutators } = this.compileEntity('test_prefab', overrides)
+					const { payload, mutators } = this.compile('test_prefab', overrides)
 
 					// Prefab has Position: {x:0, y:0}, Velocity: {x:0, y:0}
 					// Overrides change y to 99 and x to -10
@@ -296,7 +342,7 @@ export class PayloadCompilerTestSystem {
 					expect(mutators.velocity.y[0]).toBe(0) // from prefab
 
 					// Verify by creating an entity
-					const entityId = entityManager.createEntityFromBinarySoAPayload(payload.archetypeId, payload.data, 0)
+					const entityId = entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, 0)
 					const pos = ecs.getComponent(entityId, 'Position')
 					const vel = ecs.getComponent(entityId, 'Velocity')
 
@@ -305,50 +351,49 @@ export class PayloadCompilerTestSystem {
 
 					ecs.destroyEntity(entityId)
 				})
+				it('should correctly apply a shorthand override on a prefab', () => {
+					const { payload, mutators } = this.compile('ShorthandDefaultTest.prefab', {
+						ShorthandDefaultComponent: 999,
+					})
+
+					// Check the shorthand value from the override
+					expect(mutators.shorthandDefaultComponent.value[0]).toBe(999)
+
+					// Check the default value (which should still be applied)
+					const internedDefaultText = stringInterningTable.intern('default_text')
+					expect(mutators.shorthandDefaultComponent.text[0]).toBe(internedDefaultText)
+
+					const entityId = entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, 0)
+					const compData = ecs.getComponent(entityId, 'ShorthandDefaultComponent')
+					expect(compData).toEqual({ value: 999, text: 'default_text' })
+					ecs.destroyEntity(entityId)
+				})
 			})
+			describe('Integration with ECS.instantiate()', () => {
+				it('should correctly apply a shorthand override during immediate-mode instantiation', () => {
+					const entityId = ecs.instantiate('ShorthandDefaultTest.prefab', {
+						ShorthandDefaultComponent: 999,
+					})
 
-			// Test compileEntities (AoS)
-			describe('compileEntities() - AoS', () => {
-				it('should compile an entity from a component object into AoS format', () => {
-					const source = {
-						Position: { x: 10, y: 20 },
-						Velocity: { x: 1, y: 2 },
-					}
-					const { payload, mutators } = this.compileEntities(source)
+					expect(entityId).toBeDefined()
+					const compData = ecs.getComponent(entityId, 'ShorthandDefaultComponent')
+					expect(compData).toEqual({ value: 999, text: 'default_text' })
 
-					// Verify payload structure
-					expect(payload).toBeDefined()
-					expect(payload.archetypeId).toBeTypeOf('number')
-					expect(payload.data).toBeInstanceOf(ArrayBuffer)
-					expect(payload.data.byteLength).toBe(32) // Position(16) + Velocity(16)
+					// Cleanup
+					ecs.destroyEntity(entityId)
+				})
 
-					// Verify mutators
-					expect(mutators).toBeDefined()
-					expect(mutators.position.x[0]).toBe(10)
-					expect(mutators.position.y[0]).toBe(20)
-					expect(mutators.velocity.x[0]).toBe(1)
-					expect(mutators.velocity.y[0]).toBe(2)
+				it('should correctly apply a partial object override during immediate-mode instantiation', () => {
+					const entityId = ecs.instantiate('ShorthandDefaultTest.prefab', {
+						ShorthandDefaultComponent: { text: 'overridden text' },
+					})
 
-					// Test mutation
-					mutators.position.x[0] = -5
-					expect(mutators.position.x[0]).toBe(-5)
+					expect(entityId).toBeDefined()
+					const compData = ecs.getComponent(entityId, 'ShorthandDefaultComponent')
+					expect(compData).toEqual({ value: 123, text: 'overridden text' })
 
-					// Verify by creating entities
-					// The payload from compileEntities is AoS, for createIdenticalEntitiesInArchetype
-					const entityIds = entityManager.createIdenticalEntitiesInArchetype(payload.archetypeId, payload.data, 2, 0)
-
-					const pos1 = ecs.getComponent(entityIds[0], 'Position')
-					const vel1 = ecs.getComponent(entityIds[0], 'Velocity')
-					expect(pos1).toEqual({ x: -5, y: 20 })
-					expect(vel1).toEqual({ x: 1, y: 2 })
-
-					const pos2 = ecs.getComponent(entityIds[1], 'Position')
-					const vel2 = ecs.getComponent(entityIds[1], 'Velocity')
-					expect(pos2).toEqual({ x: -5, y: 20 })
-					expect(vel2).toEqual({ x: 1, y: 2 })
-
-					ecs.destroyEntity(entityIds[0])
-					ecs.destroyEntity(entityIds[1])
+					// Cleanup
+					ecs.destroyEntity(entityId)
 				})
 			})
 		})

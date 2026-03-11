@@ -40,15 +40,15 @@ export class ReactivityTestSystem {
 		})
 
 		// --- Payloads ---
-		this.componentAPayload = this.compileComponent(componentA, {}).payload
+		this.componentAPayload = this.compile(componentA, {}).payload
 
 		for (let i = 0; i < this.totalEntities; i++) {
 			// Compile the payload once.
-			const { payload } = this.compileEntity({
+			const { payload } = this.compile({
 				ReactivityTarget: {},
 				ReactivityComponent: { value: 0 },
 			})
-			this.commands.createEntity(payload)
+			this.createEntity(payload)
 		}
 	}
 
@@ -119,13 +119,13 @@ export class ReactivityTestSystem {
 				'color: cyan',
 			)
 
-			this.commands.addComponent(this.structuralChangeEntityId, this.componentAPayload)
+			this.addComponent(this.structuralChangeEntityId, this.componentAPayload)
 		} else if (currentTick === 240) {
 			console.log(
 				`%cReactivityTestSystem (Structural): Removing ComponentA from entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
 				'color: magenta',
 			)
-			this.commands.removeComponent(this.structuralChangeEntityId, componentA)
+			this.removeComponent(this.structuralChangeEntityId, componentA)
 		}
 	}
 
@@ -156,7 +156,7 @@ export class ReactivityTestSystem {
 		// Clean up entities created by this test system to prevent accumulation on HMR.
 		// Use the highly efficient chunk-based destruction command.
 		for (const chunk of this.modificationTargetQuery.iter()) {
-			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
+			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
 		}
 	}
 }

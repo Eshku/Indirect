@@ -13,6 +13,7 @@ export const OpCodes = Object.freeze({
 	ADD_COMPONENT: 10,
 	REMOVE_COMPONENT: 11,
 	SET_COMPONENT_DATA: 12,
+	ADD_COMPONENTS: 13,
 
 	// Batch Creation
 	CREATE_ENTITIES_IDENTICAL: 20,

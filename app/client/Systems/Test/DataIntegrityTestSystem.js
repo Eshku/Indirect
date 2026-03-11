@@ -55,7 +55,7 @@ export class DataIntegrityTestSystem {
 		this.query = this.getQuery({ with: [churnTag, churnData, verification] })
 
 		// --- Payloads ---
-		const { payload, mutators } = this.compileEntity({
+		const { payload, mutators } = this.compile({
 			churnTag: {},
 			churnData: { creationTick: 0, entityId: 0n }, // Initialize entityId to 0
 			verification: { status: 0 }, // 0: unchecked, 1: ok, -1: fail, 2: logged
@@ -63,7 +63,7 @@ export class DataIntegrityTestSystem {
 		this.creationPayload = payload
 		this.creationMutators = mutators
 
-		const { payload: verificationPayload } = this.compileComponent(
+		const { payload: verificationPayload } = this.compile(
 			verification,
 			{ status: 2 }, // The data we want to set
 		)
@@ -90,7 +90,7 @@ export class DataIntegrityTestSystem {
 					this.creationMutators.churnData.creationTick[0] = currentTick
 					// entityId is left as 0, to be primed by the 'schedule' job.
 
-					this.commands.createEntity(this.creationPayload)
+					this.createEntity(this.creationPayload)
 				}
 			}
 		} else {
@@ -105,7 +105,7 @@ export class DataIntegrityTestSystem {
 			}
 
 			for (const entityId of entitiesToDestroy) {
-				this.commands.destroyEntity(entityId)
+				this.destroyEntity(entityId)
 			}
 		}
 	}
@@ -150,7 +150,7 @@ export class DataIntegrityTestSystem {
 					})
 
 					// Mark as logged to prevent spamming the console every frame for the same error.
-					this.commands.setComponentData(entityId, this.verificationUpdatePayload)
+					this.setComponentData(entityId, this.verificationUpdatePayload)
 				}
 			}
 		}
@@ -159,7 +159,7 @@ export class DataIntegrityTestSystem {
 	destroy() {
 		// HMR Cleanup: Destroy all entities created by this system.
 		for (const chunk of this.churnQuery.iter()) {
-			this.commands.destroyEntitiesInChunk(chunk)
+			this.destroyEntitiesInChunk(chunk)
 		}
 	}
 }

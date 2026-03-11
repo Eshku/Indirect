@@ -1,18 +1,21 @@
 {
 	"components": {
+		"health": { "max": 1000, "current": 1000 },
 		"position": { "x": 0, "y": 0 },
-		"speed": { "value": 250 },
+		"speed": { "value": 300 },
 		"rotation": { "angle": 0 },
 		"scale": { "x": 1, "y": 1 },
 		"velocity": { "x": 0, "y": 0 },
 
 		"spriteDescriptor": { "assetName": "player_ship" },
-		"layer": { "name": "player" },
 		"viewable": {},
+		"layer": { "name": "player" },
 
 		"movementIntent": {},
-		"actionIntent": {},
+		"shootingIntent": {},
 		"playerTag": {},
-		"orientedBoxCollider": { "width": 64, "height": 64 }
+		"circleCollider": { "radius": 16 },
+		"playerWeaponStats": { "count": 1, "speed": 1000, "velocityInheritance": 0.5, "range": 1000, "fireRate": 0.25},
+		"weaponCooldown": {}
 	}
 }

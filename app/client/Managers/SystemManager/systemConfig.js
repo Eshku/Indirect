@@ -63,17 +63,30 @@ export const systemSchedule = {
 	Logic: [
 		{ name: 'CooldownSystem', frequency: 'logic' },
 
+		{ name: 'EnemyAISystem', frequency: 'logic' },
+
+		{ name: 'PlayerWeaponSystem', frequency: 'logic' },
+
+		{ name: 'ProjectileLifetimeSystem', frequency: 'logic' },
+
 		{ name: 'MovementSystem', frequency: 'logic' },
 
 		{ name: `ApplyVelocity`, frequency: `logic` },
 
 		{ name: 'SpatialHashingSystem', frequency: 'logic' },
 
+		{ name: 'LifecycleVisualSystem', frequency: 'logic' },
+
 		{ name: 'EventEntityCleanupSystem', frequency: 'logic' },
+
+		{name :'SpinningSystem', frequency:'logic'}
 	],
 
 	// Infrequent UI updates. Runs on a timer, not every frame.
-	Timed: [],
+	Timed: [
+		// Run the director every 5 seconds.
+		{ name: 'DirectorSystem', frequency: 0.2 },
+	],
 
 	// Runs once per rendered frame for smooth visuals, interpolation, and UI.
 	Visuals: [
@@ -101,20 +114,23 @@ export const systemSchedule = {
 	],
 
 	Test: [
+		
 		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
 		/* { name: 'CustomJobTestSystem', frequency: 'logic' }, */
-		/* 		{ name: 'DependencySystemA', frequency: 'visuals' },
+		/* { name: 'KernelArchitecture', frequency: 'logic' }, */
+/* 				{ name: 'DependencySystemA', frequency: 'visuals' },
 		{ name: 'DependencySystemB', frequency: 'visuals' },
 		{ name: 'DependencySystemC', frequency: 'visuals' }, */
-		/* { name: 'KernelArchitecture', frequency: 'logic' }, */
 	],
 
 	CoreTests: [
-		/* 		{ name: 'SchemaTestSystem', frequency: 'none' },
-		{ name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
+
+				/* { name: 'SchemaTestSystem', frequency: 'none' }, */
+		/* { name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
+		/* { name: 'QueryTestSystem', frequency: 'none' }, */
 		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */
 	],
 

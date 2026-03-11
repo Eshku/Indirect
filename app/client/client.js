@@ -58,7 +58,7 @@ const preload = async () => {
 	// Load our procedurally generated texture atlas
 	await loadAtlas('atlas')
 
-	await ecs.prefabManager.preload(['player', 'spinner', 'cursor'])
+	await ecs.prefabManager.preload(['player', 'spinner', 'cursor', 'playerProjectile'])
 }
 
 const setupPlayer = async () => {

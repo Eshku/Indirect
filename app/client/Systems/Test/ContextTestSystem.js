@@ -34,13 +34,13 @@ export class ContextTestSystem {
 			with: [contextTestTag],
 		})
 
-		const { payload } = this.compileEntity({
+		const { payload } = this.compile({
 			contextTestTag: {},
 		})
 		this.creationPayload = payload
 
 		// Create a single entity to ensure the schedule phase has a job to run.
-		this.commands.createEntity(this.creationPayload)
+		this.createEntity(this.creationPayload)
 		console.log('[ContextTestSystem] Initialized and created a test entity.')
 	}
 
@@ -87,7 +87,7 @@ export class ContextTestSystem {
 	destroy() {
 		// Clean up the test entity on HMR.
 		for (const chunk of this.query.iter()) {
-			this.commands.destroyEntitiesInChunk(chunk)
+			this.destroyEntitiesInChunk(chunk)
 		}
 		console.log('[ContextTestSystem] Destroyed test entity.')
 	}

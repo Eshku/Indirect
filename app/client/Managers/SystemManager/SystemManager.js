@@ -135,6 +135,9 @@ export class SystemManager {
 
 		this.commandBufferExecutor = new CommandBufferExecutor(this.entityManager, this.prefabManager, this.queryManager)
 
+		// Initialize the command buffer with the executor and a reference to this manager.
+		commandBuffer.init(this.commandBufferExecutor, this)
+
 		// --- Phase 1: Discovery & ID Assignment (No Imports) ---
 		const [systemFileTree, kernelFileTree] = await Promise.all([
 			window.electronAPI.getSystemTree(),

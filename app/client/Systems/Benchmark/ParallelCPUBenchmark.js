@@ -29,7 +29,7 @@ export class ParallelCPUBenchmark {
 		// Create a large number of entities to generate many chunks (high parallelism).
 		this.entityCount = 10_000
 
-		const { payload } = this.compileEntity({
+		const { payload } = this.compile({
 			position: { x: 0.1, y: 0.2 },
 			velocity: { x: 0.3, y: 0.4 },
 			parallelCpuTag: {},
@@ -54,12 +54,12 @@ export class ParallelCPUBenchmark {
 	}
 
 	spawnEntities() {
-		this.commands.createEntities(this.creationPayload, this.entityCount)
+		this.createEntities(this.creationPayload, this.entityCount)
 	}
 
 	destroy() {
 		for (const chunk of this.query.iter()) {
-			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
+			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
 		}
 	}
 }

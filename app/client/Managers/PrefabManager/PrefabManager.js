@@ -1,5 +1,5 @@
 const { LRUCache } = await import(`@core/DataStructures/LRUCache.js`)
-
+const { resolveComponentData } = await import(`@managers/ComponentManager/ComponentInterpreter.js`)
 const { Schema } = await import(`@managers/ComponentManager/ComponentSchema.js`)
 
 const { PrefabLoader } = await import(`@managers/PrefabManager/PrefabLoader.js`)
@@ -41,6 +41,11 @@ const { PrefabLoader } = await import(`@managers/PrefabManager/PrefabLoader.js`)
 
 
  */
+
+//todo shorthands + defaults are not doing well together.
+//! need a way for both prefab manager and compiler to reuse some function / method
+//! or make one of them authority on json (or json-like data)-parsing - including defaults and shorthands.
+//! They should parsing json data exact same way.
 export class PrefabManager {
 	constructor() {
 		// --- Permanent Caches for Prefab Templates ---
@@ -219,8 +224,8 @@ export class PrefabManager {
 			}
 		}
 
-		// Process shorthand notations (e.g., "range": 500) into their full object form.
-		const processedOwnComponents = this._processShorthands(rawData.components || {}, prefabName)
+		// Resolve shorthands and apply defaults to the prefab's own components.
+		const processedOwnComponents = this._resolveComponents(rawData.components || {}, prefabName)
 
 		const mergedComponents = this._deepMerge(baseComponents, processedOwnComponents)
 
@@ -234,55 +239,29 @@ export class PrefabManager {
 	}
 
 	/**
-	 * Processes a component data object, expanding any shorthand notations into their full object form.
-	 * For example, it converts `"range": 500` into `"range": { "value": 500 }`.
+	 * Resolves a raw components object from a prefab file by expanding shorthands and applying defaults for each component.
 	 * @param {object} components - The components object from a raw prefab file.
 	 * @param {string} prefabName - The name of the prefab being processed, for error logging.
-	 * @returns {object} A new components object with all shorthands expanded.
+	 * @returns {object} A new components object with all component data fully resolved to its high-level object form.
 	 * @private
 	 */
-	_processShorthands(components, prefabName) {
+	_resolveComponents(components, prefabName) {
 		if (!this.componentManager) {
-			console.error('PrefabManager: componentManager reference is missing. Cannot process shorthands.')
+			console.error('PrefabManager: componentManager reference is missing. Cannot resolve components.')
 			return components // Return original data if manager is not set
 		}
 
 		const processedComponents = {}
 		for (const componentName in components) {
 			const componentData = components[componentName]
-			const dataType = typeof componentData
+			const typeID = this.componentManager.getComponentTypeIDByName(componentName)
 
-			// If the component's data is a primitive (not an object), it's a potential shorthand.
-			if (dataType === 'number' || dataType === 'string' || dataType === 'boolean') {
-				const info = Schema.componentInfo[Schema.componentNameToTypeID.get(componentName.toLowerCase())]
-
-				if (info && info.originalSchemaKeys && info.originalSchemaKeys.length > 0) {
-					// --- Universal Shorthand Rule ---
-					// The shorthand value is always applied to the *first* property defined in the component's schema.
-					// This covers both the unambiguous case (one property) and the ambiguous case (multiple properties).
-					//
-					// DEVELOPER NOTE: This creates a dependency on the order of properties in the component's
-					// static schema. The property intended for shorthand use MUST be listed first.
-					// e.g., For `Stack: 64`, the schema must be `{ size: 'u16', amount: 'u16' }`, not the other way around.
-
-					//We could've went with more strict approach, where shorthands are only allowed for
-					//components with single property, but in some cases for prefab definitions only one matters
-					//and the other one is defined at runtime through overrides
-					//example - stack. On prefab it only makes sense to define capacity
-					//but amount is runtime-only thing - how many items dropped from the thing.
-					const key = info.originalSchemaKeys[0]
-					processedComponents[componentName] = { [key]: componentData }
-					continue // Move to the next component
-				}
-
-				// If we're here, we couldn't resolve the shorthand because the component has no schema properties.
-				// This is a critical data error. We will log a detailed error and skip this component entirely,
-				// rather than assigning a default or empty value, to ensure the error is noticed and fixed at the source.
-				console.error(
-					`PrefabManager: Invalid shorthand for component "${componentName}" in prefab "${prefabName}". Components with no schema are treated as "Tag Components" and cannot have data.`,
-				)
+			if (typeID !== undefined) {
+				// Use the new shared resolver function.
+				processedComponents[componentName] = resolveComponentData(typeID, componentData)
 			} else {
-				// The component data is already in its full object form, so we keep it as is.
+				// If the component is not found in the schema, keep its data as-is.
+				// This allows for mod-added components or potential data-only components without schemas.
 				processedComponents[componentName] = componentData
 			}
 		}

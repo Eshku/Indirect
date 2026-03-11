@@ -1,0 +1,15 @@
+{
+	"components": {
+		"playerProjectile": {},
+		"owner": {},
+		"position": {},
+		"velocity": {},
+		"circleCollider": { "radius": 4 },
+		"range": { "value": 0 },
+		"distanceTraveled": { "value": 0 },
+		"spriteDescriptor": { "assetName": "projectile" },
+		"layer": { "name": "projectiles" },
+		"viewable": {},
+		"lifecycleState": {}
+	}
+}

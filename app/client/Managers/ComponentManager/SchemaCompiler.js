@@ -63,6 +63,9 @@ Object.assign(TypeProcessors, {
 	string: {
 		parse: PrimitiveTypeProcessors.u32.parse, // A string is stored as a u32.
 	},
+	component: {
+		parse: PrimitiveTypeProcessors.u16.parse, // A component reference is stored as a u16.
+	},
 	bitmask: {
 		/**
 		 * DEV-NOTE: A `bitmask` is stored as a single integer (the "bitfield").
@@ -232,6 +235,9 @@ Object.assign(TypeProcessors, {
 			switch (itemSchema.type) {
 				case 'string':
 					itemStorageType = 'u32'
+					break
+				case 'component':
+					itemStorageType = 'u16'
 					break
 				case 'bitmask': {
 					const flagMap = itemSchema.of
@@ -412,6 +418,9 @@ Object.assign(TypeProcessors, {
 
 			flatArrayHandler.parse(startsPropName, startsPropDef, componentInfo, implicitKeys, componentName)
 			flatArrayHandler.parse(lengthsPropName, lengthsPropDef, componentInfo, implicitKeys, componentName)
+
+			// Add the generated properties to the list of keys to be reconstructed.
+			implicitKeys.push(streamPropName, startsPropName, lengthsPropName)
 		},
 	},
 })
@@ -482,7 +491,9 @@ export class SchemaCompiler {
 			return componentInfo
 		}
 
-		const schemaKeys = Object.keys(schema).sort()
+		// The order of keys is critical for the "shorthand" feature, which relies on the first property.
+		// Do NOT sort schemaKeys. Modern JS (ES2015+) preserves definition order for non-integer keys.
+		const schemaKeys = Object.keys(schema)
 		componentInfo.originalSchemaKeys = [...schemaKeys]
 		const implicitKeys = []
 		for (const propName of schemaKeys) {
@@ -491,7 +502,6 @@ export class SchemaCompiler {
 		}
 
 		componentInfo.originalSchemaKeys.push(...implicitKeys)
-		componentInfo.originalSchemaKeys.sort()
 
 		componentInfo.propertyKeys = [...new Set(componentInfo.propertyKeys)].sort()
 

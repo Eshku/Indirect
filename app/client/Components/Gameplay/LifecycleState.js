@@ -13,6 +13,6 @@ export const LifecycleState = {
 			DYING: 1 << 1,
 			POOLED: 1 << 2,
 		},
-		default: 1 << 2, // POOLED
+		default: 1 << 0, // default to active.
 	},
 }

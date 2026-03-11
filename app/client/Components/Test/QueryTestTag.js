@@ -1,12 +1,4 @@
 /**
- * A component used for testing queries, containing a single value.
+ * A tag component used to isolate entities for query tests.
  */
-export const QueryTestTag = {
-	/**
-	 * A numeric value for testing.
-	 */
-	value: {
-		type: 'u32',
-		default: 0,
-	},
-}
+export const QueryTestTag = {}

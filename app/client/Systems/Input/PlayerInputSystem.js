@@ -3,7 +3,7 @@ const { eventEmitter } = await import(`@core/Classes/EventEmitter.js`)
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, uiManager } = engine.getManagers()
 
-const { playerTag, movementIntent, actionIntent } = ecs.getTypeIDs()
+const { playerTag, movementIntent, shootingIntent } = ecs.getTypeIDs()
 
 /**
  * Handles all player inputs for continuous actions like movement and firing.
@@ -14,13 +14,13 @@ export class PlayerInputSystem {
 	static dependencies = {
 		update: {
 			reads: [movementIntent],
-			writes: [movementIntent, actionIntent],
+			writes: [movementIntent, shootingIntent],
 		},
 	}
 
 	async init() {
 		this.playerQuery = this.getQuery({
-			with: [playerTag, movementIntent, actionIntent],
+			with: [playerTag, movementIntent, shootingIntent],
 		})
 
 		this.inputState = {
@@ -100,11 +100,11 @@ export class PlayerInputSystem {
 
 		for (const chunk of this.playerQuery.iter()) {
 			const movementIntents = chunk.componentData[movementIntent]
-			const actionIntents = chunk.componentData[actionIntent]
+			const shootingIntents = chunk.componentData[shootingIntent]
 
 			const intentsX = movementIntents.desiredX
 			const intentsY = movementIntents.desiredY
-			const actionsIntent = actionIntents.actionIntent
+			const actionsIntent = shootingIntents.shootingIntent
 
 			let movementModified = false
 			let actionModified = false
@@ -117,17 +117,16 @@ export class PlayerInputSystem {
 					movementModified = true
 				}
 
-				// For continuous actions like holding down an attack button, we always set the intent
-				// if the button is pressed. The ItemEventSystem is responsible for consuming
-				// this intent (setting it to 0) each tick, allowing this system to re-trigger it on the next tick.
-				if (mainAttackIntent === 1) {
-					actionsIntent[i] = mainAttackIntent // This is a direct write, not a toggle
-					chunk.dirtyTicks[actionIntent][i] = currentTick
+				// Always sync the shooting intent with the current input state.
+				// If the state is different, update the component.
+				if (actionsIntent[i] !== mainAttackIntent) {
+					actionsIntent[i] = mainAttackIntent
+					chunk.dirtyTicks[shootingIntent][i] = currentTick
 					actionModified = true
 				}
 			}
 			if (movementModified) chunk.markChunkDirty(movementIntent, currentTick)
-			if (actionModified) chunk.markChunkDirty(actionIntent, currentTick)
+			if (actionModified) chunk.markChunkDirty(shootingIntent, currentTick)
 		}
 	}
 }

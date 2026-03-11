@@ -50,14 +50,13 @@ const ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES = 4096 // 4KB page for component IDs
 const ARCHETYPE_STORE_PAGE_SIZE_IN_U16 = ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES / Uint16Array.BYTES_PER_ELEMENT
 
 export const entityStore = {
-	// --- Entity Management ---
 	entityVersion: [],
 	entityLocations: [],
 	generations: [],
 	freeIndices: [],
 	nextEntityIndex: 1,
 
-	// --- Archetype Management (Main-thread only structures) ---
+	// --- Archetype Management (Currently Main-thread only structures) ---
 	archetypeLookup: new Map(),
 	archetypeTransitions: new Array(MAX_ARCHETYPES),
 	// Paged buffer for component IDs. The array of pages is main-thread only.
@@ -105,9 +104,6 @@ Atomics.store(entityStore.nextArchetypeId, 0, 0)
 
 export class EntityManager {
 	constructor() {
-		// This class no longer owns the store. It operates on the shared, exported entityStore.
-		// this.store = entityStore // No longer needed.
-
 		// --- Manager References ---
 		this.queryManager = null
 		this.componentManager = null
@@ -245,16 +241,16 @@ export class EntityManager {
 	}
 
 	/**
-	 * Creates a single entity from a pre-compiled binary SoA payload.
-	 * "fast path" for single entity creation.
+	 * Creates a single entity from a pre-compiled binary AoS payload.
+	 * This is the internal "fast path" for single entity creation.
 	 * @param {number} archetypeId target archetype for entity.
-	 * @param {ArrayBuffer} binarySoAPayload binary SoA-structured payload data.
+	 * @param {ArrayBuffer} binaryAosPayload - The binary AoS-structured payload data from `compile`.
 	 * @param {number} currentTick current game tick.
 	 */
-	createEntityFromBinarySoAPayload(archetypeId, binarySoAPayload, currentTick) {
+	createEntityFromAosPayload(archetypeId, binaryAosPayload, currentTick) {
 		if (archetypeId === undefined) return
 		const entityID = this._createEntityId()
-		this.addEntityFromBinarySoAPayload(archetypeId, entityID, binarySoAPayload, currentTick)
+		this.addEntityFromAosPayload(archetypeId, entityID, binaryAosPayload, currentTick)
 		return entityID
 	}
 
@@ -366,26 +362,29 @@ export class EntityManager {
 		// as a recycled ID could be re-used by a creation command in same frame,
 		// overwriting location data we need for swap-and-pop.
 		for (const entityId of entityIDs) {
-			if (this.isEntityActive(entityId)) {
-				const index = Number(entityId & 0xffffffffn)
-				const location = entityStore.entityLocations[index]
-				if (location) {
-					if (!entitiesByArchetype.has(location.archetypeId)) entitiesByArchetype.set(location.archetypeId, [])
-					entitiesByArchetype.get(location.archetypeId).push(entityId)
-				} else {
-					// Handle entities that exist but have no components (and thus no location).
-					entityStore.freeIndices.push(index)
-					entityStore.generations[index]++
-					entityStore.entityVersion[index] = undefined
-					// No entityLocations to clear.
+			if (!this.isEntityActive(entityId)) continue
+
+			const index = Number(entityId & 0xffffffffn)
+			const location = entityStore.entityLocations[index]
+			if (location) {
+				if (!entitiesByArchetype.has(location.archetypeId)) {
+					entitiesByArchetype.set(location.archetypeId, [])
 				}
+				// Pass the location object, which is what _removeEntitiesBatch now expects.
+				entitiesByArchetype.get(location.archetypeId).push({ entityId, location })
+			} else {
+				// Handle entities that exist but have no components (and thus no location).
+				entityStore.freeIndices.push(index)
+				entityStore.generations[index]++
+				entityStore.entityVersion[index] = undefined
+				// No entityLocations to clear.
 			}
 		}
 
 		// --- Pass 2: Perform batched removals and invalidate IDs ---
-		for (const [archetype, ids] of entitiesByArchetype.entries()) {
-			this._removeEntitiesBatch(archetype, ids)
-			for (const entityId of ids) {
+		for (const [archetype, entitiesWithLocations] of entitiesByArchetype.entries()) {
+			this._removeEntitiesBatch(archetype, entitiesWithLocations)
+			for (const { entityId } of entitiesWithLocations) {
 				const index = Number(entityId & 0xffffffffn)
 				entityStore.freeIndices.push(index)
 				entityStore.generations[index]++
@@ -521,8 +520,6 @@ export class EntityManager {
 
 		return true
 	}
-
-	// --- Methods from ArchetypeManager ---
 
 	getArchetype(componentTypeIDs) {
 		const sortedTypeIDs = [...componentTypeIDs].sort((a, b) => a - b)
@@ -682,6 +679,33 @@ export class EntityManager {
 		return result
 	}
 
+	/**
+	 * Gets a component's data from an entity. This is the internal, hot-path version
+	 * intended for use by systems. It uses numeric type IDs for performance.
+	 * @param {bigint} entityId The ID of the entity.
+	 * @param {number} componentTypeId The numeric type ID of the component.
+	 * @returns {object | undefined} The component data object, or undefined if not found.
+	 */
+	getComponent(entityId, componentTypeId) {
+		const location = this.getEntityLocation(entityId)
+		if (!location) return undefined
+
+		// Use the fast binary search to check for component existence.
+		if (!this.hasComponentType(location.archetypeId, componentTypeId)) {
+			return undefined
+		}
+
+		const { chunkId, indexInChunk } = location
+		const componentArrays = entityStore.chunkComponentData[chunkId]?.[componentTypeId]
+		if (!componentArrays) return undefined
+
+		const rawData = {}
+		const info = Schema.componentInfo[componentTypeId]
+		for (const propKey of info.propertyKeys) {
+			rawData[propKey] = componentArrays[propKey][indexInChunk]
+		}
+		return rawData
+	}
 	getEntityLocation(entityId) {
 		const location = entityStore.entityLocations[Number(entityId & 0xffffffffn)]
 		return location?.archetypeId !== undefined ? location : undefined
@@ -797,12 +821,12 @@ export class EntityManager {
 		}
 	}
 
-	addEntityFromBinarySoAPayload(archetype, entityId, binarySoAPayload, currentTick) {
+	addEntityFromAosPayload(archetype, entityId, binaryAosPayload, currentTick) {
 		const chunkId = this._findOrCreateChunkId(archetype)
 		const indexInChunk = this._addEntityToChunk(chunkId, entityId)
 		entityStore.entityLocations[Number(entityId & 0xffffffffn)] = { archetypeId: archetype, chunkId, indexInChunk }
 
-		const sourceView = new DataView(binarySoAPayload)
+		const sourceView = new DataView(binaryAosPayload)
 		let componentBaseOffset = 0
 
 		const componentIdArray = this.getComponentTypeIDsForArchetype(archetype)
@@ -998,15 +1022,13 @@ export class EntityManager {
 		}
 	}
 
-	_removeEntitiesBatch(archetype, entityIds) {
+	_removeEntitiesBatch(archetype, entitiesWithLocations) {
 		const removalsByChunk = new Map()
 
 		const componentTypeIDs = this.getComponentTypeIDsForArchetype(archetype)
 		const componentCount = componentTypeIDs.length
 
-		for (const entityId of entityIds) {
-			const location = entityStore.entityLocations[Number(entityId & 0xffffffffn)]
-
+		for (const { location } of entitiesWithLocations) {
 			// Only process this removal if the entity's current
 			// location actually matches the source archetype we are supposed to be
 			// removing from. This prevents race conditions with deferred commands.
@@ -1022,6 +1044,7 @@ export class EntityManager {
 		for (const [chunkId, indicesToRemove] of removalsByChunk.entries()) {
 			const oldSize = entityStore.chunkSizes[chunkId]
 
+			// Sort indices descending for safe swap-and-pop.
 			indicesToRemove.sort((a, b) => b - a)
 			const swappedMappings = this._removeEntitiesFromChunk(chunkId, indicesToRemove, componentTypeIDs, componentCount)
 
@@ -1235,6 +1258,26 @@ export class EntityManager {
 	_reinitializeChunk(chunkId, archetypeId) {
 		const capacity = entityStore.chunkCapacities[chunkId]
 		const oldArchetypeId = entityStore.chunkArchetypeIds[chunkId] // Get the archetype it USED to be.
+
+		// --- Unlink from old archetype ---
+		// This is critical. We must fully remove the chunk from its old archetype's
+		// linked list and notify queries before re-purposing it.
+		const prevId = entityStore.chunkPrevInArchetype[chunkId]
+		const nextId = entityStore.chunkNextInArchetype[chunkId]
+
+		if (prevId !== NULL_CHUNK_ID) entityStore.chunkNextInArchetype[prevId] = nextId
+		else entityStore.archetypeHeadChunkIds[oldArchetypeId] = nextId
+
+		if (nextId !== NULL_CHUNK_ID) entityStore.chunkPrevInArchetype[nextId] = prevId
+		else entityStore.archetypeTailChunkIds[oldArchetypeId] = prevId
+
+		entityStore.archetypeChunkCounts[oldArchetypeId]--
+		if (entityStore.archetypeLastNonFullChunkId[oldArchetypeId] === chunkId) {
+			entityStore.archetypeLastNonFullChunkId[oldArchetypeId] = entityStore.archetypeHeadChunkIds[oldArchetypeId]
+		}
+
+		// Always unregister from the old archetype's queries BEFORE re-registering.
+		this.queryManager.unregisterChunk(oldArchetypeId, chunkId)
 
 		// Keep a reference to the old data objects before we replace them.
 		const oldComponentData = entityStore.chunkComponentData[chunkId]

@@ -24,7 +24,7 @@ export class CPUBenchmark {
 
 		this.entityCount = 2_000
 
-		const { payload } = this.compileEntity({
+		const { payload } = this.compile({
 			position: { x: 0.1, y: 0.2 },
 			velocity: { x: 0.3, y: 0.4 },
 			cpuTag: {},
@@ -61,12 +61,12 @@ export class CPUBenchmark {
 	}
 
 	spawnEntities() {
-		this.commands.createEntities(this.creationPayload, this.entityCount)
+		this.createEntities(this.creationPayload, this.entityCount)
 	}
 
 	destroy() {
 		for (const chunk of this.query.iter()) {
-			if (chunk.size > 0) this.commands.destroyEntitiesInChunk(chunk)
+			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
 		}
 	}
 }

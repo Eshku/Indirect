@@ -94,7 +94,7 @@ export class ParallelismTestSystem {
 			with: [position, velocity, parallelismTestTag, column],
 		})
 
-		const { payload, mutators } = this.compileEntity({
+		const { payload, mutators } = this.compile({
 			position: { x: 0, y: 0 },
 			velocity: { x: 1, y: 0 },
 			parallelismTestTag: {}, // Tag for this system's entities
@@ -145,7 +145,7 @@ export class ParallelismTestSystem {
 				this.topMargin + (entityIndexInColumn / entitiesPerColumn) * (this.worldHeight - this.topMargin)
 			this.creationMutators.column.index[0] = columnIndex
 
-			this.commands.createEntity(this.creationPayload)
+			this.createEntity(this.creationPayload)
 		}
 	}
 
@@ -275,7 +275,7 @@ export class ParallelismTestSystem {
 		// --- HMR Cleanup ---
 		// On hot-swap, destroy any entities that were created by the previous instance of this system.
 		// Use the efficient chunk-based destruction. This query will find all entities with the tag
-		for (const chunk of this.query.iter()) this.commands.destroyEntitiesInChunk(chunk)
+		for (const chunk of this.query.iter()) this.destroyEntitiesInChunk(chunk)
 
 		// Destroy all PIXI objects created by this system.
 		if (this.particleContainer) {
