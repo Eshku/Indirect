@@ -43,7 +43,6 @@ export class EnemyAISystem {
 		for (const chunk of this.enemyQuery.iter()) {
 			const enemyPositions = chunk.componentData[position]
 			const enemyIntents = chunk.componentData[movementIntent]
-			const intentDirtyTicks = chunk.dirtyTicks[movementIntent]
 
 			for (let i = 0; i < chunk.size; i++) {
 				const dx = playerX - enemyPositions.x[i]
@@ -51,14 +50,11 @@ export class EnemyAISystem {
 
 				const length = Math.sqrt(dx * dx + dy * dy)
 
-				if (length > 0) {
-					enemyIntents.desiredX[i] = dx / length
-					enemyIntents.desiredY[i] = dy / length
-					intentDirtyTicks[i] = currentTick
-				}
-				
+				// Avoid division by zero, but otherwise always update.
+				const invLength = length > 0 ? 1 / length : 0
+				enemyIntents.desiredX[i] = dx * invLength
+				enemyIntents.desiredY[i] = dy * invLength
 			}
-			chunk.markChunkDirty(movementIntent, currentTick)
 		}
 	}
 }

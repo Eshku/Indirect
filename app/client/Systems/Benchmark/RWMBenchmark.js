@@ -41,7 +41,7 @@ export class RWMBenchmark {
 			}
 
 			// Since we modify every entity, mark the whole component type as dirty.
-			chunkView.markAllDirty(position, currentTick)
+			chunkView.markDirty(position, currentTick)
 		}
 	}
 

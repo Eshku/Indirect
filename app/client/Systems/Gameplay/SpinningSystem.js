@@ -18,17 +18,13 @@ export class SpinningSystem {
 		for (const chunk of this.query.iter()) {
 			const rotationArrays = chunk.componentData[rotation]
 			const spinningArrays = chunk.componentData[spinning]
-			const rotationDirtyTicks = chunk.dirtyTicks[rotation]
 
 			const angle = rotationArrays.angle
 			const rate = spinningArrays.rate
 
 			for (let i = 0; i < chunk.size; i++) {
 				angle[i] += rate[i] * deltaTime
-				rotationDirtyTicks[i] = currentTick
 			}
-
-			chunk.markChunkDirty(rotation, currentTick)
 		}
 	}
 }

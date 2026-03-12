@@ -30,22 +30,25 @@ export class LifecycleVisualSystem {
 		this.addIsPooledPayload = this.compile(isPooled, {}).payload
 
 		// Pre-compile a payload to set the POOLED state.
-		this.pooledStatePayload = this.compile(lifecycleState, { flags: LIFECYCLE.POOLED }).payload
+		const { payload, mutators } = this.compile(lifecycleState, { flags: LIFECYCLE.POOLED, dirtyTick: 0 })
+		this.pooledStatePayload = payload
+		this.pooledStateMutators = mutators
 	}
 
-	update({ currentTick }) {
-		for (const chunk of this.lifecycleQuery.iter()) {
+	update({ currentTick, lastTick }) {
+		for (const chunk of this.lifecycleQuery.iter(lastTick)) {
 			const states = chunk.componentData[lifecycleState]
 			const viewables = chunk.componentData[viewable]
 
 			for (let i = 0; i < chunk.size; i++) {
 				// Only process entities whose lifecycle state has actually changed since the system last ran.
-				if (!chunk.hasChanged(lifecycleState, i)) continue
+
+				if (states.dirtyTick[i] <= lastTick) continue
 
 				const spriteRef = viewables.spriteRef[i]
 				const sprite = engine.assetManager.getDisplayObjectByRef(spriteRef)
 				if (!sprite) continue
-				
+
 				const currentFlags = states.flags[i]
 
 				if ((currentFlags & LIFECYCLE.DYING) !== 0) {
@@ -54,6 +57,7 @@ export class LifecycleVisualSystem {
 					const entityId = chunk.entities[i]
 					// Transition from DYING to POOLED. This is the final step of cleanup.
 					// We use commands to perform the structural change and state update.
+					this.pooledStateMutators.lifecycleState.dirtyTick[0] = currentTick + 1
 					this.addComponent(entityId, this.addIsPooledPayload)
 					this.setComponentData(entityId, this.pooledStatePayload)
 				} else if ((currentFlags & LIFECYCLE.ACTIVE) !== 0) {

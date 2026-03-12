@@ -24,8 +24,10 @@ export class ProjectileLifetimeSystem {
 		this.LIFECYCLE = ecs.componentManager.getConstantsForProperty('LifecycleState', 'flags')
 
 		// Pre-compile the payload to set the DYING state.
-		const { payload, mutators } = this.compile(lifecycleState, { flags: this.LIFECYCLE.DYING })
+		// CRITICAL: We include dirtyTick in the payload. The value will be set at runtime.
+		const { payload, mutators } = this.compile(lifecycleState, { flags: this.LIFECYCLE.DYING, dirtyTick: 0 })
 		this.dyingPayload = payload
+		this.dyingMutators = mutators
 	}
 
 	update({ deltaTime, currentTick }) {
@@ -33,21 +35,26 @@ export class ProjectileLifetimeSystem {
 			const velocities = chunk.componentData[velocity]
 			const ranges = chunk.componentData[range]
 			const distances = chunk.componentData[distanceTraveled]
+			// We only need to mark distanceTraveled dirty for the broad-phase check,
+			// as no system currently does a narrow-phase check on it.
+			let distanceWasModified = false
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				// The query now ensures we only iterate over active projectiles,
 				// so we can remove the check for the ACTIVE flag.
 				const speed = Math.sqrt(velocities.x[indexInChunk] ** 2 + velocities.y[indexInChunk] ** 2)
 				distances.value[indexInChunk] += speed * deltaTime
+				distanceWasModified = true
 
 				if (distances.value[indexInChunk] >= ranges.value[indexInChunk]) {
+					// This is the correct pattern. We mutate the pre-compiled payload to set the correct tick
+					// for the NEXT frame, then issue the command.
+					this.dyingMutators.lifecycleState.dirtyTick[0] = currentTick + 1
 					this.setComponentData(chunk.entities[indexInChunk], this.dyingPayload)
 				}
 			}
 
-			// Since we modify `distanceTraveled` for every entity in the query,
-			// it's more efficient to mark the entire chunk component as dirty once.
-			chunk.markChunkDirty(distanceTraveled, currentTick)
+			if (distanceWasModified) chunk.markDirty(distanceTraveled, currentTick)
 		}
 	}
 }

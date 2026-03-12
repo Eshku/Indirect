@@ -19,8 +19,10 @@ Experimental, constantly changing. Expect breaking changes and bugs.
 - Thread-safe Shared Component Data / prototypes.
 - Thread safe compiler for Command Buffer.
 - Thread safe whatever other API.
+- Bitmask Dirty Sets
+- Dynamic \ packed arrays.
+- Enableable components (or at least provide tools to mask manually)
 - Priority Queue
-- Allow to react on component addition/changes/removal as different events.
 - Serialization/Deserialization
 - Allow to redefine default execution order within systems.
 - HMR
@@ -32,11 +34,11 @@ Long-term vision is to build a high-performance, **data-oriented**, and **parall
 
 #### Guiding Principles
 
-1.  **Performance Over "Comfort"**: Design decisions always prioritize raw performance and efficient data access patterns. This means ugly API if affect on performance is substantial. 
+1.  **Performance Over "Comfort"**: Design decisions always prioritize raw performance and efficient data access patterns over comfy API.
 
-2.  **Maximum Developer Control**: Goal is to provide as much control to developers as possible.
+2.  **Maximum Developer Control**: Goal is to provide as many tools and much control to developers as possible.
 
-3.  **Zero-Cost Abstractions (Pay Only For What You Use)**: Actively avoiding adding features to the core engine if they impose runtime performance penalty on _all_ users, regardless of whether they use the feature. New abstractions are only acceptable if they have a negligible or zero-cost for those who don't opt into them.
+3.  **Zero-Cost Abstractions (Pay Only For What You Use)**: Actively avoiding adding features to the core engine if they impose runtime performance penalty on _all_ users, regardless of whether they use the feature. New abstractions are only acceptable if they have a negligible or zero-cost runtime cost for those who don't opt into them.
 
 ## Tech Stack
 
@@ -92,12 +94,12 @@ Components are defined as plain JavaScript objects that act as a schema, dictati
 
 ### Queries
 
-Systems use queries to find entities that have a specific set of components.
+Systems use queries to find chunks that have a specific set of components.
 
 - **`with`**: Components that must be present.
 - **`without`**: Components that must not be present.
 - **`any`**: At least one of these components must be present.
-- **`react`**: Query only returns entities where one of these components has changed since system last ran.
+- **`react`**: Query only returns chunks where one of these components has changed since system last ran.
 
 Primary way to iterate is `query.iter()`, which yields [`Chunk Views`](app/client/Managers/QueryManager/ChunkView.js) for processing.
 
@@ -169,8 +171,8 @@ export function applyGravityAndMove(payload, systemContext, kernelContext) {
 	}
 
 	// Mark modified components as dirty for reactive queries.
-	chunk.markAllDirty(position, currentTick)
-	chunk.markAllDirty(velocity, currentTick)
+	chunk.markDirty(position, currentTick)
+	chunk.markDirty(velocity, currentTick)
 }
 ```
 

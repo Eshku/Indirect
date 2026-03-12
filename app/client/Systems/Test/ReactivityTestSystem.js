@@ -1,39 +1,29 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { reactivityTarget, reactivityComponent, componentA, componentB } = ecs.getTypeIDs()
+const { reactivityTarget, reactivityComponent, componentA } = ecs.getTypeIDs()
 
 /**
- * A system to test the engine's reactivity pipeline, including direct component
- * modifications and structural changes (adding/removing components).
+ * A pure test system for engine's core reactivity feature: broad-phase chunk culling.
+ * It verifies that a reactive query only yields a chunk when its relevant component
+ * has been explicitly marked as dirty for that chunk.
  */
 export class ReactivityTestSystem {
-	static dependencies = {
-		update: {
-			reads: [reactivityComponent],
-		},
-	}
-
 	constructor() {
-		// true \ false
-		this.testConfig = {
-			runDirectModificationTest: true,
-			runStructuralChangeTest: false,
-		}
-
 		// --- Test State ---
-		// Needs at least 2
-		this.totalEntities = 2
 		this.entitiesInitialized = false
-		this.directModificationEntityId = null
-		this.structuralChangeEntityId = null
+		this.testEntityId = null
 	}
 
 	init() {
 		// --- Queries ---
-		this.modificationTargetQuery = this.getQuery({
+		// A general query to find our test entity for modification.
+		this.targetQuery = this.getQuery({
 			with: [reactivityTarget, reactivityComponent],
 		})
+
+		// Reactive query we are testing. It should only yield a chunk
+		// if `reactivityComponent` has been marked dirty in that chunk.
 		this.detectionQuery = this.getQuery({
 			with: [reactivityTarget, reactivityComponent],
 			react: [reactivityComponent],
@@ -42,120 +32,106 @@ export class ReactivityTestSystem {
 		// --- Payloads ---
 		this.componentAPayload = this.compile(componentA, {}).payload
 
-		for (let i = 0; i < this.totalEntities; i++) {
-			// Compile the payload once.
-			const { payload } = this.compile({
-				ReactivityTarget: {},
-				ReactivityComponent: { value: 0 },
-			})
-			this.createEntity(payload)
-		}
+		// Create a single entity for the test.
+		const { payload } = this.compile({
+			reactivityTarget: {},
+			reactivityComponent: { value: 0 },
+		})
+		this.createEntity(payload)
 	}
 
 	_initializeEntities() {
-		const allEntities = []
-		// Use the broader query to find all test entities, even if their components change.
-		for (const chunk of this.modificationTargetQuery.iter()) {
-			// Iterate through the entities of the chunk and add them to the list.
-			for (let i = 0; i < chunk.size; i++) allEntities.push(chunk.entities[i])
+		for (const chunk of this.targetQuery.iter()) {
+			if (chunk.size > 0) {
+				this.testEntityId = chunk.entities[0]
+				this.entitiesInitialized = true
+				console.log(`%cReactivityTestSystem: Initialized test entity ${this.testEntityId}.`, 'color: gray')
+				return
+			}
 		}
-
-		// We'll use two separate entities for our tests to keep them isolated.
-		this.directModificationEntityId = allEntities[0]
-		this.structuralChangeEntityId = allEntities[1]
-		this.entitiesInitialized = true
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
 		if (!this.entitiesInitialized) {
-			// On the first update after init, the entities will have been created.
 			this._initializeEntities()
-			// If we still can't find them, wait for the next tick.
-			if (!this.entitiesInitialized) return
 		}
 
-		if (this.testConfig.runDirectModificationTest) {
-			this._runDirectModificationTest(currentTick)
-		}
-
-		if (this.testConfig.runStructuralChangeTest) {
-			this._runStructuralChangeTest(currentTick)
-		}
-
-		this._runDetection(currentTick)
-	}
-
-	_runDirectModificationTest(currentTick) {
-		// Every 60 ticks, modify the `value` of one entity's ReactivityComponent.
-		if (currentTick > 0 && currentTick % 60 === 0) {
-			for (const chunk of this.modificationTargetQuery.iter()) {
-				const entities = chunk.entities
+		// --- Trigger Phase ---
+		// On tick 60, perform a modification that SHOULD be detected.
+		if (currentTick === 60) {
+			for (const chunk of this.targetQuery.iter()) {
 				const reactComps = chunk.componentData[reactivityComponent]
+				reactComps.value[0]++ // Modify the data
 
-				for (let i = 0; i < chunk.size; i++) {
-					if (entities[i] === this.directModificationEntityId) {
-						const oldValue = reactComps.value[i]
-						const newValue = oldValue + 1
-						reactComps.value[i] = newValue
-						chunk.markEntityDirty(reactivityComponent, i, currentTick)
+				// Use the core engine API to mark the component as dirty for the chunk.
+				chunk.markDirty(reactivityComponent, currentTick)
 
-						console.log(
-							`%cReactivityTestSystem (Trigger): Modified ReactivityComponent on entity ${this.directModificationEntityId}. Changed value from ${oldValue} to ${newValue} at tick ${currentTick}.`,
-							'color: orange',
-						)
-						return // Found and modified
-					}
-				}
+				console.log(
+					`%cReactivityTestSystem (Trigger): Modified ReactivityComponent at tick ${currentTick}.`,
+					'color: orange',
+				)
 			}
 		}
-	}
 
-	_runStructuralChangeTest(currentTick) {
-		// At specific ticks, add or remove a component to test if the archetype change
-		// correctly avoids triggering reactivity on other components.
-		if (currentTick === 180) {
+		// On tick 120, perform a structural change that should NOT be detected by this query.
+		if (currentTick === 120) {
+			this.addComponent(this.testEntityId, this.componentAPayload)
 			console.log(
-				`%cReactivityTestSystem (Structural): Adding ComponentA to entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
-				'color: cyan',
+				`%cReactivityTestSystem (Structural): Added ComponentA at tick ${currentTick}.`,
+				'color: #8e44ad',
 			)
-
-			this.addComponent(this.structuralChangeEntityId, this.componentAPayload)
-		} else if (currentTick === 240) {
-			console.log(
-				`%cReactivityTestSystem (Structural): Removing ComponentA from entity ${this.structuralChangeEntityId} at tick ${currentTick}.`,
-				'color: magenta',
-			)
-			this.removeComponent(this.structuralChangeEntityId, componentA)
 		}
+
+		// --- Detection Phase ---
+		this._runDetection(currentTick, lastTick)
 	}
 
-	_runDetection(currentTick) {
-		// This runs every frame to see what changes the reactive query has picked up.
-		for (const chunk of this.detectionQuery.iter()) {
-			const entities = chunk.entities
-			const reactComps = chunk.componentData[reactivityComponent]
-			const dirtyTicks = chunk.dirtyTicks[reactivityComponent]
+	_runDetection(currentTick, lastTick) {
+		let detected = false
+		for (const chunk of this.detectionQuery.iter(lastTick)) {
+			// If iterator yields anything, it means broad-phase check passed.
+			detected = true
+		}
 
-			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				// Use the new helper method for cleaner code.
-				if (chunk.hasChanged(reactivityComponent, indexInChunk)) {
-					const entityId = entities[indexInChunk]
-					const newValue = reactComps.value[indexInChunk]
-					const dirtyTick = dirtyTicks[indexInChunk]
-
-					console.log(
-						`%cReactivityTestSystem (Detector): Detected change on entity ${entityId}! New value: ${newValue}. (Component dirtied at ${dirtyTick})`,
-						'color: lightgreen',
-					)
-				}
+		// We expect detection on the SAME frame as modification happens.
+		if (currentTick === 60) {
+			if (detected) {
+				console.log(`%cReactivityTestSystem (Detector): PASSED! Detected direct modification on tick ${currentTick}.`, 'color: #2ecc71')
+			} else {
+				console.error(
+					`%cReactivityTestSystem (Detector): FAILED! Did not detect change on tick ${currentTick}.`,
+					'color: #e74c3c; font-weight: bold;',
+				)
 			}
+		}
+		// Structural change command is executed after tick 120's logic systems run.
+		// So, we check for its (lack of) effect on the next frame, tick 121.
+		else if (currentTick === 121) {
+			if (!detected) {
+				console.log(
+					`%cReactivityTestSystem (Detector): PASSED! Correctly ignored structural change on tick ${currentTick}.`,
+					'color: #2ecc71',
+				)
+			} else {
+				console.error(
+					`%cReactivityTestSystem (Detector): FAILED! Incorrectly detected structural change on tick ${currentTick}.`,
+					'color: #e74c3c; font-weight: bold;',
+				)
+			}
+		}
+		// On any other frame where we didn't trigger a change, we expect no detection.
+		else if (detected && currentTick !== 1) {
+			// Ignore tick 1 as it might be part of initial creation.
+			console.error(
+				`%cReactivityTestSystem (Detector): FAILED! Detected a change on an unexpected tick: ${currentTick}.`,
+				'color: #e74c3c; font-weight: bold;',
+			)
 		}
 	}
 
 	destroy() {
 		// Clean up entities created by this test system to prevent accumulation on HMR.
-		// Use the highly efficient chunk-based destruction command.
-		for (const chunk of this.modificationTargetQuery.iter()) {
+		for (const chunk of this.targetQuery.iter()) {
 			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
 		}
 	}

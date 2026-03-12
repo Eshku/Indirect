@@ -7,7 +7,6 @@
  * @param {object} kernelContext - An object with thread-specific helpers, like getChunkView.
  */
 export function dataIntegrity(payload, systemContext, kernelContext) {
-	const { currentTick } = frameContext
 	const { churnData, verification } = systemContext
 
 	const chunk = kernelContext.getChunkView(payload)
@@ -25,13 +24,10 @@ export function dataIntegrity(payload, systemContext, kernelContext) {
 		if (storedEntityId === 0n) {
 			// Prime the entity with its actual ID.
 			churnDataArr.entityId[i] = actualEntityId
-			chunk.markEntityDirty(churnData, i, currentTick)
 			verifications.status[i] = 1
-			chunk.markEntityDirty(verification, i, currentTick)
 		} else if (storedEntityId !== actualEntityId) {
 			// Stored ID doesn't match the entity in this slot. Corruption!
 			verifications.status[i] = -1
-			chunk.markEntityDirty(verification, i, currentTick)
 		}
 	}
 }

@@ -56,7 +56,7 @@ export class CPUBenchmark {
 				// Write the final result once
 				positions.x[i] = x
 			}
-			chunk.markAllDirty(position, context.currentTick)
+			chunk.markDirty(position, context.currentTick)
 		}
 	}
 

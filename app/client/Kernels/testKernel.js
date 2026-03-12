@@ -31,5 +31,5 @@ export function testKernel(payload, systemContext, kernelContext) {
 	}
 
 	// kernel modifies every position in the chunk, we can use the efficient batch method.
-	chunk.markAllDirty(position, frameContext.currentTick)
+	chunk.markDirty(position, frameContext.currentTick)
 }

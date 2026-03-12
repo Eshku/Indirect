@@ -31,5 +31,5 @@ export function dependencyB(payload, systemContext, kernelContext) {
 
 	// Now, write a new value for DependencySystemC to read.
 	velocities.x[0] = 456
-	chunk.markAllDirty(velocity, currentTick)
+	chunk.markDirty(velocity, currentTick)
 }

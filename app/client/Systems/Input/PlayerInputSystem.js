@@ -106,27 +106,13 @@ export class PlayerInputSystem {
 			const intentsY = movementIntents.desiredY
 			const actionsIntent = shootingIntents.shootingIntent
 
-			let movementModified = false
-			let actionModified = false
-
 			for (let i = 0; i < chunk.size; i++) {
-				if (intentsX[i] !== intentX || intentsY[i] !== intentY) {
-					intentsX[i] = intentX
-					intentsY[i] = intentY
-					chunk.dirtyTicks[movementIntent][i] = currentTick
-					movementModified = true
-				}
-
-				// Always sync the shooting intent with the current input state.
-				// If the state is different, update the component.
-				if (actionsIntent[i] !== mainAttackIntent) {
-					actionsIntent[i] = mainAttackIntent
-					chunk.dirtyTicks[shootingIntent][i] = currentTick
-					actionModified = true
-				}
+				// Since this is a high-volatility system for a singleton, we can
+				// perform an unconditional write to keep the loop branchless and simple.
+				intentsX[i] = intentX
+				intentsY[i] = intentY
+				actionsIntent[i] = mainAttackIntent
 			}
-			if (movementModified) chunk.markChunkDirty(movementIntent, currentTick)
-			if (actionModified) chunk.markChunkDirty(shootingIntent, currentTick)
 		}
 	}
 }

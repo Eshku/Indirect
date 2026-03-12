@@ -19,5 +19,5 @@ export function parallelismTest(payload, systemContext, kernelContext) {
 			velocities.x[i] *= -1
 		}
 	}
-	chunk.markAllDirty(position, currentTick)
+	chunk.markDirty(position, currentTick)
 }

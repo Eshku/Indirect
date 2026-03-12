@@ -17,25 +17,18 @@ export class ApplyVelocity {
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
+		// This is a high-volatility system. We assume most entities are moving.
+		// We do not use a reactive query and we do not mark any data as dirty.
+		// The corresponding reader system (SyncTransforms) will also be non-reactive.
 		for (const chunk of this.query.iter()) {
 			const posArrays = chunk.componentData[position]
 			const velArrays = chunk.componentData[velocity]
-			const posDirtyTicks = chunk.dirtyTicks[position]
 
-			let wasModified = false
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				const velX = velArrays.x[indexInChunk]
-				const velY = velArrays.y[indexInChunk]
-
-				// Only update position if the entity is actually moving.
-				if (velX !== 0 || velY !== 0) {
-					posArrays.x[indexInChunk] += velX * deltaTime
-					posArrays.y[indexInChunk] += velY * deltaTime
-					posDirtyTicks[indexInChunk] = currentTick
-					wasModified = true
-				}
+				// This loop is hot. We just perform the integration. No branching, no marking.
+				posArrays.x[indexInChunk] += velArrays.x[indexInChunk] * deltaTime
+				posArrays.y[indexInChunk] += velArrays.y[indexInChunk] * deltaTime
 			}
-			if (wasModified) chunk.markChunkDirty(position, currentTick)
 		}
 	}
 

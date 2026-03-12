@@ -21,14 +21,14 @@ export class SpriteFactorySystem {
 		})
 
 		// Pre-compile the payload and cache the payload/mutator objects separately.
-		const { payload, mutators } = this.compile(viewable, { spriteRef: 0 })
+		const { payload, mutators } = this.compile(viewable, { spriteRef: 0, dirtyTick: 0 })
 		this.viewablePayload = payload
 		this.viewableMutators = mutators
 		this.stringStorage = stringInterningTable.storage
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
-		for (const chunk of this.initializationQuery.iter()) {
+		for (const chunk of this.initializationQuery.iter(lastTick)) {
 			const descriptorArrays = chunk.componentData[spriteDescriptor]
 			const viewableArrays = chunk.componentData[viewable]
 
@@ -37,7 +37,10 @@ export class SpriteFactorySystem {
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				// Only act if the descriptor was just added/changed AND the sprite hasn't been created yet.
-				if (chunk.hasChanged(spriteDescriptor, indexInChunk) && spriteRefs[indexInChunk] === UNINITIALIZED_REF) {
+				if (
+					descriptorArrays.dirtyTick[indexInChunk] >= lastTick &&
+					spriteRefs[indexInChunk] === UNINITIALIZED_REF
+				) {
 					const entityId = chunk.entities[indexInChunk]
 					const assetName = this.stringStorage[assetNameRefs[indexInChunk]]
 
@@ -47,6 +50,7 @@ export class SpriteFactorySystem {
 					if (newSpriteRef !== null) {
 						// This system's only job is to create the sprite and update the Viewable component.
 						// It does NOT add it to the scene. Another system will handle that.
+						this.viewableMutators.viewable.dirtyTick[0] = currentTick + 1
 						this.viewableMutators.viewable.spriteRef[0] = newSpriteRef
 						this.setComponentData(entityId, this.viewablePayload)
 					}

@@ -20,15 +20,12 @@ export class MovementSystem {
 			const velocityArrays = chunk.componentData[velocity]
 			const intentArrays = chunk.componentData[movementIntent]
 			const speedArrays = chunk.componentData[speed]
-			const velocityDirtyTicks = chunk.dirtyTicks[velocity]
 
 			const velX = velocityArrays.x
 			const velY = velocityArrays.y
 			const intentX = intentArrays.desiredX
 			const intentY = intentArrays.desiredY
 			const speedVal = speedArrays.value
-
-			let wasModified = false
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				const finalVelX = intentX[indexInChunk] * speedVal[indexInChunk]
@@ -37,12 +34,8 @@ export class MovementSystem {
 				if (velX[indexInChunk] !== finalVelX || velY[indexInChunk] !== finalVelY) {
 					velX[indexInChunk] = finalVelX
 					velY[indexInChunk] = finalVelY
-					velocityDirtyTicks[indexInChunk] = currentTick
-					wasModified = true
 				}
 			}
-
-			if (wasModified) chunk.markChunkDirty(velocity, currentTick)
 		}
 	}
 

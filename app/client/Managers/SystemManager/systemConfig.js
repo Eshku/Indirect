@@ -79,13 +79,13 @@ export const systemSchedule = {
 
 		{ name: 'EventEntityCleanupSystem', frequency: 'logic' },
 
-		{name :'SpinningSystem', frequency:'logic'}
+		{ name: 'SpinningSystem', frequency: 'logic' },
 	],
 
 	// Infrequent UI updates. Runs on a timer, not every frame.
 	Timed: [
-		// Run the director every 5 seconds.
-		{ name: 'DirectorSystem', frequency: 0.2 },
+		// Run  every 5 seconds.
+		{ name: 'SpawnDirectorSystem', frequency: 0.2 },
 	],
 
 	// Runs once per rendered frame for smooth visuals, interpolation, and UI.
@@ -114,20 +114,18 @@ export const systemSchedule = {
 	],
 
 	Test: [
-		
 		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
 		/* { name: 'CustomJobTestSystem', frequency: 'logic' }, */
 		/* { name: 'KernelArchitecture', frequency: 'logic' }, */
-/* 				{ name: 'DependencySystemA', frequency: 'visuals' },
+		/* 				{ name: 'DependencySystemA', frequency: 'visuals' },
 		{ name: 'DependencySystemB', frequency: 'visuals' },
 		{ name: 'DependencySystemC', frequency: 'visuals' }, */
 	],
 
 	CoreTests: [
-
-				/* { name: 'SchemaTestSystem', frequency: 'none' }, */
+		/* { name: 'SchemaTestSystem', frequency: 'none' }, */
 		/* { name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
 		/* { name: 'QueryTestSystem', frequency: 'none' }, */

@@ -22,18 +22,12 @@ export class CooldownSystem {
 	update({ deltaTime, currentTick }) {
 		for (const chunk of this.query.iter()) {
 			const timers = chunk.componentData[weaponCooldown].timer
-			const dirtyTicks = chunk.dirtyTicks[weaponCooldown]
-			let wasModified = false
 
 			for (let i = 0; i < chunk.size; i++) {
 				if (timers[i] > 0) {
 					timers[i] = Math.max(0, timers[i] - deltaTime)
-					dirtyTicks[i] = currentTick
-					wasModified = true
 				}
 			}
-
-			if (wasModified) chunk.markChunkDirty(weaponCooldown, currentTick)
 		}
 	}
 }

@@ -10,7 +10,7 @@ const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.j
  * It runs on a timer and, when triggered, spawns a cluster of enemies
  * at a location outside the player's current view.
  */
-export class DirectorSystem {
+export class SpawnDirectorSystem {
 	static dependencies = {
 		// Declare that this system writes to the SpawnDirector component.
 		update: {
@@ -79,7 +79,6 @@ export class DirectorSystem {
 		// This system only acts if a SpawnDirector entity exists.
 		for (const chunk of this.directorQuery.iter()) {
 			const directorState = chunk.componentData[spawnDirector]
-			const directorDirtyTicks = chunk.dirtyTicks[spawnDirector]
 
 			const currentBudget = directorState.threatBudget[0]
 			let growthRate = directorState.threatGrowthRate[0]
@@ -95,12 +94,11 @@ export class DirectorSystem {
 			// Check if we have enough budget to trigger a spawn wave.
 			if (directorState.threatBudget[0] >= minSpawnBudget) {
 				// Spend the budget and spawn the wave.
-				const spentBudget = this.spawnWave(directorState.threatBudget[0])
+				const spentBudget = this.spawnWave(directorState.threatBudget[0], currentTick)
 
 				// Deduct the budget that was actually spent.
 				directorState.threatBudget[0] -= spentBudget
 			}
-			chunk.markChunkDirty(spawnDirector, currentTick)
 		}
 	}
 
@@ -110,7 +108,7 @@ export class DirectorSystem {
 	 * @param {number} budget The threat budget available for this wave.
 	 * @returns {number} The amount of budget that was actually spent.
 	 */
-	spawnWave(budget) {
+	spawnWave(budget, currentTick) {
 		const { chosenEnemies, spentBudget } = this._chooseEnemiesForWave(budget)
 		if (chosenEnemies.length === 0) {
 			return 0 // Nothing was spawned, so no budget was spent.
@@ -122,7 +120,7 @@ export class DirectorSystem {
 			return 0 // Could not spawn, so no budget was spent.
 		}
 
-		this._spawnEnemyCluster(chosenEnemies, spawnLocation)
+		this._spawnEnemyCluster(chosenEnemies, spawnLocation, currentTick)
 		return spentBudget
 	}
 
@@ -166,7 +164,7 @@ export class DirectorSystem {
 	 * @param {{x: number, y: number}} location - The center of the spawn cluster.
 	 * @private
 	 */
-	_spawnEnemyCluster(enemiesToSpawn, location) {
+	_spawnEnemyCluster(enemiesToSpawn, location, currentTick) {
 		const separation = 48 // Base separation distance between enemies.
 		const phi = (1 + Math.sqrt(5)) / 2 // Golden ratio for the spiral.
 
@@ -186,6 +184,10 @@ export class DirectorSystem {
 
 			enemyInfo.mutators.position.x[0] = enemyX
 			enemyInfo.mutators.position.y[0] = enemyY
+			// This is the critical fix: we must set the dirtyTick for the SpriteDescriptor
+			// so that the SpriteFactorySystem will process this newly created entity on the next frame.
+			enemyInfo.mutators.spriteDescriptor.dirtyTick[0] = currentTick + 1
+
 			this.createEntity(enemyInfo.payload)
 		}
 	}

@@ -23,13 +23,16 @@ export class RenderLayerSystem {
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
-		for (const chunk of this.layerQuery.iter()) {
+		for (const chunk of this.layerQuery.iter(lastTick)) {
 			const viewableArrays = chunk.componentData[viewable]
 			const layerArrays = chunk.componentData[layer]
 
 			for (let i = 0; i < chunk.size; i++) {
 				// We only need to act if one of the components we care about has changed.
-				if (chunk.hasChanged(viewable, i) || chunk.hasChanged(layer, i)) {
+				const viewableChanged = viewableArrays.dirtyTick[i] > lastTick
+				const layerChanged = layerArrays.dirtyTick[i] > lastTick
+
+				if (viewableChanged || layerChanged) {
 					const spriteRef = viewableArrays.spriteRef[i]
 
 					// If spriteRef is 0, the sprite hasn't been created yet. Skip.

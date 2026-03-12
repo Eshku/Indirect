@@ -173,7 +173,6 @@ export class EntityManager {
 			for (const chunkId of this.newlyCreatedChunks) {
 				newChunks[chunkId] = {
 					data: entityStore.chunkComponentData[chunkId],
-					ticks: entityStore.chunkDirtyTicks[chunkId],
 					archetypeTicks: entityStore.chunkArchetypeDirtyTicks[chunkId],
 				}
 			}
@@ -207,15 +206,6 @@ export class EntityManager {
 	 */
 	getSharedComponentData(chunkId) {
 		return entityStore.chunkComponentData[chunkId]
-	}
-
-	/**
-	 * A helper to get the dirty tick data for a specific chunk.
-	 * @param {number} chunkId The ID of the chunk.
-	 * @returns {object}
-	 */
-	getSharedDirtyTicks(chunkId) {
-		return entityStore.chunkDirtyTicks[chunkId]
 	}
 
 	createEntity() {
@@ -494,24 +484,17 @@ export class EntityManager {
 			this._writeComponentDataFromBuffer(targetChunkId, targetIndex, typeID, dataView, 0)
 		}
 
-		// 4. Mark all components in the new location as dirty for the current tick.
-		const targetComponentIdArray = this.getComponentTypeIDsForArchetype(targetArchetypeId)
-		const targetComponentCount = targetComponentIdArray.length
-		const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[targetChunkId]
+		// 4. Mark only the newly added components as dirty for the current tick.
+		const targetComponentIdArray = this.getComponentTypeIDsForArchetype(targetArchetypeId) // Needed for index lookup
+		const componentIndexMap = new Map()
+		for (let i = 0; i < targetComponentIdArray.length; i++) {
+			componentIndexMap.set(targetComponentIdArray[i], i)
+		}
 
-		for (let i = 0; i < targetComponentCount; i++) {
-			const typeID = targetComponentIdArray[i]
-			const indexInArchetype = i
-
-			// Update per-entity tick
-			entityStore.chunkDirtyTicks[targetChunkId][typeID][targetIndex] = currentTick
-
-			// Update per-component-type high-water mark
-			let oldValue = Atomics.load(archetypeDirtyTicks, indexInArchetype)
-			while (currentTick > oldValue) {
-				const result = Atomics.compareExchange(archetypeDirtyTicks, indexInArchetype, oldValue, currentTick)
-				if (result === oldValue) break
-				oldValue = result
+		for (const typeID of componentsToAssign.keys()) {
+			const indexInArchetype = componentIndexMap.get(typeID)
+			if (indexInArchetype !== undefined) {
+				this._updateArchetypeDirtyTick(targetChunkId, indexInArchetype, currentTick)
 			}
 		}
 
@@ -753,10 +736,6 @@ export class EntityManager {
 			this._writeComponentDataFromBuffer(chunkId, destIndex, typeID, sourceView, 0)
 		}
 
-		for (let i = 0; i < batchSize; i++) {
-			entityStore.chunkDirtyTicks[chunkId][typeID][destIndices[i]] = currentTick
-		}
-
 		// Update the per-component-type high-water mark for this chunk.
 		const archetypeId = entityStore.chunkArchetypeIds[chunkId]
 		const componentIdArray = this.getComponentTypeIDsForArchetype(archetypeId)
@@ -789,9 +768,6 @@ export class EntityManager {
 		// This loop is intentionally simple for JIT optimization.
 		for (let i = 0; i < entityStore.chunkSizes[chunkId]; i++) {
 			this._writeComponentDataFromBuffer(chunkId, i, typeID, sourceView, 0)
-		}
-		if (info.byteSize > 0) {
-			entityStore.chunkDirtyTicks[chunkId][typeID].fill(currentTick, 0, entityStore.chunkSizes[chunkId])
 		}
 
 		// Update the per-component-type high-water mark for this chunk.
@@ -843,7 +819,6 @@ export class EntityManager {
 			this._writeComponentDataFromBuffer(chunkId, indexInChunk, typeID, sourceView, componentBaseOffset)
 			componentBaseOffset += info.byteSize
 
-			entityStore.chunkDirtyTicks[chunkId][typeID][indexInChunk] = currentTick
 			this._updateArchetypeDirtyTick(chunkId, indexInArchetype, currentTick)
 		}
 	}
@@ -901,7 +876,6 @@ export class EntityManager {
 
 					aosOffset += propSize
 				}
-				entityStore.chunkDirtyTicks[chunkId][typeID].fill(currentTick, startIndexInChunk, endIndexInChunk)
 				this._updateArchetypeDirtyTick(chunkId, indexInArchetype, currentTick)
 			}
 
@@ -979,7 +953,6 @@ export class EntityManager {
 			// loop per-property, not per-entity.
 			for (const { typeID, propKey } of copyPlan.toCopy) {
 				const targetArray = entityStore.chunkComponentData[chunkId][typeID][propKey]
-				const dirtyTicksArray = entityStore.chunkDirtyTicks[chunkId][typeID]
 
 				for (let i = 0; i < entitiesToAddInChunk; i++) {
 					const overallIndex = entityCursor + i
@@ -987,7 +960,6 @@ export class EntityManager {
 					const { chunkId: sourceChunkId, indexInChunk: sourceIndex } = sourceLocations[overallIndex]
 					const sourceArray = entityStore.chunkComponentData[sourceChunkId][typeID][propKey]
 					targetArray[targetIndex] = sourceArray[sourceIndex]
-					dirtyTicksArray[targetIndex] = currentTick
 				}
 			}
 
@@ -1003,18 +975,23 @@ export class EntityManager {
 					const sourceLength = payloadInfo.dataLengths[overallIndex]
 					const sourceView = new DataView(reader.buffer, sourceOffset, sourceLength)
 					this._writeComponentDataFromBuffer(chunkId, destIndex, typeID, sourceView, 0)
-					entityStore.chunkDirtyTicks[chunkId][typeID][destIndex] = currentTick
 				}
 			}
 
 			// --- Batch Update High-Water Marks ---
 			const targetComponentIdArray = this.getComponentTypeIDsForArchetype(targetArchetype)
-			const targetComponentCount = targetComponentIdArray.length
+			// Create a map for fast lookup of indexInArchetype
+			const componentIndexMap = new Map()
+			for (let i = 0; i < targetComponentIdArray.length; i++) {
+				componentIndexMap.set(targetComponentIdArray[i], i)
+			}
 
-			// Update all component high-water marks for this new chunk.
-			for (let i = 0; i < targetComponentCount; i++) {
-				const indexInArchetype = i
-				this._updateArchetypeDirtyTick(chunkId, indexInArchetype, currentTick)
+			// Only mark components that were newly initialized as dirty.
+			for (const typeID of copyPlan.toInitialize) {
+				const indexInArchetype = componentIndexMap.get(typeID)
+				if (indexInArchetype !== undefined) {
+					this._updateArchetypeDirtyTick(chunkId, indexInArchetype, currentTick)
+				}
 			}
 
 			entityStore.chunkSizes[chunkId] += entitiesToAddInChunk
@@ -1074,20 +1051,18 @@ export class EntityManager {
 
 			const isLastElement = indexToRemove === lastIndex
 
-			const chunkEntities = entityStore.chunkComponentData[chunkId].entities
 			if (!isLastElement) {
+				const chunkEntities = entityStore.chunkComponentData[chunkId].entities
 				const swappedEntityId = chunkEntities[lastIndex]
-				chunkEntities[indexToRemove] = swappedEntityId
+				chunkEntities.copyWithin(indexToRemove, lastIndex, lastIndex + 1)
 				swappedMappings.set(swappedEntityId, indexToRemove)
 
 				for (let i = 0; i < componentCount; i++) {
 					const typeID = componentTypeIDs[i]
 					const propArrays = entityStore.chunkComponentData[chunkId][typeID]
 					for (const propKey in propArrays) {
-						propArrays[propKey][indexToRemove] = propArrays[propKey][lastIndex]
+						propArrays[propKey].copyWithin(indexToRemove, lastIndex, lastIndex + 1)
 					}
-					entityStore.chunkDirtyTicks[chunkId][typeID][indexToRemove] =
-						entityStore.chunkDirtyTicks[chunkId][typeID][lastIndex]
 				}
 			}
 			lastIndex--
@@ -1212,7 +1187,6 @@ export class EntityManager {
 		entityStore.chunkComponentData[newChunkId] = {
 			entities: new BigUint64Array(new SharedArrayBuffer(capacity * BigUint64Array.BYTES_PER_ELEMENT)),
 		}
-		entityStore.chunkDirtyTicks[newChunkId] = {}
 
 		for (const typeID of componentIdArray) {
 			const info = Schema.componentInfo[typeID]
@@ -1223,9 +1197,6 @@ export class EntityManager {
 				propArrays[propKey] = new constructor(buffer)
 			}
 			entityStore.chunkComponentData[newChunkId][typeID] = propArrays
-			entityStore.chunkDirtyTicks[newChunkId][typeID] = new Uint32Array(
-				new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT),
-			)
 		}
 
 		// --- Link the new chunk into the archetype's list ---
@@ -1281,7 +1252,6 @@ export class EntityManager {
 
 		// Keep a reference to the old data objects before we replace them.
 		const oldComponentData = entityStore.chunkComponentData[chunkId]
-		const oldDirtyTicks = entityStore.chunkDirtyTicks[chunkId]
 
 		// Reset the chunk's core metadata.
 		entityStore.chunkArchetypeIds[chunkId] = archetypeId
@@ -1292,7 +1262,6 @@ export class EntityManager {
 
 		// Create fresh containers for the new archetype's data. The entities buffer is always kept.
 		const newComponentData = { entities: oldComponentData.entities }
-		const newDirtyTicks = {}
 
 		// Get component lists for old and new archetypes.
 		const oldComponentIds = new Set(this.getComponentTypeIDsForArchetype(oldArchetypeId))
@@ -1303,7 +1272,6 @@ export class EntityManager {
 			if (oldComponentIds.has(typeID)) {
 				// This component is shared, so we reuse its buffers.
 				newComponentData[typeID] = oldComponentData[typeID]
-				newDirtyTicks[typeID] = oldDirtyTicks[typeID]
 			} else {
 				// This component is new, so we must allocate new buffers for it.
 				const info = Schema.componentInfo[typeID]
@@ -1314,15 +1282,13 @@ export class EntityManager {
 					propArrays[propKey] = new constructor(buffer)
 				}
 				newComponentData[typeID] = propArrays
-				newDirtyTicks[typeID] = new Uint32Array(new SharedArrayBuffer(capacity * Uint32Array.BYTES_PER_ELEMENT))
 			}
 		}
 
 		// Assign the newly constructed data objects to the chunk.
-		// The old objects (oldComponentData, oldDirtyTicks) and any un-reused buffers
+		// The old objects (oldComponentData) and any un-reused buffers
 		// are now unreferenced and will be garbage collected.
 		entityStore.chunkComponentData[chunkId] = newComponentData
-		entityStore.chunkDirtyTicks[chunkId] = newDirtyTicks
 
 		// The chunkArchetypeDirtyTicks buffer is size-dependent, so it must always be recreated.
 		entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined // De-reference old one
@@ -1377,7 +1343,7 @@ export class EntityManager {
 		// re-initialization logic above. It will be overwritten when reused.
 		// entityStore.chunkArchetypeIds[chunkId] = 0
 		entityStore.chunkSizes[chunkId] = 0 // Should already be 0, but good to be explicit.
-		// We don't clear chunkComponentData or chunkDirtyTicks here, as they will be overwritten
+		// We don't clear chunkComponentData here, as they will be overwritten
 		// on re-initialization. However, we should clear the archetype-level ticks.
 		entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined
 		// Explicitly zero out pointers to prevent stale data traversal on bugs.

@@ -12,26 +12,26 @@ export class SyncTransforms {
 	init() {
 		this.positionQuery = this.getQuery({
 			with: [viewable, position],
-			react: [position],
+			// react: [position], // REMOVED: Position is high-volatility.
 		})
 
 		this.rotationQuery = this.getQuery({
 			with: [viewable, rotation],
-			react: [rotation],
+			// react: [rotation], // REMOVED: Rotation is high-volatility.
 		})
 
 		this.scaleQuery = this.getQuery({
 			with: [viewable, scale],
-			react: [scale],
+			react: [scale], // KEPT: Scale is low-volatility, changes are rare.
 		})
 
 		this.displayObjectStorage = assetManager.displayObjectStorage
 	}
 
-	update(deltaTime, currentTick) {
+	update({ deltaTime, currentTick, lastTick }) {
 		// --- Position Sync ---
+		// No lastTick needed, this is now a non-reactive query.
 		for (const chunk of this.positionQuery.iter()) {
-
 			const viewableRefs = chunk.componentData[viewable].spriteRef
 			const positionArrays = chunk.componentData[position]
 
@@ -40,16 +40,15 @@ export class SyncTransforms {
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (chunk.hasChanged(position, indexInChunk)) {
-					const spriteRef = viewableRefs[indexInChunk]
-					if (spriteRef === 0) continue
+				// No 'if' check. We sync every entity.
+				const spriteRef = viewableRefs[indexInChunk]
+				if (spriteRef === 0) continue
 
-					const view = displayObjectStorage[spriteRef]
-					if (!view) continue
+				const view = displayObjectStorage[spriteRef]
+				if (!view) continue
 
-					view.x = posX[indexInChunk]
-					view.y = -posY[indexInChunk]
-				}
+				view.x = posX[indexInChunk]
+				view.y = -posY[indexInChunk]
 			}
 		}
 
@@ -62,19 +61,18 @@ export class SyncTransforms {
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (chunk.hasChanged(rotation, indexInChunk)) {
-					const spriteRef = viewableRefs[indexInChunk]
-					if (spriteRef === 0) continue
+				const spriteRef = viewableRefs[indexInChunk]
+				if (spriteRef === 0) continue
 
-					const view = displayObjectStorage[spriteRef]
-					if (!view) continue
-					view.rotation = angle[indexInChunk]
-				}
+				const view = displayObjectStorage[spriteRef]
+				if (!view) continue
+				view.rotation = angle[indexInChunk]
 			}
 		}
 
 		// --- Scale Sync ---
-		for (const chunk of this.scaleQuery.iter()) {
+		// Scale is low-volatility, so we keep the reactive query and the narrow-phase check.
+		for (const chunk of this.scaleQuery.iter(lastTick)) {
 			const viewableRefs = chunk.componentData[viewable].spriteRef
 			const scaleArrays = chunk.componentData[scale]
 
@@ -83,7 +81,7 @@ export class SyncTransforms {
 			const displayObjectStorage = this.displayObjectStorage
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				if (chunk.hasChanged(scale, indexInChunk)) {
+				if (scaleArrays.dirtyTick[indexInChunk] > lastTick) {
 					const spriteRef = viewableRefs[indexInChunk]
 					if (spriteRef === 0) continue
 

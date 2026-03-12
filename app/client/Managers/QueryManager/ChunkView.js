@@ -26,7 +26,6 @@ export class ChunkView {
 		this.archetypeId = -1
 		this.entities = null
 		this.componentData = null
-		this.dirtyTicks = null
 		this._lastTick = -1
 		this._componentIndexMap = new Map()
 	}
@@ -42,7 +41,6 @@ export class ChunkView {
 		this.size = this.entityStore.chunkSizes[chunkId]
 		this.archetypeId = this.entityStore.chunkArchetypeIds[chunkId]
 		this.componentData = this.entityStore.chunkComponentData[chunkId]
-		this.dirtyTicks = this.entityStore.chunkDirtyTicks[chunkId]
 		this.entities = this.componentData.entities
 		this._buildComponentIndexMap()
 	}
@@ -102,84 +100,19 @@ export class ChunkView {
 		return this.componentData[typeId]
 	}
 
-	getDirtyTicks(typeId) {
-		return this.dirtyTicks[typeId]
-	}
-
 	/**
-	 * Checks if a specific component on a specific entity has changed since the system last ran.
-	 * @param {number} typeId The component type ID to check.
-	 * @param {number} indexInChunk The entity's index within the chunk.
-	 * @returns {boolean} True if the component was modified.
-	 */
-	hasChanged(typeId, indexInChunk) {
-		return this.dirtyTicks[typeId][indexInChunk] > this._lastTick
-	}
-
-	/**
-	 * Checks if any of a list of components on a specific entity has changed since the system last ran.
-	 * This is a convenience helper to avoid multiple `||` conditions in a system's loop.
-	 * @param {number[]} typeIds An array of component type IDs to check.
-	 * @param {number} indexInChunk The entity's index within the chunk.
-	 * @returns {boolean} True if any of the components were modified.
-	 */
-	hasAnyChanged(typeIds, indexInChunk) {
-		for (let i = 0; i < typeIds.length; i++) {
-			const typeId = typeIds[i]
-			if (this.dirtyTicks[typeId][indexInChunk] > this._lastTick) {
-				return true
-			}
-		}
-		return false
-	}
-
-	/**
-	 * Marks a single component on a single entity as dirty.
-	 * This updates both the per-entity tick and the per-component-type high-water mark for the chunk.
-	 * This is the standard method to use when modifying component data.
-	 * @param {number} typeId The component type ID to mark.
-	 * @param {number} indexInChunk The entity's index within the chunk.
-	 * @param {number} tick The current game tick.
-	 */
-
-	//! entity-level dirty tracking going to be removed
-	//! and replaced with manually defined, as part of components.
-	//! it is rarely useful to mark per entity in a loop 
-	//! benefits only if amount of entities marked <10% of whole iteration
-	//! while it adds engine complexity, including command buffer.
-
-	//! engine-level support will stay only on broad-phase.
-
-	markEntityDirty(typeId, indexInChunk, tick) {
-		// 1. Update the per-entity tick.
-		this.dirtyTicks[typeId][indexInChunk] = tick
-		// 2. Atomically update the per-component-type high-water mark for the chunk.
-		this._updateArchetypeDirtyTick(typeId, tick)
-	}
-
-	/**
-	 * Flushes manually updated per-entity dirty ticks by updating the chunk's high-water mark for a component type.
-	 * This is the efficient, data-oriented way to signal changes after a loop where per-entity ticks were set manually.
+	 * Signals to the engine that a component type has been modified within this chunk.
+	 * This updates the chunk's "high-water mark" for the component, which allows
+	 * reactive queries to efficiently detect that this chunk contains changes.
+	 *
+	 * This is the single, unified method for marking data as dirty for broad-phase culling.
+	 * It is safe to call from both the main thread and worker threads.
 	 * @param {number} typeId The component type ID to mark.
 	 * @param {number} tick The current game tick.
 	 */
-	markChunkDirty(typeId, tick) {
+	markDirty(typeId, tick) {
 		// Atomically update the per-component-type high-water mark for the chunk.
-		// This assumes the per-entity ticks have already been set manually.
-		this._updateArchetypeDirtyTick(typeId, tick)
-	}
-
-	/**
-	 * Marks a component type as dirty for ALL entities in the chunk.
-	 * This is a highly efficient method for batch operations.
-	 * @param {number} typeId The component type ID that was modified.
-	 * @param {number} tick The current game tick.
-	 */
-	markAllDirty(typeId, tick) {
-		// 1. Update all per-entity ticks for this component type in the chunk.
-		this.dirtyTicks[typeId].fill(tick, 0, this.size)
-
-		// 2. Atomically update the per-component-type high-water mark for the chunk.
+		// This signals to reactive queries that this component type has changed within this chunk.
 		this._updateArchetypeDirtyTick(typeId, tick)
 	}
 

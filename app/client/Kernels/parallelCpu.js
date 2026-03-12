@@ -28,5 +28,5 @@ export function parallelCpu(payload, systemContext, kernelContext) {
 		// Write the final result once
 		positions.x[i] = x
 	}
-	chunk.markAllDirty(position, currentTick)
+	chunk.markDirty(position, currentTick)
 }

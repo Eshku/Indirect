@@ -14,5 +14,5 @@ export function dependencyA(payload, systemContext, kernelContext) {
 		// Write a specific, known value.
 		velocities.x[i] = 123
 	}
-	chunk.markAllDirty(velocity, currentTick)
+	chunk.markDirty(velocity, currentTick)
 }

@@ -75,7 +75,12 @@ export class PlayerWeaponSystem {
 		this.projectileMutators = mutators
 
 		// Pre-compile payloads for reactivating a pooled orb.
-		this.reactivatePayload = this.compile(lifecycleState, { flags: LIFECYCLE.ACTIVE }).payload
+		const { payload: reactivatePayload, mutators: reactivateMutators } = this.compile(lifecycleState, {
+			flags: LIFECYCLE.ACTIVE,
+			dirtyTick: 0,
+		})
+		this.reactivatePayload = reactivatePayload
+		this.reactivateMutators = reactivateMutators
 		this.resetDistancePayload = this.compile(distanceTraveled, { value: 0 }).payload
 
 		// Pre-compile payloads and mutators for dynamic data to be set on reactivated orbs.
@@ -148,9 +153,9 @@ export class PlayerWeaponSystem {
 		// --- Pooling Logic: Reuse first, then create ---
 		const availablePooledProjectile = this.findAvailableProjectile()
 		if (availablePooledProjectile) {
-			this.reuseProjectile(availablePooledProjectile, fireData)
+			this.reuseProjectile(availablePooledProjectile, fireData, currentTick)
 		} else {
-			this.createNewProjectile(fireData)
+			this.createNewProjectile(fireData, currentTick)
 		}
 
 		// Reset cooldown using a command.
@@ -161,11 +166,11 @@ export class PlayerWeaponSystem {
 	findAvailableProjectile() {
 		return this.pooledProjectileQuery.getSingleEntity()
 	}
-	
+
 	//! pre-allocate all to get rid of branching? 1k should be enough? Might be worth testing later on
 	//! Once we have upgrades and whatnot to see how much we actually pool
 
-	reuseProjectile(entityId, fireData) {
+	reuseProjectile(entityId, fireData, currentTick) {
 		this.ownerMutators.owner.entityId[0] = fireData.playerId
 		this.positionMutators.position.x[0] = fireData.playerX
 		this.positionMutators.position.y[0] = fireData.playerY
@@ -173,9 +178,10 @@ export class PlayerWeaponSystem {
 		this.velocityMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
 		this.rangeMutators.range.value[0] = fireData.projectileRange
 
+		this.reactivateMutators.lifecycleState.dirtyTick[0] = currentTick + 1
 		// This is the structural change to bring the entity back into the "active" world.
 		this.removeComponent(entityId, isPooled)
-		
+
 		// These commands update the entity's state for its new life.
 		// Align all to happen at the next frame with remove Component command.
 		this.setComponentData(entityId, this.reactivatePayload) // Sets lifecycle to ACTIVE
@@ -186,13 +192,17 @@ export class PlayerWeaponSystem {
 		this.setComponentData(entityId, this.rangePayload)
 	}
 
-	createNewProjectile(fireData) {
+	createNewProjectile(fireData, currentTick) {
 		this.projectileMutators.owner.entityId[0] = fireData.playerId
 		this.projectileMutators.position.x[0] = fireData.playerX
 		this.projectileMutators.position.y[0] = fireData.playerY
 		this.projectileMutators.velocity.x[0] = fireData.normFireX * fireData.finalSpeed
 		this.projectileMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
 		this.projectileMutators.range.value[0] = fireData.projectileRange
+
+		this.projectileMutators.lifecycleState.dirtyTick[0] = currentTick + 1 //! technically redundent, mostly for consistency
+
+		this.projectileMutators.spriteDescriptor.dirtyTick[0] = currentTick + 1
 
 		this.createEntity(this.projectilePayload)
 	}
