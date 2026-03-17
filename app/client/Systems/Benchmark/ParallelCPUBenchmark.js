@@ -44,6 +44,7 @@ export class ParallelCPUBenchmark {
 		const jobs = []
 		const chunkIds = this.query.getChunks()
 
+		//todo circular buffer, not an object.
 		for (const chunkId of chunkIds) {
 			jobs.push({
 				kernel: parallelCpu,

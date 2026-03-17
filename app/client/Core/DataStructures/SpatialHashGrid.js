@@ -10,13 +10,17 @@ export const SPATIAL_GRID_CONFIG = {
 }
 
 // --- Node Layout (16 bytes per node) ---
+// Each node stores a pointer to an entity and a pointer to the next node in the cell's linked list.
+// To allow for fast, direct access to component data without expensive lookups, we store not just the
+// entity ID, but also its location (chunkId and index within the chunk).
+// - Bytes 0-7:   `entityId` (BigUint64)
+// - Bytes 8-11:  `nextIndex` (Int32)
+// - Bytes 12-13: `chunkId` (Uint16)
+// - Bytes 14-15: `entityIndex` (Uint16)
 export const NODE_BYTE_STRIDE = 16
-// BigUint64Array views the buffer in 8-byte chunks. A 16-byte node is 2 chunks.
-export const NODE_ENTITY_ID_STRIDE_IN_U64 = 2
-// Int32Array views the buffer in 4-byte chunks. A 16-byte node is 4 chunks.
-export const NODE_NEXT_INDEX_STRIDE_IN_I32 = 4
-// The nextIndex is at byte 8, which is the 2nd element in an Int32Array view of the node.
-export const NODE_NEXT_INDEX_OFFSET_IN_I32 = 2
+const NODE_STRIDE_U64 = 2 // 16 / 8
+const NODE_STRIDE_I32 = 4 // 16 / 4
+const NODE_STRIDE_U16 = 8 // 16 / 2
 
 /**
  * A thread-safe, sliding spatial hash grid built on SharedArrayBuffers.
@@ -33,9 +37,10 @@ export class SpatialHashGrid {
 		// --- Create TypedArray views over the shared buffers ---
 		this.gridCellsView = new Int32Array(gridCellsSAB)
 		this.gridOriginView = new Float64Array(gridOriginSAB)
+		this.allocatorView = new Uint32Array(allocatorSAB)
 		this.nodeEntityIdView = new BigUint64Array(nodesSAB)
 		this.nodeNextIndexView = new Int32Array(nodesSAB)
-		this.allocatorView = new Uint32Array(allocatorSAB)
+		this.nodeDataView = new Uint16Array(nodesSAB) // For chunkId and entityIndex
 
 		// --- Pre-calculate constants for convenience ---
 		this.gridWidth = this.config.GRID_WIDTH
@@ -84,14 +89,16 @@ export class SpatialHashGrid {
 
 	/**
 	 * Populates the grid with an entity.
-	 * @param {bigint} entityId - The ID of the entity.
+	 * @param {bigint} entityId - The unique ID of the entity.
+	 * @param {number} chunkId - The ID of the chunk the entity resides in.
+	 * @param {number} entityIndex - The index of the entity within its chunk.
 	 * @param {number} minX - The minimum world X coordinate of the entity's AABB.
 	 * @param {number} minY - The minimum world Y coordinate of the entity's AABB.
 	 * @param {number} maxX - The maximum world X coordinate of the entity's AABB.
 	 * @param {number} maxY - The maximum world Y coordinate of the entity's AABB.
 	 * @returns {boolean} - True if the entity was added, false if it was out of bounds or the grid was full.
 	 */
-	add(entityId, minX, minY, maxX, maxY) {
+	add(entityId, chunkId, entityIndex, minX, minY, maxX, maxY) {
 		const [originX, originY] = this.gridOriginView
 		const gridWorldWidth = this.gridWidth * this.cellSize
 		const gridWorldHeight = this.gridHeight * this.cellSize
@@ -121,7 +128,7 @@ export class SpatialHashGrid {
 		for (let y = clampedStartY; y <= clampedEndY; y++) {
 			for (let x = clampedStartX; x <= clampedEndX; x++) {
 				const cellIndex = y * this.gridWidth + x
-				if (this._addNode(cellIndex, entityId)) {
+				if (this._addNode(cellIndex, entityId, chunkId, entityIndex)) {
 					added = true
 				} else {
 					// Grid is full, stop trying to add.
@@ -136,7 +143,7 @@ export class SpatialHashGrid {
 	 * Internal helper to add a node to a cell's linked list.
 	 * @private
 	 */
-	_addNode(cellIndex, entityId) {
+	_addNode(cellIndex, entityId, chunkId, entityIndex) {
 		const nodeIndex = this.allocatorView[0]
 
 		// Overflow check
@@ -151,8 +158,10 @@ export class SpatialHashGrid {
 		const headIndex = this.gridCellsView[cellIndex]
 
 		// Write the new node's data
-		this.nodeEntityIdView[nodeIndex * NODE_ENTITY_ID_STRIDE_IN_U64] = entityId
-		this.nodeNextIndexView[nodeIndex * NODE_NEXT_INDEX_STRIDE_IN_I32 + NODE_NEXT_INDEX_OFFSET_IN_I32] = headIndex
+		this.nodeEntityIdView[nodeIndex * NODE_STRIDE_U64] = entityId
+		this.nodeNextIndexView[nodeIndex * NODE_STRIDE_I32 + 2] = headIndex // nextIndex is at byte 8
+		this.nodeDataView[nodeIndex * NODE_STRIDE_U16 + 6] = chunkId // chunkId is at byte 12
+		this.nodeDataView[nodeIndex * NODE_STRIDE_U16 + 7] = entityIndex // entityIndex is at byte 14
 
 		// Prepend the new node by updating the cell's head pointer
 		this.gridCellsView[cellIndex] = nodeIndex
@@ -170,10 +179,15 @@ export class SpatialHashGrid {
 	 * @param {number} minY - The minimum world Y coordinate of the query box.
 	 * @param {number} maxX - The maximum world X coordinate of the query box.
 	 * @param {number} maxY - The maximum world Y coordinate of the query box.
-	 * @param {Set<bigint>} resultSet - A Set to which the unique entity IDs will be added.
+	 * @param {object} queryResult - An object with typed arrays to which the results will be written.
+	 * The object should have `count`, `capacity`, `entityIds`, `chunkIds`, `entityIndices`.
+	 * The caller is responsible for deduplication.
 	 */
-	queryBox(minX, minY, maxX, maxY, resultSet) {
+	queryBox(minX, minY, maxX, maxY, queryResult) {
 		const [originX, originY] = this.gridOriginView
+
+		// Reset the count for this new query.
+		queryResult.count = 0
 
 		// Convert world coordinates to grid cell coordinates
 		const startX = Math.floor((minX - originX) * this.invCellSize)
@@ -192,7 +206,7 @@ export class SpatialHashGrid {
 		for (let y = clampedStartY; y <= clampedEndY; y++) {
 			for (let x = clampedStartX; x <= clampedEndX; x++) {
 				const cellIndex = y * this.gridWidth + x
-				this._traverseCell(cellIndex, resultSet)
+				this._traverseCell(cellIndex, queryResult)
 			}
 		}
 	}
@@ -203,24 +217,35 @@ export class SpatialHashGrid {
 	 * @param {number} x - The world X coordinate of the circle's center.
 	 * @param {number} y - The world Y coordinate of the circle's center.
 	 * @param {number} radius - The radius of the circle.
-	 * @param {Set<bigint>} resultSet - A Set to which the unique entity IDs will be added.
+	 * @param {object} queryResult - An object with typed arrays to which the results will be written.
+	 * The object should have `count`, `capacity`, `entityIds`, `chunkIds`, `entityIndices`.
+	 * The caller is responsible for deduplication.
 	 */
-	queryRadius(x, y, radius, resultSet) {
-		this.queryBox(x - radius, y - radius, x + radius, y + radius, resultSet)
+	queryRadius(x, y, radius, queryResult) {
+		this.queryBox(x - radius, y - radius, x + radius, y + radius, queryResult)
 	}
 
 	/**
-	 * Traverses the linked list for a given cell and adds all entity IDs to the result set.
+	 * Traverses the linked list for a given cell and adds all entity data to the result object.
 	 * @private
 	 */
-	_traverseCell(cellIndex, resultSet) {
+	_traverseCell(cellIndex, queryResult) {
 		let nodeIndex = this.gridCellsView[cellIndex]
+		const { entityIds, chunkIds, entityIndices, capacity } = queryResult
 
 		while (nodeIndex !== -1) {
-			const entityId = this.nodeEntityIdView[nodeIndex * NODE_ENTITY_ID_STRIDE_IN_U64]
-			resultSet.add(entityId)
+			if (queryResult.count >= capacity) {
+				console.warn(`SpatialHashGrid query result limit (${capacity}) reached. Some entities may be missed.`)
+				return
+			}
 
-			nodeIndex = this.nodeNextIndexView[nodeIndex * NODE_NEXT_INDEX_STRIDE_IN_I32 + NODE_NEXT_INDEX_OFFSET_IN_I32]
+			const currentIndex = queryResult.count
+			entityIds[currentIndex] = this.nodeEntityIdView[nodeIndex * NODE_STRIDE_U64]
+			chunkIds[currentIndex] = this.nodeDataView[nodeIndex * NODE_STRIDE_U16 + 6]
+			entityIndices[currentIndex] = this.nodeDataView[nodeIndex * NODE_STRIDE_U16 + 7]
+			queryResult.count++
+
+			nodeIndex = this.nodeNextIndexView[nodeIndex * NODE_STRIDE_I32 + 2]
 		}
 	}
 }

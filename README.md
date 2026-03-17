@@ -15,18 +15,14 @@ Experimental, constantly changing. Expect breaking changes and bugs.
 ## Potential future improvements:
 
 - Relational Queries
-- Thread-safe Command Buffer
-- Thread-safe Shared Component Data / prototypes.
-- Thread safe compiler for Command Buffer.
-- Thread safe whatever other API.
-- Bitmask Dirty Sets
+- Thread safe everything that could \ should be thread safe.
 - Dynamic \ packed arrays.
-- Enableable components (or at least provide tools to mask manually)
 - Priority Queue
 - Serialization/Deserialization
 - Allow to redefine default execution order within systems.
 - HMR
 - Demo and proper documentation
+- Pray [proposal-structs](https://github.com/tc39/proposal-structs) is implemented.
 
 ## Vision & Principles
 

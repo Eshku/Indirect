@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { rotation, spinning } = ecs.getTypeIDs()
+const { rotation, spinning, isPooled } = ecs.getTypeIDs()
 
 /**
  * This system is responsible for applying a constant rotation to entities
@@ -11,6 +11,7 @@ export class SpinningSystem {
 	init() {
 		this.query = this.getQuery({
 			with: [rotation, spinning],
+			without: [isPooled],
 		})
 	}
 

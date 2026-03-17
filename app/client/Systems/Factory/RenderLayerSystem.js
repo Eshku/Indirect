@@ -19,38 +19,45 @@ export class RenderLayerSystem {
 			react: [viewable, layer], // React to sprite creation OR layer changes
 		})
 
+		// Allocate scratch buffers for change detection.
+		// Assuming max chunk capacity is <= 4096
+		this.scratchBuffer1 = new Uint32Array(4096)
+		this.scratchBuffer2 = new Uint32Array(4096)
 		this.stringStorage = stringInterningTable.storage
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
-		for (const chunk of this.layerQuery.iter(lastTick)) {
+		// The query iterator is primed by the SystemManager and culls chunks with no relevant changes.
+		for (const chunk of this.layerQuery.iter()) {
 			const viewableArrays = chunk.componentData[viewable]
 			const layerArrays = chunk.componentData[layer]
 
-			for (let i = 0; i < chunk.size; i++) {
-				// We only need to act if one of the components we care about has changed.
-				const viewableChanged = viewableArrays.dirtyTick[i] > lastTick
-				const layerChanged = layerArrays.dirtyTick[i] > lastTick
+			// Gather all unique indices that have changed for either component.
+			const changedIndices = new Set()
+			const viewableChangedCount = chunk.getChangedIndices(viewable, lastTick, this.scratchBuffer1)
+			for (let i = 0; i < viewableChangedCount; i++) {
+				changedIndices.add(this.scratchBuffer1[i])
+			}
+			const layerChangedCount = chunk.getChangedIndices(layer, lastTick, this.scratchBuffer2)
+			for (let i = 0; i < layerChangedCount; i++) {
+				changedIndices.add(this.scratchBuffer2[i])
+			}
 
-				if (viewableChanged || layerChanged) {
-					const spriteRef = viewableArrays.spriteRef[i]
+			if (changedIndices.size === 0) continue
 
-					// If spriteRef is 0, the sprite hasn't been created yet. Skip.
-					if (spriteRef === UNINITIALIZED_REF) continue
+			for (const indexInChunk of changedIndices) {
+				const spriteRef = viewableArrays.spriteRef[indexInChunk]
+				if (spriteRef === UNINITIALIZED_REF) continue
 
-					const sprite = assetManager.getDisplayObjectByRef(spriteRef)
-					if (!sprite) continue // Should not happen if ref is valid, but good practice.
+				const sprite = assetManager.getDisplayObjectByRef(spriteRef)
+				if (!sprite) continue
 
-					const layerName = this.stringStorage[layerArrays.name[i]]
-					const targetLayer = layerManager.getLayer(layerName)
+				const layerName = this.stringStorage[layerArrays.name[indexInChunk]]
+				const targetLayer = layerManager.getLayer(layerName)
+				if (!targetLayer) continue
 
-					if (!targetLayer) continue
-
-					// Only move the sprite if it's not already in the correct layer.
-					if (sprite.parent !== targetLayer) {
-						// PIXI's addChild automatically removes the object from its previous parent.
-						targetLayer.addChild(sprite)
-					}
+				if (sprite.parent !== targetLayer) {
+					targetLayer.addChild(sprite)
 				}
 			}
 		}

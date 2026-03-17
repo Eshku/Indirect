@@ -1,10 +1,8 @@
-const { Cursor } = await import(`@ui/Cursor.js`)
-const { lerp } = await import(`@core/utils/lerp.js`)
+const { lerp, lerpColor } = await import(`@core/utils/lerp.js`)
 const { Easing } = await import(`@core/utils/easing.js`)
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
-const { lerpColor, getCatmullRomPoint } = await import(`@core/utils/lerp.js`)
-const { CursorState: CursorStateDef } = await import(`@client/Components/UI/CursorState.js`)
+const { getCatmullRomPoint } = await import(`@core/utils/spline.js`)
 
 const DEFAULT_STATES = {
 	// Default "aiming" state when over empty ground.
@@ -78,14 +76,17 @@ const DEFAULT_STATES = {
 const TRANSITION_DURATION = 0.25 // seconds
 
 /**
- * A system dedicated to creating, managing, and updating the cursor.
- * It controls the cursor's position, visual state, and special effects
+ * A system dedicated to creating, managing, and updating  cursor.
+ * It controls  cursor's position, visual state, and special effects
  * like trails.
- * - It hooks into the renderer's 'prerender' event to update its position with low latency.
- * - It runs in the main update loop to check for interactions with UI elements and change state accordingly.
+ * - It hooks into  renderer's 'prerender' event to update its position with low latency.
+ * - It runs in  main update loop to check for interactions with UI elements and change state accordingly.
  */
 
 const { position, cursorTag, cursorState, playerTag } = ecs.getTypeIDs()
+
+//! Mesh Ribbon Trail (Vertex Strip + Per-Vertex Alpha = single draw call, no clear)
+
 export class CursorSystem {
 	/**
 	 * Initializes the system. This is called by the SystemManager once.
@@ -95,15 +96,12 @@ export class CursorSystem {
 
 		this.cursorStateComponent = cursorState
 		this.cursorQuery = this.getQuery({ with: [cursorTag] })
-		this.cursorEntityId = null
-		this.positionPayload = null
-		this.cursorStatePayload = null
+
 		this.playerQuery = this.getQuery({ with: [playerTag, position] })
-		this.playerId = null
 
 		// --- Visual State Management ---
 		this.states = DEFAULT_STATES
-		this.cursorStateFlags = CursorStateDef.flags.of
+		this.cursorStateFlags = ecs.getConstantsForProperty('cursorState', 'flags')
 		this.sourceStateName = 'default'
 		this.targetStateName = 'default'
 		this.transition = {
@@ -131,10 +129,23 @@ export class CursorSystem {
 
 		this.pixiApp = gameManager.getApp()
 		this.renderer = this.pixiApp.renderer
-		const cursorLayer = layerManager.getLayer('cursor')
+		this.cursorLayer = layerManager.getLayer('cursor')
 
-		// Create the visual cursor component
-		this.cursor = new Cursor(this.pixiApp, cursorLayer)
+		// --- Merged from Cursor constructor ---
+		if (!this.pixiApp || !this.cursorLayer) {
+			throw new Error('CursorSystem: PIXI.Application instance and cursor layer are required.')
+		}
+
+		// Create visual elements directly as system properties
+		this.trail = new PIXI.Graphics()
+		this.core = new PIXI.Sprite()
+		this.core.anchor.set(0.5)
+
+		this.corePrevious = new PIXI.Sprite() // For transitions
+		this.corePrevious.anchor.set(0.5)
+		this.corePrevious.visible = false
+
+		this.cursorLayer.addChild(this.trail, this.corePrevious, this.core)
 
 		// Find the cursor entity that was instantiated from the prefab
 		for (const chunk of this.cursorQuery.iter()) {
@@ -151,14 +162,18 @@ export class CursorSystem {
 			console.error('CursorSystem: Could not find player entity for camera reference.')
 		}
 
-		// Pre-compile payloads for updating components. This is a one-time setup.
-		this.positionPayload = this.compile(position, { x: 0, y: 0 })
-		this.cursorStatePayload = this.compile(this.cursorStateComponent, { flags: 0 })
+		// Pre-compile a single payload for updating both position and state.
+		const { payload, mutators } = this.compile({
+			position: { x: 0, y: 0 },
+			cursorState: { flags: 0 },
+		})
+		this.cursorUpdatePayload = payload
+		this.cursorUpdateMutators = mutators
 
 		// Pre-generate all state textures
 		await this._generateAllStateTextures()
 
-		// Snap initial positions to the current hardware cursor position
+		// Snap initial positions to  current hardware cursor position
 		const pointer = this.renderer.events.pointer
 		this.hardwarePosition.x = pointer.global.x
 		this.hardwarePosition.y = pointer.global.y
@@ -167,10 +182,10 @@ export class CursorSystem {
 
 		// Set initial state and show
 		this.currentVisuals = { ...this.states[this.targetStateName] }
-		this.cursor.setCoreTexture(this.stateTextures[this.targetStateName].core)
-		this.cursor.updateVisuals(this.currentVisuals, 1.0)
-		this.cursor.setScreenPosition(this.visualPosition.x, this.visualPosition.y)
-		this.cursor.show()
+		this._setCoreTexture(this.stateTextures[this.targetStateName].core)
+		this._updateVisuals(this.currentVisuals, 1.0)
+		this._setScreenPosition(this.visualPosition.x, this.visualPosition.y)
+		this._show()
 	}
 
 	/**
@@ -178,7 +193,7 @@ export class CursorSystem {
 	 * @param {object} context - The frame context object.
 	 */
 	update({ deltaTime }) {
-		// 1. Update hardware position from input
+		// Update hardware position from input
 		const pointer = this.renderer.events.pointer
 		this.hardwarePosition.x = pointer.global.x
 		this.hardwarePosition.y = pointer.global.y
@@ -191,12 +206,12 @@ export class CursorSystem {
 		this.previousHardwarePosition.x = this.hardwarePosition.x
 		this.previousHardwarePosition.y = this.hardwarePosition.y
 
-		// Determine if the visual cursor has caught up to the hardware cursor
+		// Determine if  visual cursor has caught up to the hardware cursor
 		const dx = this.hardwarePosition.x - this.visualPosition.x
 		const dy = this.hardwarePosition.y - this.visualPosition.y
 		this.isSettled = Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1
 
-		// 2. Update visual state and position only if the cursor has moved or is transitioning.
+		// Update visual state and position only if the cursor has moved or is transitioning.
 		if (positionChanged || !this.isSettled || this.transition.progress < 1.0) {
 			if (positionChanged) {
 				this.updateState()
@@ -205,43 +220,37 @@ export class CursorSystem {
 			this.updateTransition(deltaTime)
 		}
 
-		// 3. ALWAYS update the world position of the cursor entity.
-		// This is the critical fix: this block now runs every frame, ensuring the
-		// cursor's world coordinates are correct even when the player moves and the mouse is still.
-		if (this.cursorEntityId !== null) {
-			const playerPosition = this.getComponent(this.playerId, position)
-			const { gameManager } = engine.getManagers()
-			const screenWidth = gameManager.getApp().screen.width
-			const screenHeight = gameManager.getApp().screen.height
+		//  update  world position of the cursor entity.
 
-			let worldX = this.visualPosition.x
-			let worldY = this.visualPosition.y
+		const playerPosition = this.getComponent(this.playerId, position)
+		const { gameManager } = engine.getManagers()
+		const screenWidth = gameManager.getApp().screen.width
+		const screenHeight = gameManager.getApp().screen.height
 
-			if (playerPosition) {
-				// Convert screen-space visual position to world-space coordinates.
-				// This accounts for camera panning by using the player's position as the camera's focus.
-				worldX = this.visualPosition.x + playerPosition.x - screenWidth / 2
-				worldY = -this.visualPosition.y + playerPosition.y + screenHeight / 2
-			}
+		let worldX = this.visualPosition.x
+		let worldY = this.visualPosition.y
 
-			// Update position component
-			const posMutators = this.positionPayload.mutators.position
-			posMutators.x[0] = worldX
-			posMutators.y[0] = worldY
-			this.setComponentData(this.cursorEntityId, this.positionPayload.payload)
+		// Convert screen-space visual position to world-space coordinates.
+		// This accounts for camera panning by using the player's position as the camera's focus.
+		worldX = this.visualPosition.x + playerPosition.x - screenWidth / 2
+		worldY = -this.visualPosition.y + playerPosition.y + screenHeight / 2
 
-			// Update state component
-			const stateFlag = this.cursorStateFlags[this.targetStateName.toUpperCase()] || this.cursorStateFlags.DEFAULT
-			this.cursorStatePayload.mutators.cursorState.flags[0] = stateFlag
-			this.setComponentData(this.cursorEntityId, this.cursorStatePayload.payload)
-		}
+		// Update position and state components with a single command
+		const mutators = this.cursorUpdateMutators
+		mutators.position.x[0] = worldX
+		mutators.position.y[0] = worldY
 
-		// 4. ALWAYS update the trail effect.
+		const stateFlag = this.cursorStateFlags[this.targetStateName.toUpperCase()] || this.cursorStateFlags.DEFAULT
+		mutators.cursorState.flags[0] = stateFlag
+
+		this.setComponentsData(this.cursorEntityId, this.cursorUpdatePayload)
+
+		// update  trail effect.
 		this.updateTrail(this.visualPosition)
 	}
 
 	/**
-	 * Changes the active state of the cursor and updates its visuals.
+	 * Changes  active state of  cursor and updates its visuals.
 	 * @param {string} stateName - The name of the state to activate.
 	 */
 	setState(stateName) {
@@ -249,10 +258,10 @@ export class CursorSystem {
 			return
 		}
 
-		// If a transition is in progress, start the new one from the current interpolated state.
+		// If a transition is in progress, start  new one from the current interpolated state.
 		if (this.transition.progress < 1.0) {
 			this._updateInterpolatedVisuals()
-			// Create a temporary state config to transition from by creating a snapshot of the current visuals.
+			// Create a temporary state config to transition from by creating a snapshot of  current visuals.
 			this.states._current = { ...this.currentVisuals }
 			this.sourceStateName = '_current'
 		} else {
@@ -262,13 +271,13 @@ export class CursorSystem {
 		this.targetStateName = stateName
 		this.transition.progress = 0
 
-		// Tell the Cursor view to prepare for a texture transition
+		// Tell  Cursor view to prepare for a texture transition
 		const newTexture = this.stateTextures[this.targetStateName].core
-		this.cursor.startCoreTransition(newTexture)
+		this._startCoreTransition(newTexture)
 	}
 
 	/**
-	 * Determines the correct cursor state based on what the hardware cursor is hovering over.
+	 * Determines  correct cursor state based on what  hardware cursor is hovering over.
 	 * @private
 	 */
 	updateState() {
@@ -277,7 +286,7 @@ export class CursorSystem {
 		const hoveredEntity = null // Placeholder for now
 		const hoveredElement = uiManager.getHoveredElement(this.hardwarePosition)
 
-		// Determine the new state based on a priority system
+		// Determine  new state based on a priority system
 		let newStateName = 'default'
 		if (hoveredEntity && hoveredEntity.team === 'enemy') {
 			// This is a placeholder for future logic
@@ -294,12 +303,12 @@ export class CursorSystem {
 
 	/**
 	 * Updates the smoothed visual position of the cursor sprite.
-	 * @param {number} deltaTime - The time elapsed since the last frame.
+	 * @param {number} deltaTime -  time elapsed since  last frame.
 	 * @private
 	 */
 	updatePosition(deltaTime) {
 		if (this.isSettled) {
-			// Snap to the final position to avoid infinitesimal lerping.
+			// Snap to  final position to avoid infinitesimal lerping.
 
 			this.visualPosition.x = this.hardwarePosition.x
 			this.visualPosition.y = this.hardwarePosition.y
@@ -310,12 +319,12 @@ export class CursorSystem {
 			this.visualPosition.y = lerp(this.visualPosition.y, this.hardwarePosition.y, lerpFactor)
 		}
 
-		// Set the cursor sprite's position to the smoothed visual position.
-		this.cursor.setScreenPosition(this.visualPosition.x, this.visualPosition.y)
+		// Set  cursor sprite's position to  smoothed visual position.
+		this._setScreenPosition(this.visualPosition.x, this.visualPosition.y)
 	}
 
 	/**
-	 * Calculates the current visual properties by interpolating between states.
+	 * Calculates  current visual properties by interpolating between states.
 	 * @private
 	 */
 	_updateInterpolatedVisuals() {
@@ -335,8 +344,8 @@ export class CursorSystem {
 	}
 
 	/**
-	 * Advances the state transition timer and updates the cursor's visual properties.
-	 * @param {number} deltaTime - The time elapsed since the last frame.
+	 * Advances  state transition timer and updates  cursor's visual properties.
+	 * @param {number} deltaTime -  time elapsed since  last frame.
 	 * @private
 	 */
 	updateTransition(deltaTime) {
@@ -344,12 +353,12 @@ export class CursorSystem {
 			this.transition.progress = Math.min(1.0, this.transition.progress + deltaTime / TRANSITION_DURATION)
 		}
 		this._updateInterpolatedVisuals()
-		this.cursor.updateVisuals(this.currentVisuals, this.transition.progress)
+		this._updateVisuals(this.currentVisuals, this.transition.progress)
 	}
 
 	/**
-	 * Updates the trail effect.
-	 * @param {PIXI.PointData} newPoint - The latest position of the cursor.
+	 * Updates  trail effect.
+	 * @param {PIXI.PointData} newPoint -  latest position of  cursor.
 	 */
 	updateTrail(newPoint) {
 		const now = performance.now()
@@ -372,15 +381,174 @@ export class CursorSystem {
 		const trailDurationMs = this.currentVisuals.trailDuration * 1000
 
 		// Remove old points and return them to the pool.
-		// The trail will be drawn between points, so it will naturally disappear
+		//  trail will be drawn between points, so it will naturally disappear
 		// as points are removed.
 		while (this.trailPoints.length > 0 && now - this.trailPoints[0].time > trailDurationMs) {
 			this.trailPointPool.push(this.trailPoints.shift())
 		}
 
-		// The trail is now based on the history of the smoothed visual position,
-		// so we can draw the points directly without any modification.
-		this.cursor.drawTrail(this.trailPoints, this.currentVisuals.trailColor, now, trailDurationMs)
+		//  trail is now based on  history of  smoothed visual position,
+		// so we can draw  points directly without any modification.
+		this._drawTrail(this.trailPoints, this.currentVisuals.trailColor, now, trailDurationMs)
+	}
+
+	/**
+	 * Sets  texture for  core of  cursor.
+	 * @param {PIXI.Texture} texture -  texture to use for  core.
+	 * @private
+	 */
+	_setCoreTexture(texture) {
+		if (this.core) {
+			this.core.texture = texture
+			this.core.alpha = 1
+		}
+		if (this.corePrevious) {
+			this.corePrevious.visible = false
+		}
+	}
+
+	/**
+	 * Initiates a smooth transition between two core textures.
+	 * @param {PIXI.Texture} newTexture -  new texture to transition to.
+	 * @private
+	 */
+	_startCoreTransition(newTexture) {
+		if (!this.core || !this.corePrevious || this.core.texture === newTexture) return
+
+		// If there's no current texture, just set  new one without transition
+		if (!this.core.texture || this.core.texture === PIXI.Texture.EMPTY) {
+			this._setCoreTexture(newTexture)
+			return
+		}
+
+		//  current core becomes  previous one
+		this.corePrevious.texture = this.core.texture
+		this.corePrevious.scale.copyFrom(this.core.scale)
+		this.corePrevious.alpha = this.core.alpha
+		this.corePrevious.visible = true
+
+		//  new core starts invisible and will fade in
+		this.core.texture = newTexture
+		this.core.alpha = 0
+	}
+
+	/**
+	 * Sets  position of the cursor on the screen.
+	 * @param {number} x -  x-coordinate.
+	 * @param {number} y -  y-coordinate.
+	 * @private
+	 */
+	_setScreenPosition(x, y) {
+		if (!this.core) return
+		this.core.position.set(x, y)
+		if (this.corePrevious) {
+			this.corePrevious.position.set(x, y)
+		}
+	}
+
+	/**
+	 * Updates  visual properties of the cursor, including transitions.
+	 * @param {object} visuals - An object containing interpolated visual properties (size).
+	 * @param {number} progress -  transition progress from 0 to 1.
+	 * @private
+	 */
+	_updateVisuals(visuals, progress) {
+		if (!this.core) return
+
+		if (this.core.texture && this.core.texture.width > 0) {
+			const scale = visuals.size / this.core.texture.width
+			this.core.scale.set(scale)
+		}
+
+		if (this.corePrevious.visible && this.corePrevious.texture && this.corePrevious.texture.width > 0) {
+			const prevScale = visuals.size / this.corePrevious.texture.width
+			this.corePrevious.scale.set(prevScale)
+		}
+
+		// Update alpha for cross-fade
+		this.core.alpha = progress
+		this.corePrevious.alpha = 1 - progress
+
+		if (progress >= 1) {
+			this.corePrevious.visible = false
+		}
+	}
+
+	/**
+	 * Draws a smooth trail behind  cursor using a Catmull-Rom spline.
+	 * @param {Array<PIXI.PointData & {time: number}>} points -  points that make up  trail, including timestamps.
+	 * @param {number} color -  color of the trail.
+	 * @param {number} currentTime -  current time from `performance.now()`.
+	 * @param {number} trailDurationMs -  duration of  trail in milliseconds.
+	 * @private
+	 */
+	_drawTrail(points, color, currentTime, trailDurationMs) {
+		this.trail.clear()
+		if (points.length < 2 || trailDurationMs <= 0) {
+			return
+		}
+
+		const segmentsPerCurve = 10 // Number of line segments to approximate each spline curve
+		const tempPoint = { x: 0, y: 0 } // Reusable point object to avoid allocations
+		// Reusable point object for  start of each line segment to avoid allocations in the loop.
+		const lastSplinePoint = { x: 0, y: 0 }
+
+		// Iterate through each segment of the path (from point i to i+1)
+		for (let i = 0; i < points.length - 1; i++) {
+			// For Catmull-Rom, we need 4 points: p0, p1, p2, p3.
+			//  curve is drawn between p1 and p2.
+			const p1 = points[i]
+			const p2 = points[i + 1]
+
+			// To handle the ends of the trail, we duplicate the first and last points.
+			const p0 = i > 0 ? points[i - 1] : p1
+			const p3 = i < points.length - 2 ? points[i + 2] : p2
+
+			// Set starting point for this curve segment.
+			lastSplinePoint.x = p1.x
+			lastSplinePoint.y = p1.y
+
+			for (let j = 1; j <= segmentsPerCurve; j++) {
+				const t = j / segmentsPerCurve
+				const currentSplinePoint = getCatmullRomPoint(t, p0, p1, p2, p3, tempPoint)
+
+				// Interpolate time to calculate  alpha for this specific segment of  spline.
+				const interpolatedTime = p1.time + (p2.time - p1.time) * t
+				const age = currentTime - interpolatedTime
+				const alpha = Math.max(0, 1.0 - age / trailDurationMs)
+
+				// Draw a small line segment with  calculated alpha.
+				this.trail
+					.moveTo(lastSplinePoint.x, lastSplinePoint.y)
+					.lineTo(currentSplinePoint.x, currentSplinePoint.y)
+					.stroke({
+						width: 2,
+						color,
+						alpha: alpha * 0.5, // Make it subtle
+					})
+
+				//  end of this segment is  start of  next.
+				lastSplinePoint.x = currentSplinePoint.x
+				lastSplinePoint.y = currentSplinePoint.y
+			}
+		}
+	}
+
+	/**
+	 * Shows  cursor.
+	 * @private
+	 */
+	_show() {
+		if (this.core) this.core.visible = true
+	}
+
+	/**
+	 * Hides  cursor.
+	 * @private
+	 */
+	_hide() {
+		if (this.core) this.core.visible = false
+		if (this.corePrevious) this.corePrevious.visible = false
 	}
 
 	/**
@@ -429,16 +597,24 @@ export class CursorSystem {
 	}
 
 	destroy() {
-		if (this.cursor) {
-			this.cursor.destroy()
-			this.cursor = null
+		if (this.cursorLayer) {
+			this.cursorLayer.removeChild(this.core, this.corePrevious, this.trail)
 		}
+
+		this.core?.destroy()
+		this.corePrevious?.destroy()
+		this.trail?.destroy()
 
 		// Destroy all cached textures
 		for (const stateName in this.stateTextures) {
 			this.stateTextures[stateName].core?.destroy()
 		}
 		this.stateTextures = {}
+
+		this.core = null
+		this.trail = null
+		this.corePrevious = null
+		this.cursorLayer = null
 
 		this.pixiApp = null
 		this.renderer = null

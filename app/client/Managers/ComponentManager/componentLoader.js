@@ -18,11 +18,17 @@ export async function loadAllComponents() {
 			try {
 				const modulePath = `@components/${category}/${moduleName}.js`
 				const module = await import(modulePath)
-				// The component definition is now expected to be the main export,
+				//  component definition is now expected to be the main export,
 				// or an export with the same name as the module.
 				const componentSchema = module.default || module[moduleName]
-				if (!componentSchema) continue
-				loadedModules.push({ moduleName, module, category })
+				if (componentSchema && typeof componentSchema === 'object') {
+					// Pass the schema directly, not the whole module object.
+					loadedModules.push({ moduleName, componentSchema, category })
+				} else {
+					console.error(
+						`ComponentLoader: Could not find a valid component schema export in module "${moduleName}". Looked for 'default' or an export named '${moduleName}'.`,
+					)
+				}
 			} catch (error) {
 				console.error(`ComponentLoader: Failed to load component '${moduleName}':`, error)
 			}

@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { position, velocity } = ecs.getTypeIDs()
+const { position, velocity, isPooled } = ecs.getTypeIDs()
 
 /**
  * A final-pass physics system that integrates velocity into position.
@@ -13,6 +13,7 @@ export class ApplyVelocity {
 	init() {
 		this.query = this.getQuery({
 			with: [position, velocity],
+			without: [isPooled],
 		})
 	}
 

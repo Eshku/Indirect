@@ -2,7 +2,6 @@ const { Query } = await import(`@managers/QueryManager/Query.js`)
 
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 
-
 //! Query mutability going to be decided later on.
 export class QueryManager {
 	constructor() {
@@ -44,19 +43,20 @@ export class QueryManager {
 	 */
 	_getCachedQueryKey(options) {
 		// --- Fast Path ---
-		// The first level of caching uses the options object reference itself as the key.
-		// This is extremely fast and covers the common case where the same query object literal is reused.
+		// The first level of caching uses the options object reference itself as the key. This is
+		// extremely fast if the same options object instance is passed to getQuery repeatedly.
 		if (this.keyCache.has(options)) {
 			return this.keyCache.get(options)
 		}
 
 		// --- Slow Path ---
-		// If the object reference is different, we fall back to generating a canonical string key.
-		// This handles cases where different systems define identical but separate query objects.
+		// If the options object instance is new, we generate a canonical string key from its contents.
+		// This ensures that two identical but separate query definitions (e.g., from two different
+		// systems creating their own `{ with: [Position] }` objects) resolve to the same underlying query.
 		const key = this._generateQueryKey(options)
 
-		// Cache the generated key against the options object so the next call with this
-		// same object reference hits the fast path.
+		// Cache the generated key against the new options object so subsequent calls with this
+		// exact object instance will hit the fast path.
 		this.keyCache.set(options, key)
 
 		return key
@@ -71,7 +71,8 @@ export class QueryManager {
 	 * @private
 	 */
 	_generateQueryKey(options) {
-		const { // Use different names to avoid shadowing
+		const {
+			// Use different names to avoid shadowing
 			with: withInput = [],
 			without: withoutInput = [],
 			any: anyInput = [],
@@ -79,7 +80,7 @@ export class QueryManager {
 			constants: constantsDef = {},
 		} = options
 
-		// --- DX Improvement: Normalize single values to arrays ---
+		// --- DX : Normalize single values to arrays ---
 		// This must be done here because the key generation needs to iterate.
 		const normalize = comps => (comps ? (Array.isArray(comps) ? comps : [comps]) : [])
 		const withComponents = normalize(withInput)
@@ -111,11 +112,10 @@ export class QueryManager {
 	 * ! Constants are going to be either deprecated (define your own) or redone to be thread safe.
 	 * @example
 	 * // In a system's constructor or init method:
-	 * const { componentManager } = this.ecs;
-	 * const { CollisionFlags } = componentManager.getTypeIDs();
+	 * const { CollisionFlags } = this.ecs.getTypeIDs();
 	 *
 	 * // Best Practice: Cache constants during initialization for high performance.
-	 * this.COLLISION_CONSTANTS = componentManager.getConstantsForProperty(CollisionFlags, 'flags');
+	 * this.COLLISION_CONSTANTS = this.ecs.getConstantsForProperty(CollisionFlags, 'flags');
 	 *
 	 * this.query = this.ecs.queryManager.getQuery({
 	 *     with: [CollisionFlags]

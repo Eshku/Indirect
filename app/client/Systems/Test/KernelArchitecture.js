@@ -105,7 +105,7 @@ export class KernelArchitecture {
 				payload: chunkId,
 			})
 		}
-
+		//todo circular buffer, not an object.
 		// Job for the logging kernel
 		jobs.push({
 			kernel: loggingKernel,
@@ -139,7 +139,8 @@ export class KernelArchitecture {
 			if (updateIdx === -1 || testKernelIdx === -1 || loggingKernelIdx === -1) {
 				success = false
 				message += ` | FAILED: Not all phases ran. Expected [update, testKernel, loggingKernel] to be present.`
-			} else if (loggingKernelIdx < updateIdx || testKernelIdx < updateIdx) { // This check is now the core of the test
+			} else if (loggingKernelIdx < updateIdx || testKernelIdx < updateIdx) {
+				// This check is now the core of the test
 				success = false
 				message += ` | FAILED: A kernel ran before 'update'. The implicit 'update' -> 'kernel' dependency was not respected.`
 			} else {

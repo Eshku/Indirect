@@ -1,5 +1,6 @@
 const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
+import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
 const { kernelRegistry } = await import(`@managers/SystemManager/KernelRegistry.js`)
 const { MPSCQueue, MPSC_QUEUE_CAPACITY } = await import(`@core/Algorithms/MPSCQueue.js`)
 const { WorkStealingDeque, NO_JOB_AVAILABLE, DEQUE_CAPACITY } = await import(
@@ -73,6 +74,7 @@ export class Scheduler {
 		this.inboxDrainSize = 0 // Number of valid items in inboxDrain.
 		this.inboxDrainIndex = 0 // Current read position in inboxDrain.
 		this.allDeques = [] // Will hold all deque instances
+		this.mainThreadScratchBuffer = null
 
 		// --- Reusable Arrays to Reduce GC Pressure ---
 		// These are used in hot paths to avoid allocating new arrays on every job.
@@ -134,6 +136,9 @@ export class Scheduler {
 
 		// The main thread is the single consumer of its inbox.
 		this.mainThreadInbox = new MPSCQueue(this.sharedBuffers.mainThreadInbox)
+
+		// Initialize the scratch buffer for the main thread.
+		this.mainThreadScratchBuffer = new Uint32Array(4096)
 	}
 
 	/**
@@ -190,6 +195,49 @@ export class Scheduler {
 		return new Promise(resolve => {
 			this._mainThreadWorkLoop(resolve, frameId)
 		})
+	}
+
+	/**
+	 * Executes end-of-frame maintenance jobs, such as clearing dirty tracking buffers.
+	 * @param {number} currentTick The tick that just completed.
+	 * @returns {Promise<void>}
+	 */
+	async executeMaintenance(currentTick) {
+		// 1. Reset per-execution state
+		this._reset()
+
+		// This execution doesn't have a full frame context, but we need the tick.
+		this.perFrameContext = { currentTick }
+
+		// 2. Build the maintenance jobs
+		// Iterate over all active chunks. A more optimized version could use a sparse set of chunks.
+		for (let chunkId = 1; chunkId < this.systemManager.entityManager.nextChunkId; chunkId++) {
+			// Check if the chunk is active (has an archetype) and has metadata to process.
+			if (entityStore.chunkArchetypeIds[chunkId] !== undefined && entityStore.chunkMetadata[chunkId]) {
+				const jobId = this.jobCounter++
+				this.jobs[jobId] = {
+					id: jobId,
+					systemName: 'Maintenance', // A virtual system name for logging
+					type: JOB_TYPE.MAINTENANCE,
+					payload: chunkId, // The chunk to maintain
+					dependencyCounter: 0,
+					affinity: JOB_AFFINITY.ANY_WORKER,
+					dependents: [],
+				}
+			}
+		}
+
+		if (this.jobs.length === 0) return
+
+		this.hasParallelJobs = true
+		this._writeGraphToSAB()
+		this._enqueueInitialJobs()
+
+		// Signal workers that a new "frame" (of maintenance jobs) is ready.
+		this._updateSharedFrameContext({ currentTick, lastTick: 0, deltaTime: 0, alpha: 0 }, -1) // Use a sentinel frameId
+		this._signalNewFrame()
+
+		return new Promise(resolve => this._mainThreadWorkLoop(resolve, -1))
 	}
 
 	/**
@@ -270,7 +318,7 @@ export class Scheduler {
 			}
 
 			// Prime the system's reactive queries with the correct `lastTick` from the context.
-			this.systemManager.primeSystemQueries(system, perFrameContext.lastTick)
+			this.systemManager.primeSystemQueries(system, perFrameContext.lastTick, perFrameContext.currentTick)
 
 			// A. Create UPDATE job (if update() exists)
 			if (metadata.hasUpdate) {
@@ -723,6 +771,7 @@ export class Scheduler {
 							this.mainThreadChunkView.setChunk(chunkId)
 							return this.mainThreadChunkView
 						},
+						getScratchBuffer: () => this.mainThreadScratchBuffer,
 					}
 					await kernelFn(payload, systemContext, kernelContext)
 					self.frameContext = oldFrameContext // Restore global context
@@ -730,6 +779,10 @@ export class Scheduler {
 				}
 				case JOB_TYPE.PROCESS:
 					await system.process(this.perFrameContext)
+					break
+				case JOB_TYPE.MAINTENANCE:
+					// Maintenance jobs are handled by workers, but we can provide a fallback for main thread execution.
+					this._executeMaintenanceJob(payload, this.perFrameContext.currentTick)
 					break
 			}
 		} catch (error) {
@@ -816,6 +869,43 @@ export class Scheduler {
 		if (unlockedAnyJobs.length > 0) {
 			this.mainThreadDeque.pushBatch(unlockedAnyJobs)
 			this._wakeIdleThreads()
+		}
+	}
+
+	_executeMaintenanceJob(chunkId, currentTick) {
+		const chunkMetadata = entityStore.chunkMetadata[chunkId]
+		if (!chunkMetadata) return
+
+		const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
+
+		// Calculate which history slots to saturate and clear
+		const oldestTickToOverwrite = currentTick + 1 - DIRTY_HISTORY_LENGTH
+		const saturatingTick = oldestTickToOverwrite + 1
+		const tickToClear = currentTick + 1
+
+		const oldestFrameIndex = oldestTickToOverwrite % DIRTY_HISTORY_LENGTH
+		const saturatingFrameIndex = saturatingTick % DIRTY_HISTORY_LENGTH
+		const clearFrameIndex = tickToClear % DIRTY_HISTORY_LENGTH
+
+		for (const componentTypeId in chunkMetadata) {
+			const componentMeta = chunkMetadata[componentTypeId]
+			const dirtyMasks = componentMeta.dirtyMasks
+			if (!dirtyMasks) continue
+
+			const oldestSliceStart = oldestFrameIndex * wordsPerFrame
+			const saturatingSliceStart = saturatingFrameIndex * wordsPerFrame
+			const clearSliceStart = clearFrameIndex * wordsPerFrame
+
+			// Saturate: OR the oldest data into the next-oldest slot
+			for (let i = 0; i < wordsPerFrame; i++) {
+				const oldValue = Atomics.load(dirtyMasks, oldestSliceStart + i)
+				if (oldValue !== 0) {
+					Atomics.or(dirtyMasks, saturatingSliceStart + i, oldValue)
+				}
+			}
+
+			// Clear: Zero out the slot for the upcoming frame
+			dirtyMasks.fill(0, clearSliceStart, clearSliceStart + wordsPerFrame)
 		}
 	}
 

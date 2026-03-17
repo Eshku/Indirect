@@ -3,6 +3,8 @@ const { ecs } = engine.getManagers()
 
 const { playerProjectile, velocity, range, distanceTraveled, lifecycleState, isPooled } = ecs.getTypeIDs()
 
+const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
+
 /**
  * Manages the lifecycle of projectiles with a limited range.
  * It updates their distance traveled and marks them as 'DYING' when they exceed their range.
@@ -21,13 +23,12 @@ export class ProjectileLifetimeSystem {
 			without: [isPooled], // Only query for active (not-pooled) projectiles.
 		})
 
-		this.LIFECYCLE = ecs.componentManager.getConstantsForProperty('LifecycleState', 'flags')
+		
 
 		// Pre-compile the payload to set the DYING state.
 		// CRITICAL: We include dirtyTick in the payload. The value will be set at runtime.
-		const { payload, mutators } = this.compile(lifecycleState, { flags: this.LIFECYCLE.DYING, dirtyTick: 0 })
+		const { payload } = this.compile(lifecycleState, { flags: LIFECYCLE.DYING })
 		this.dyingPayload = payload
-		this.dyingMutators = mutators
 	}
 
 	update({ deltaTime, currentTick }) {
@@ -47,9 +48,7 @@ export class ProjectileLifetimeSystem {
 				distanceWasModified = true
 
 				if (distances.value[indexInChunk] >= ranges.value[indexInChunk]) {
-					// This is the correct pattern. We mutate the pre-compiled payload to set the correct tick
-					// for the NEXT frame, then issue the command.
-					this.dyingMutators.lifecycleState.dirtyTick[0] = currentTick + 1
+					// The command buffer automatically marks the component as dirty for the current tick.
 					this.setComponentData(chunk.entities[indexInChunk], this.dyingPayload)
 				}
 			}

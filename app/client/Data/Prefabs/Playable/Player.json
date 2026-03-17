@@ -2,8 +2,9 @@
 	"components": {
 		"health": { "max": 1000, "current": 1000 },
 		"position": { "x": 0, "y": 0 },
-		"speed": { "value": 300 },
-		"rotation": { "angle": 0 },
+		"speed": 500,
+		"spinning": 1,
+		"rotation": {},
 		"scale": { "x": 1, "y": 1 },
 		"velocity": { "x": 0, "y": 0 },
 
@@ -15,7 +16,10 @@
 		"shootingIntent": {},
 		"playerTag": {},
 		"circleCollider": { "radius": 16 },
-		"playerWeaponStats": { "count": 1, "speed": 1000, "velocityInheritance": 0.5, "range": 1000, "fireRate": 0.25},
+		"collisionLayer": { "group": 1 },
+		"aabb": {},
+		"collisionBuffer": {},
+		"playerWeaponStats": { "count": 1, "speed": 1000, "velocityInheritance": 0.5, "range": 1000, "fireRate": 0.25, "damage": 25 },
 		"weaponCooldown": {}
 	}
 }

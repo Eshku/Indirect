@@ -485,6 +485,8 @@ export class SchemaCompiler {
 			alignment: 0,
 			sharedProperties: [],
 			perEntityProperties: [],
+			isEnableable: false,
+			isTracked: false,
 		}
 
 		if (schema === undefined || Object.keys(schema).length === 0) {
@@ -498,6 +500,15 @@ export class SchemaCompiler {
 		const implicitKeys = []
 		for (const propName of schemaKeys) {
 			const propDefinition = schema[propName]
+			if (propName === 'isEnableable') {
+				if (schema.isEnableable === true) componentInfo.isEnableable = true
+				continue
+			}
+			if (propName === 'tracked') {
+				if (schema.tracked === true) componentInfo.isTracked = true
+				continue
+			}
+
 			this._parseProperty(propName, propDefinition, componentInfo, implicitKeys, componentName, constants)
 		}
 

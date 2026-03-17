@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { velocity, speed, movementIntent } = ecs.getTypeIDs()
+const { velocity, speed, movementIntent, isPooled } = ecs.getTypeIDs()
 
 /**
  * This system is responsible for character movement based on their `MovementIntent`.
@@ -12,6 +12,7 @@ export class MovementSystem {
 	init() {
 		this.query = this.getQuery({
 			with: [velocity, speed, movementIntent],
+			without: [isPooled],
 		})
 	}
 
@@ -28,13 +29,8 @@ export class MovementSystem {
 			const speedVal = speedArrays.value
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				const finalVelX = intentX[indexInChunk] * speedVal[indexInChunk]
-				const finalVelY = intentY[indexInChunk] * speedVal[indexInChunk]
-
-				if (velX[indexInChunk] !== finalVelX || velY[indexInChunk] !== finalVelY) {
-					velX[indexInChunk] = finalVelX
-					velY[indexInChunk] = finalVelY
-				}
+				velX[indexInChunk] = intentX[indexInChunk] * speedVal[indexInChunk]
+				velY[indexInChunk] = intentY[indexInChunk] * speedVal[indexInChunk]
 			}
 		}
 	}

@@ -1,0 +1,602 @@
+const { engine } = await import(`@client/Engine.js`)
+const { ecs, physicsManager } = engine.getManagers()
+const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
+const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
+const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
+
+const {
+	position,
+	rotation,
+	circleCollider,
+	boxCollider,
+	orientedBoxCollider,
+	collisionLayer,
+	collisionBuffer,
+	aabb, // The new AABB component calculated by SpatialHashingSystem
+	isPooled,
+} = ecs.getTypeIDs()
+
+/**
+ * Performs collision detection for all collidable entities.
+ * This system uses the SpatialHashGrid for broad-phase culling and then performs
+ * narrow-phase checks on potential pairs. Collision results are written to each
+ * entity's `CollisionBuffer` component for other systems to react to.
+ */
+export class CollisionDetectionSystem {
+	static dependencies = {
+		// This is a hard dependency: the grid MUST be populated before this system runs.
+		runsAfter: [ecs.getSystemIDs().SpatialHashingSystem],
+		update: {
+			reads: [position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer, aabb],
+			writes: [collisionBuffer],
+		},
+	}
+
+	init() {
+		const gridSABs = physicsManager.getSpatialHashGridSABs()
+		this.grid = new SpatialHashGrid(gridSABs)
+
+		// Get the global collision matrix.
+		const collisionMatrixSAB = physicsManager.getCollisionMatrixSAB()
+		this.collisionMatrix = new Uint32Array(collisionMatrixSAB)
+
+		// Query for all entities that can collide and have a buffer to report collisions into.
+		this.collidablesQuery = this.getQuery({
+			with: [position, collisionLayer, collisionBuffer, aabb],
+			any: [circleCollider, boxCollider, orientedBoxCollider],
+			without: [isPooled],
+		})
+
+		// Cache component type IDs for fast access.
+		this.positionId = position
+		this.rotationId = rotation
+		this.circleColliderId = circleCollider
+		this.boxColliderId = boxCollider
+		this.orientedBoxColliderId = orientedBoxCollider
+		this.collisionLayerId = collisionLayer
+		this.collisionBufferId = collisionBuffer
+		this.aabbId = aabb
+
+		const MAX_QUERY_RESULTS = 1024 // A reasonable default, can be tuned.
+		// Reusable objects to reduce garbage collection pressure in the update loop.
+		this.queryResult = {
+			count: 0,
+			capacity: MAX_QUERY_RESULTS,
+			entityIds: new BigUint64Array(MAX_QUERY_RESULTS),
+			chunkIds: new Uint16Array(MAX_QUERY_RESULTS),
+			entityIndices: new Uint16Array(MAX_QUERY_RESULTS),
+		}
+		this.reusableChunkView = new ChunkView(entityStore)
+
+		// --- New reusable buffers for SAT calculations ---
+		const MAX_CORNERS = 4
+		const MAX_AXES = 4
+
+		// Buffers for corner coordinates of two shapes
+		this.cornersA_X = new Float32Array(MAX_CORNERS)
+		this.cornersA_Y = new Float32Array(MAX_CORNERS)
+		this.cornersB_X = new Float32Array(MAX_CORNERS)
+		this.cornersB_Y = new Float32Array(MAX_CORNERS)
+
+		// Buffers for separating axes
+		this.axes_X = new Float32Array(MAX_AXES)
+		this.axes_Y = new Float32Array(MAX_AXES)
+
+		// Buffers for projection results [min, max]
+		this.projectionA = new Float32Array(2)
+		this.projectionB = new Float32Array(2)
+	}
+
+	update({ currentTick }) {
+		// this.processedPairs.clear() // No longer needed
+
+		// --- Pass 1: Clear Buffers ---
+		// Reset the collision count for all entities from the previous frame.
+		for (const chunk of this.collidablesQuery.iter()) {
+			const buffers = chunk.componentData[this.collisionBufferId]
+			if (chunk.size > 0) {
+				// `fill` is an efficient way to reset part of a TypedArray.
+				buffers.count.fill(0, 0, chunk.size)
+				// Mark the buffer as dirty so reactive systems know it has been reset.
+				chunk.markDirty(this.collisionBufferId, currentTick)
+			}
+		}
+
+		// --- Pass 2: Detect and Record Collisions ---
+		for (const chunkA of this.collidablesQuery.iter()) {
+			const aabbsA = chunkA.componentData[this.aabbId]
+			const layersA = chunkA.componentData[this.collisionLayerId]
+
+			for (let i = 0; i < chunkA.size; i++) {
+				const entityAId = chunkA.entities[i]
+
+				// Broad-phase: Get potential colliders from the grid.
+				// The queryBox method now resets the count internally.
+				this.grid.queryBox(aabbsA.minX[i], aabbsA.minY[i], aabbsA.maxX[i], aabbsA.maxY[i], this.queryResult)
+
+				// Narrow-phase: Check each potential pair.
+				for (let j = 0; j < this.queryResult.count; j++) {
+					const entityBId = this.queryResult.entityIds[j]
+
+					// "Upper Triangle" check to avoid processing pairs twice (A-B vs B-A) and self-collision.
+					// This is the core optimization that replaces the `processedPairs` Set.
+					if (entityAId >= entityBId) {
+						continue
+					}
+
+					// Use the reusable ChunkView to get access to the neighbor's chunk data.
+					const chunkBId = this.queryResult.chunkIds[j]
+					this.reusableChunkView.setChunk(chunkBId)
+					const chunkB = this.reusableChunkView
+
+					// The grid can contain entities that don't have a collision buffer.
+					// We must check that the neighbor has a buffer before trying to process it.
+					// This check is crucial because the spatial hash grid is populated with all collidables,
+					// but our query here is only for those with a collisionBuffer.
+					if (!chunkB.componentData[this.collisionBufferId]) {
+						continue
+					}
+
+					const layersB = chunkB.componentData[this.collisionLayerId]
+					const indexBInChunk = this.queryResult.entityIndices[j]
+
+					// Layer mask check: see if the entities' layers allow them to interact.
+					const groupA = layersA.group[i]
+					const groupB = layersB.group[indexBInChunk]
+
+					// Look up the masks from the global collision matrix.
+					const canACollideB = (this.collisionMatrix[groupA] & groupB) !== 0
+					const canBCollideA = (this.collisionMatrix[groupB] & groupA) !== 0
+
+					if (canACollideB && canBCollideA) {
+						this._checkAndRecordCollision(chunkA, i, chunkB, indexBInChunk)
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Performs the narrow-phase collision check between two entities and records the result.
+	 * This is the new data-oriented heart of the collision system. It works directly on
+	 * chunk data, avoiding all intermediate object allocations for the common path.
+	 * @param {ChunkView} chunkA
+	 * @param {number} indexA
+	 * @param {ChunkView} chunkB
+	 * @param {number} indexB
+	 * @private
+	 */
+	_checkAndRecordCollision(chunkA, indexA, chunkB, indexB) {
+		const entityAId = chunkA.entities[indexA]
+		const entityBId = chunkB.entities[indexB]
+
+		// --- Gather all necessary component data without creating objects ---
+		const posA = chunkA.componentData[this.positionId]
+		const posB = chunkB.componentData[this.positionId]
+
+		const circleA = chunkA.componentData[this.circleColliderId]
+		const circleB = chunkB.componentData[this.circleColliderId]
+		const boxA = chunkA.componentData[this.boxColliderId]
+		const boxB = chunkB.componentData[this.boxColliderId]
+		const aabbA = chunkA.componentData[this.aabbId]
+		const aabbB = chunkB.componentData[this.aabbId]
+		const obbA = chunkA.componentData[this.orientedBoxColliderId]
+		const obbB = chunkB.componentData[this.orientedBoxColliderId]
+
+		// This is the data-oriented narrow-phase. We add optimized checks for common pairs.
+		// The order of checks matters; we start with the most common pairs.
+
+		// Case 1: Circle vs Circle
+		if (circleA && circleB) {
+			const dx = posA.x[indexA] - posB.x[indexB]
+			const dy = posA.y[indexA] - posB.y[indexB]
+			const distSq = dx * dx + dy * dy
+
+			const radiusA = circleA.radius[indexA]
+			const radiusB = circleB.radius[indexB]
+			const radiiSum = radiusA + radiusB
+
+			if (distSq <= radiiSum * radiiSum) {
+				// Collision detected! Record it for both entities.
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+		// Case 2: Box vs Box (AABB vs AABB)
+		else if (boxA && boxB) {
+			// The AABBs are pre-calculated by SpatialHashingSystem. This is a very fast check.
+			if (
+				aabbA.minX[indexA] < aabbB.maxX[indexB] &&
+				aabbA.maxX[indexA] > aabbB.minX[indexB] &&
+				aabbA.minY[indexA] < aabbB.maxY[indexB] &&
+				aabbA.maxY[indexA] > aabbB.minY[indexB]
+			) {
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+		// Case 3: Circle vs Box
+		else if (circleA && boxB) {
+			const circleX = posA.x[indexA]
+			const circleY = posA.y[indexA]
+			const circleRadius = circleA.radius[indexA]
+
+			const boxMinX = aabbB.minX[indexB]
+			const boxMinY = aabbB.minY[indexB]
+			const boxMaxX = aabbB.maxX[indexB]
+			const boxMaxY = aabbB.maxY[indexB]
+
+			const closestX = Math.max(boxMinX, Math.min(circleX, boxMaxX))
+			const closestY = Math.max(boxMinY, Math.min(circleY, boxMaxY))
+
+			const dx = circleX - closestX
+			const dy = circleY - closestY
+			const distanceSq = dx * dx + dy * dy
+
+			if (distanceSq < circleRadius * circleRadius) {
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+		// Case 4: Box vs Circle
+		else if (boxA && circleB) {
+			const circleX = posB.x[indexB]
+			const circleY = posB.y[indexB]
+			const circleRadius = circleB.radius[indexB]
+
+			const boxMinX = aabbA.minX[indexA]
+			const boxMinY = aabbA.minY[indexA]
+			const boxMaxX = aabbA.maxX[indexA]
+			const boxMaxY = aabbA.maxY[indexA]
+
+			const closestX = Math.max(boxMinX, Math.min(circleX, boxMaxX))
+			const closestY = Math.max(boxMinY, Math.min(circleY, boxMaxY))
+
+			const dx = circleX - closestX
+			const dy = circleY - closestY
+			const distanceSq = dx * dx + dy * dy
+
+			if (distanceSq < circleRadius * circleRadius) {
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+		// Case 5: OBB vs OBB
+		else if (obbA && obbB) {
+			if (this._checkOBBvsOBB(chunkA, indexA, chunkB, indexB)) {
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+		// Case 6: OBB vs Circle
+		else if (obbA && circleB) {
+			if (this._checkOBBvsCircle(chunkA, indexA, chunkB, indexB)) {
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+		// Case 7: Circle vs OBB
+		else if (circleA && obbB) {
+			// Just swap the arguments for the check
+			if (this._checkOBBvsCircle(chunkB, indexB, chunkA, indexA)) {
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+		// Case 8: OBB vs Box (AABB) - Note: fixed from boxA to boxB
+		else if (obbA && boxB) {
+			if (this._checkOBBvsAABB(chunkA, indexA, chunkB, indexB)) {
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+		// Case 9: Box (AABB) vs OBB
+		else if (boxA && obbB) {
+			// Just swap the arguments for the check
+			if (this._checkOBBvsAABB(chunkB, indexB, chunkA, indexA)) {
+				this._addCollision(chunkA, indexA, entityBId)
+				this._addCollision(chunkB, indexB, entityAId)
+			}
+			return // Handled
+		}
+	}
+
+	// --- SAT (Separating Axis Theorem) Helper Methods (Allocation-Free) ---
+
+	/**
+	 * Calculates the world-space corners of an OBB and writes them to output buffers.
+	 * @param {Float32Array} out_cornersX - Output buffer for X coordinates.
+	 * @param {Float32Array} out_cornersY - Output buffer for Y coordinates.
+	 */
+	_getOBBCorners(out_cornersX, out_cornersY, posX, posY, width, height, angle) {
+		const halfW = width / 2
+		const halfH = height / 2
+		const cos = Math.cos(angle)
+		const sin = Math.sin(angle)
+
+		// Local corner vectors (unrolled for performance)
+		const localX = [-halfW, halfW, halfW, -halfW]
+		const localY = [-halfH, -halfH, halfH, halfH]
+
+		// Rotate and translate to world coordinates, writing directly to output buffers
+		for (let i = 0; i < 4; i++) {
+			const lx = localX[i]
+			const ly = localY[i]
+			out_cornersX[i] = posX + lx * cos - ly * sin
+			out_cornersY[i] = posY + lx * sin + ly * cos
+		}
+	}
+
+	/**
+	 * Projects polygon corners onto an axis and writes the min/max to an output buffer.
+	 * @param {Float32Array} out_projection - Output buffer for [min, max].
+	 * @param {Float32Array} cornersX - Input buffer of corner X coordinates.
+	 * @param {Float32Array} cornersY - Input buffer of corner Y coordinates.
+	 */
+	_projectCornersOntoAxis(out_projection, cornersX, cornersY, axisX, axisY) {
+		let min = Infinity
+		let max = -Infinity
+		for (let i = 0; i < 4; i++) {
+			const projection = cornersX[i] * axisX + cornersY[i] * axisY
+			if (projection < min) min = projection
+			if (projection > max) max = projection
+		}
+		out_projection[0] = min
+		out_projection[1] = max
+	}
+
+	/**
+	 * Projects a circle onto an axis and writes the min/max to an output buffer.
+	 * @param {Float32Array} out_projection - Output buffer for [min, max].
+	 */
+	_projectCircleOntoAxis(out_projection, circleX, circleY, radius, axisX, axisY) {
+		const centerProjection = circleX * axisX + circleY * axisY
+		out_projection[0] = centerProjection - radius
+		out_projection[1] = centerProjection + radius
+	}
+
+	_checkOBBvsOBB(chunkA, indexA, chunkB, indexB) {
+		const posA = chunkA.componentData[this.positionId]
+		const obbA = chunkA.componentData[this.orientedBoxColliderId]
+		const rotA = chunkA.componentData[this.rotationId]
+		const posB = chunkB.componentData[this.positionId]
+		const obbB = chunkB.componentData[this.orientedBoxColliderId]
+		const rotB = chunkB.componentData[this.rotationId]
+
+		// Get corners for both OBBs into reusable buffers
+		this._getOBBCorners(
+			this.cornersA_X,
+			this.cornersA_Y,
+			posA.x[indexA],
+			posA.y[indexA],
+			obbA.width[indexA],
+			obbA.height[indexA],
+			rotA.angle[indexA],
+		)
+		this._getOBBCorners(
+			this.cornersB_X,
+			this.cornersB_Y,
+			posB.x[indexB],
+			posB.y[indexB],
+			obbB.width[indexB],
+			obbB.height[indexB],
+			rotB.angle[indexB],
+		)
+
+		// Get axes for both OBBs into reusable buffers
+		const angleA = rotA.angle[indexA]
+		this.axes_X[0] = Math.cos(angleA)
+		this.axes_Y[0] = Math.sin(angleA)
+		this.axes_X[1] = -this.axes_Y[0] // -sin(angleA)
+		this.axes_Y[1] = this.axes_X[0] // cos(angleA)
+
+		const angleB = rotB.angle[indexB]
+		this.axes_X[2] = Math.cos(angleB)
+		this.axes_Y[2] = Math.sin(angleB)
+		this.axes_X[3] = -this.axes_Y[2] // -sin(angleB)
+		this.axes_Y[3] = this.axes_X[2] // cos(angleB)
+
+		// Check all 4 axes
+		for (let i = 0; i < 4; i++) {
+			const axisX = this.axes_X[i]
+			const axisY = this.axes_Y[i]
+
+			this._projectCornersOntoAxis(this.projectionA, this.cornersA_X, this.cornersA_Y, axisX, axisY)
+			this._projectCornersOntoAxis(this.projectionB, this.cornersB_X, this.cornersB_Y, axisX, axisY)
+
+			const minA = this.projectionA[0],
+				maxA = this.projectionA[1]
+			const minB = this.projectionB[0],
+				maxB = this.projectionB[1]
+
+			if (maxA < minB || maxB < minA) {
+				return false // Found a separating axis
+			}
+		}
+
+		return true // No separating axis found
+	}
+	
+	_checkOBBvsCircle(obbChunk, obbIndex, circleChunk, circleIndex) {
+		const posO = obbChunk.componentData[this.positionId]
+		const obb = obbChunk.componentData[this.orientedBoxColliderId]
+		const rotO = obbChunk.componentData[this.rotationId]
+		const posC = circleChunk.componentData[this.positionId]
+		const circle = circleChunk.componentData[this.circleColliderId]
+
+		const obbAngle = rotO.angle[obbIndex]
+		const circleX = posC.x[circleIndex]
+		const circleY = posC.y[circleIndex]
+		const circleRadius = circle.radius[circleIndex]
+
+		// Get OBB corners
+		this._getOBBCorners(
+			this.cornersA_X,
+			this.cornersA_Y,
+			posO.x[obbIndex],
+			posO.y[obbIndex],
+			obb.width[obbIndex],
+			obb.height[obbIndex],
+			obbAngle,
+		)
+
+		// 1. Check OBB's axes
+		this.axes_X[0] = Math.cos(obbAngle)
+		this.axes_Y[0] = Math.sin(obbAngle)
+		this.axes_X[1] = -this.axes_Y[0]
+		this.axes_Y[1] = this.axes_X[0]
+
+		for (let i = 0; i < 2; i++) {
+			const axisX = this.axes_X[i]
+			const axisY = this.axes_Y[i]
+			this._projectCornersOntoAxis(this.projectionA, this.cornersA_X, this.cornersA_Y, axisX, axisY)
+			this._projectCircleOntoAxis(this.projectionB, circleX, circleY, circleRadius, axisX, axisY)
+
+			const minA = this.projectionA[0],
+				maxA = this.projectionA[1]
+			const minB = this.projectionB[0],
+				maxB = this.projectionB[1]
+
+			if (maxA < minB || maxB < minA) {
+				return false
+			}
+		}
+
+		// 2. Check axis from circle center to closest OBB corner
+		let closestCornerDistSq = Infinity
+		let closestCornerX = 0,
+			closestCornerY = 0
+
+		for (let i = 0; i < 4; i++) {
+			const cornerX = this.cornersA_X[i]
+			const cornerY = this.cornersA_Y[i]
+			const distSq = (circleX - cornerX) ** 2 + (circleY - cornerY) ** 2
+			if (distSq < closestCornerDistSq) {
+				closestCornerDistSq = distSq
+				closestCornerX = cornerX
+				closestCornerY = cornerY
+			}
+		}
+
+		const axisToCornerX = closestCornerX - circleX
+		const axisToCornerY = closestCornerY - circleY
+		const len = Math.sqrt(axisToCornerX ** 2 + axisToCornerY ** 2)
+
+		if (len > 0) {
+			const invLen = 1 / len
+			const axisX = axisToCornerX * invLen
+			const axisY = axisToCornerY * invLen
+
+			this._projectCornersOntoAxis(this.projectionA, this.cornersA_X, this.cornersA_Y, axisX, axisY)
+			this._projectCircleOntoAxis(this.projectionB, circleX, circleY, circleRadius, axisX, axisY)
+
+			const minA = this.projectionA[0],
+				maxA = this.projectionA[1]
+			const minB = this.projectionB[0],
+				maxB = this.projectionB[1]
+
+			if (maxA < minB || maxB < minA) {
+				return false
+			}
+		}
+
+		return true
+	}
+	
+	_checkOBBvsAABB(obbChunk, obbIndex, aabbChunk, aabbIndex) {
+		// This is a simplified OBB vs OBB check where the second OBB has an angle of 0.
+		const posO = obbChunk.componentData[this.positionId]
+		const obb = obbChunk.componentData[this.orientedBoxColliderId]
+		const rotO = obbChunk.componentData[this.rotationId]
+		const posA = aabbChunk.componentData[this.positionId]
+		const box = aabbChunk.componentData[this.boxColliderId] // Note: using boxCollider for AABB
+
+		// Get corners for OBB
+		this._getOBBCorners(
+			this.cornersA_X,
+			this.cornersA_Y,
+			posO.x[obbIndex],
+			posO.y[obbIndex],
+			obb.width[obbIndex],
+			obb.height[obbIndex],
+			rotO.angle[obbIndex],
+		)
+
+		// Get axes for OBB
+		const obbAngle = rotO.angle[obbIndex]
+		this.axes_X[0] = Math.cos(obbAngle)
+		this.axes_Y[0] = Math.sin(obbAngle)
+		this.axes_X[1] = -this.axes_Y[0]
+		this.axes_Y[1] = this.axes_X[0]
+
+		// Get axes for AABB (world axes)
+		this.axes_X[2] = 1
+		this.axes_Y[2] = 0
+		this.axes_X[3] = 0
+		this.axes_Y[3] = 1
+
+		// AABB corners can be calculated more simply
+		const halfW = box.width[aabbIndex] / 2
+		const halfH = box.height[aabbIndex] / 2
+		const aabbX = posA.x[aabbIndex]
+		const aabbY = posA.y[aabbIndex]
+		this.cornersB_X[0] = aabbX - halfW
+		this.cornersB_Y[0] = aabbY - halfH
+		this.cornersB_X[1] = aabbX + halfW
+		this.cornersB_Y[1] = aabbY - halfH
+		this.cornersB_X[2] = aabbX + halfW
+		this.cornersB_Y[2] = aabbY + halfH
+		this.cornersB_X[3] = aabbX - halfW
+		this.cornersB_Y[3] = aabbY + halfH
+
+		// Check all 4 axes
+		for (let i = 0; i < 4; i++) {
+			const axisX = this.axes_X[i]
+			const axisY = this.axes_Y[i]
+
+			this._projectCornersOntoAxis(this.projectionA, this.cornersA_X, this.cornersA_Y, axisX, axisY)
+			this._projectCornersOntoAxis(this.projectionB, this.cornersB_X, this.cornersB_Y, axisX, axisY)
+
+			const minA = this.projectionA[0],
+				maxA = this.projectionA[1]
+			const minB = this.projectionB[0],
+				maxB = this.projectionB[1]
+
+			if (maxA < minB || maxB < minA) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	/** Adds a collision event to an entity's buffer. */
+	_addCollision(chunk, indexInChunk, otherEntityId) {
+		const buffer = chunk.componentData[this.collisionBufferId]
+		const count = buffer.count[indexInChunk]
+		const capacity = buffer.capacity[indexInChunk]
+
+		if (count < capacity) {
+			// This switch is allocation-free and much faster than creating a temporary array.
+			switch (count) {
+				case 0: buffer.event0[indexInChunk] = otherEntityId; break
+				case 1: buffer.event1[indexInChunk] = otherEntityId; break
+				case 2: buffer.event2[indexInChunk] = otherEntityId; break
+				case 3: buffer.event3[indexInChunk] = otherEntityId; break
+				case 4: buffer.event4[indexInChunk] = otherEntityId; break
+				case 5: buffer.event5[indexInChunk] = otherEntityId; break
+				case 6: buffer.event6[indexInChunk] = otherEntityId; break
+				case 7: buffer.event7[indexInChunk] = otherEntityId; break
+			}
+			buffer.count[indexInChunk]++
+		}
+	}
+}

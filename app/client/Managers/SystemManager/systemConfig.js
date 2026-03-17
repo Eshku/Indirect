@@ -4,10 +4,6 @@
  */
 
 /**
- * --- DEVELOPER NOTE on System Scheduling & Frequencies ---
- *
- * This object is single source of truth for which systems are active in the engine
- * and how frequently they should run.
  *
  * ### System Activation
  * Any system listed in this file will be loaded, instantiated, and initialized by `SystemManager`.
@@ -18,7 +14,7 @@
  * **1. Initialization Order (init())**
  *    The order of systems in this file **explicitly defines the `init()` order**. Systems are instantiated
  *    and initialized sequentially as they appear below. This is critical for systems that have `init()`-time
- *    dependencies on others (e.g., `CameraSystem` needs `BackgroundSystem` to create a sprite first).
+ *    dependencies on others.
  *
  * **2. Execution Order (update())**
  *    The order here defines the **base order** for the `Scheduler`'s dependency analysis. The final execution
@@ -75,6 +71,16 @@ export const systemSchedule = {
 
 		{ name: 'SpatialHashingSystem', frequency: 'logic' },
 
+		{ name: 'CollisionDetectionSystem', frequency: 'logic' },
+
+		{ name: 'ProjectileResolutionSystem', frequency: 'logic' },
+
+		{ name: 'DamageSystem', frequency: 'logic' },
+
+		{ name: 'HealthSystem', frequency: 'logic' },
+
+		{ name: 'PoolingSystem', frequency: 'logic' },
+
 		{ name: 'LifecycleVisualSystem', frequency: 'logic' },
 
 		{ name: 'EventEntityCleanupSystem', frequency: 'logic' },
@@ -84,8 +90,8 @@ export const systemSchedule = {
 
 	// Infrequent UI updates. Runs on a timer, not every frame.
 	Timed: [
-		// Run  every 5 seconds.
-		{ name: 'SpawnDirectorSystem', frequency: 0.2 },
+		{ name: 'SpawnDirectorSystem', frequency: 1 },
+		{ name: 'OffscreenCleanupSystem', frequency: 0.5 }, // Runs every 2 seconds
 	],
 
 	// Runs once per rendered frame for smooth visuals, interpolation, and UI.

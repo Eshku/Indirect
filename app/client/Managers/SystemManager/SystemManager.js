@@ -767,12 +767,14 @@ export class SystemManager {
 	 * "Primes" a system's reactive queries with the correct last tick.
 	 * This is a performance-critical helper called just before a system's job is executed.
 	 * @param {object} system The system to prime.
-	 * @param {number} lastTick The last tick of the system's group.
+	 * @param {number} lastTick The last tick the system's group ran.
+	 * @param {number} currentTick The current frame's tick.
 	 */
-	primeSystemQueries(system, lastTick) {
+	primeSystemQueries(system, lastTick, currentTick) {
 		if (system.reactive) {
 			for (const query of system.reactiveQueries) {
 				query.iterationLastTick = lastTick
+				query.iterationCurrentTick = currentTick
 			}
 		}
 	}

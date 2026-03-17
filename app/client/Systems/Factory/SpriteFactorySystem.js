@@ -17,42 +17,42 @@ export class SpriteFactorySystem {
 	init() {
 		this.initializationQuery = this.getQuery({
 			with: [spriteDescriptor, viewable],
-			react: [spriteDescriptor], // React to when a sprite is described
+			react: [spriteDescriptor], // React to when a sprite descriptor is added or changed
 		})
 
 		// Pre-compile the payload and cache the payload/mutator objects separately.
-		const { payload, mutators } = this.compile(viewable, { spriteRef: 0, dirtyTick: 0 })
+		// The 'viewable' component must have `tracked: true` in its schema for this to work.
+		const { payload } = this.compile(viewable, { spriteRef: 0 })
 		this.viewablePayload = payload
-		this.viewableMutators = mutators
 		this.stringStorage = stringInterningTable.storage
+		this.scratchBuffer = new Uint32Array(4096) // Max chunk capacity
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
-		for (const chunk of this.initializationQuery.iter(lastTick)) {
+		// The query iterator is primed by the SystemManager and culls chunks with no relevant changes.
+		for (const chunk of this.initializationQuery.iter()) {
 			const descriptorArrays = chunk.componentData[spriteDescriptor]
 			const viewableArrays = chunk.componentData[viewable]
 
-			const assetNameRefs = descriptorArrays.assetName
-			const spriteRefs = viewableArrays.spriteRef
+			// Get the indices of entities whose SpriteDescriptor has changed since the last run.
+			const changedCount = chunk.getChangedIndices(spriteDescriptor, lastTick, this.scratchBuffer)
 
-			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				// Only act if the descriptor was just added/changed AND the sprite hasn't been created yet.
-				if (
-					descriptorArrays.dirtyTick[indexInChunk] >= lastTick &&
-					spriteRefs[indexInChunk] === UNINITIALIZED_REF
-				) {
+			for (let i = 0; i < changedCount; i++) {
+				const indexInChunk = this.scratchBuffer[i]
+
+				// Only act if the sprite hasn't been created yet.
+				if (viewableArrays.spriteRef[indexInChunk] === UNINITIALIZED_REF) {
 					const entityId = chunk.entities[indexInChunk]
-					const assetName = this.stringStorage[assetNameRefs[indexInChunk]]
+					const assetName = this.stringStorage[descriptorArrays.assetName[indexInChunk]]
 
 					// Synchronously get a sprite reference from the asset manager.
 					const newSpriteRef = assetManager.acquireSpriteRefSync(assetName, { anchor: { x: 0.5, y: 0.5 } })
 
 					if (newSpriteRef !== null) {
-						// This system's only job is to create the sprite and update the Viewable component.
-						// It does NOT add it to the scene. Another system will handle that.
-						this.viewableMutators.viewable.dirtyTick[0] = currentTick + 1
-						this.viewableMutators.viewable.spriteRef[0] = newSpriteRef
-						this.setComponentData(entityId, this.viewablePayload)
+						// We must compile a new payload here because the payload is just a buffer.
+						// We cannot mutate the shared `this.viewablePayload` as it would affect all entities in the loop.
+						const { payload: newPayload } = this.compile(viewable, { spriteRef: newSpriteRef })
+						this.setComponentData(entityId, newPayload)
 					}
 				}
 			}

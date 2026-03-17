@@ -73,8 +73,6 @@
  */
 const { loadAllComponents } = await import(`@managers/ComponentManager/componentLoader.js`)
 const { schemaCompiler } = await import('./SchemaCompiler.js')
-const { reconstruct } = await import('./ComponentInterpreter.js')
-const { toCamelCase } = await import(`@core/utils/stringUtils.js`)
 
 import * as Schema from './ComponentSchema.js'
 
@@ -103,14 +101,9 @@ export class ComponentManager {
 	}
 
 	async registerComponents(componentModules) {
-		for (const { moduleName, module, category } of componentModules) {
-			// Default exports supported...for now //?
-			const componentSchema = module.default || module[moduleName]
-			if (componentSchema && typeof componentSchema === 'object') {
-				this.registerComponent(moduleName, componentSchema)
-			} else {
-				console.error(`ComponentManager: Could not find component object export in module "${moduleName}".`)
-			}
+
+		for (const { moduleName, componentSchema } of componentModules) {
+			this.registerComponent(moduleName, componentSchema)
 		}
 	}
 
@@ -137,7 +130,7 @@ export class ComponentManager {
 			const typeID = Schema.nextComponentTypeID
 			Schema.setNextComponentTypeID(typeID + 1)
 
-			Schema.componentNames[typeID] = toCamelCase(componentName)
+			Schema.componentNames[typeID] = componentName
 			Schema.componentBitFlags[typeID] = 1n << BigInt(typeID)
 			this._parseAndStoreSchema(componentName, schema, typeID)
 
@@ -220,45 +213,6 @@ export class ComponentManager {
 		}
 		this._cachedTypeIDsObject = Object.freeze(idMap)
 		return this._cachedTypeIDsObject
-	}
-
-	/**
-	 * Retrieves the static constant map (for enums or bitmasks) for a specific component.
-	 * @param {string|number} componentIdentifier - The component name or typeID.
-	 * @returns {object | undefined} The read-only constant map (e.g., `{ STATE: { IDLE: 0, ... } }`), or undefined if not found.
-	 */
-	getConstantsFor(componentIdentifier) {
-		const typeID =
-			typeof componentIdentifier === 'string'
-				? Schema.componentNameToTypeID.get(componentIdentifier.toLowerCase())
-				: componentIdentifier
-		if (typeID === undefined) return undefined
-		return this.componentConstants[typeID]
-	}
-
-	/**
-	 * Retrieves the static constant map (for enums or bitmasks) for a specific property of a component.
-	 * This is a developer-friendly helper for system initialization.
-	 * @param {string|number} componentIdentifier - The name or typeID of the component.
-	 * @param {string} propertyName - The name of the property in the component's schema (e.g., 'collisionFlags').
-	 * @returns {object | undefined} The read-only constant map (e.g., `{ LEFT: 1, RIGHT: 2, ... }`), or undefined if not found.
-	 */
-	getConstantsForProperty(componentIdentifier, propertyName) {
-		const componentConstants = this.getConstantsFor(componentIdentifier)
-		if (!componentConstants) {
-			console.warn(`ComponentManager: Could not find constants for component "${componentIdentifier}".`)
-			return undefined
-		}
-
-		const propertyConstants = componentConstants[propertyName.toUpperCase()]
-		if (!propertyConstants) {
-			console.warn(
-				`ComponentManager: Could not find constants for property "${propertyName}" on component "${componentIdentifier}".`,
-			)
-			return undefined
-		}
-
-		return propertyConstants
 	}
 
 	/**

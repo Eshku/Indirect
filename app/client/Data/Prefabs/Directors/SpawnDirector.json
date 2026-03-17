@@ -1,0 +1,11 @@
+{
+	"components": {
+		"spawnDirector": {
+			"threatBudget": 10.0,
+			"threatGrowthRate": 10.0,
+			"maxThreatBudget": 10000.0,
+			"minSpawnBudget": 20.0,
+			"threatGrowthEscalationRate": 0.1
+		}
+	}
+}

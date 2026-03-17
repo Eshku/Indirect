@@ -88,7 +88,7 @@ export class ReactivityTestSystem {
 
 	_runDetection(currentTick, lastTick) {
 		let detected = false
-		for (const chunk of this.detectionQuery.iter(lastTick)) {
+		for (const chunk of this.detectionQuery.iter()) {
 			// If iterator yields anything, it means broad-phase check passed.
 			detected = true
 		}

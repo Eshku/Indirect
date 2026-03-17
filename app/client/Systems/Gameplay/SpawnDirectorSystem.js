@@ -1,9 +1,22 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, entityManager, gameManager, physicsManager } = engine.getManagers()
 
-const { spawnDirector, playerTag, position, prefab } = ecs.getTypeIDs()
+const {
+	spawnDirector,
+	playerTag,
+	position,
+	isPooled,
+	lifecycleState,
+	health,
+	velocity,
+	spinnerTag, // Assuming a specific tag for each enemy type we want to pool
+	threatCost,
+} = ecs.getTypeIDs()
+
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
+
+const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 
 /**
  * The DirectorSystem is responsible for procedurally spawning enemies.
@@ -29,30 +42,23 @@ export class SpawnDirectorSystem {
 			with: [playerTag, position],
 		})
 
+		// A query to find pooled 'spinner' enemies that can be reused.
+		this.pooledSpinnerQuery = this.getQuery({
+			with: [spinnerTag, isPooled],
+		})
+
 		this.playerId = this.playerQuery.getSingleEntity()
 
 		if (!this.playerId) {
 			console.error('DirectorSystem: Could not find player entity during initialization.')
 		}
 
-		// Create the singleton SpawnDirector entity. This command is deferred and will be
-		// executed after all systems are initialized, ensuring it exists before the first update.
-		const { payload } = this.compile({
-			spawnDirector: {
-				threatBudget: 10.0,
-				threatGrowthRate: 5.0,
-				maxThreatBudget: 1000.0,
-				minSpawnBudget: 20.0,
-				threatGrowthEscalationRate: 0.1,
-			},
-		})
-
-		this.createEntity(payload)
-
+		// The SpawnDirector entity is now created from a prefab in client.js
+		// to ensure it exists on the first frame.
 		// --- Define and pre-compile all spawnable enemies ---
 		this.spawnableEnemies = [
 			{ prefabName: 'spinner', cost: 5, weight: 10 },
-			// { prefabName: 'splody', cost: 15, weight: 2 }, // Example for when 'splody' is ready
+			// { prefabName: 'splody', cost: 15, weight: 2 }, //! not yet implemented
 		]
 
 		// Pre-compile payloads for all spawnable enemies for efficient spawning.
@@ -68,11 +74,37 @@ export class SpawnDirectorSystem {
 		// Filter out any enemies that failed to compile.
 		this.spawnableEnemies = this.spawnableEnemies.filter(e => e.payload)
 
+		// --- Pre-compile payloads for reactivating pooled enemies ---
+		const { payload: reactivatePayload } = this.compile(lifecycleState, { flags: LIFECYCLE.ACTIVE })
+		this.reactivatePayload = reactivatePayload
+
+		// We need to reset several components when reusing an enemy.
+		const { payload: positionPayload, mutators: positionMutators } = this.compile(position)
+		this.positionPayload = positionPayload
+		this.positionMutators = positionMutators
+
+		const { payload: healthPayload, mutators: healthMutators } = this.compile(health)
+		this.healthPayload = healthPayload
+		this.healthMutators = healthMutators
+
+		const { payload: threatCostPayload, mutators: threatCostMutators } = this.compile(threatCost)
+		this.threatCostPayload = threatCostPayload
+		this.threatCostMutators = threatCostMutators
+
+		this.resetVelocityPayload = this.compile(velocity, { x: 0, y: 0 }).payload
+
 		// Get access to the spatial hash grid for finding empty spawn locations.
 		const gridSABs = physicsManager.getSpatialHashGridSABs()
 		this.grid = new SpatialHashGrid(gridSABs)
-		// A reusable Set to avoid allocations in the update loop.
-		this.foundEntities = new Set()
+		// A reusable query result object to avoid allocations in the update loop.
+		const MAX_SPAWN_QUERY_RESULTS = 256 // Should be enough for checking a spawn area
+		this.spawnQueryResult = {
+			count: 0,
+			capacity: MAX_SPAWN_QUERY_RESULTS,
+			entityIds: new BigUint64Array(MAX_SPAWN_QUERY_RESULTS),
+			chunkIds: new Uint16Array(MAX_SPAWN_QUERY_RESULTS),
+			entityIndices: new Uint16Array(MAX_SPAWN_QUERY_RESULTS),
+		}
 	}
 
 	update({ deltaTime, currentTick }) {
@@ -132,7 +164,6 @@ export class SpawnDirectorSystem {
 	 */
 	_findEmptySpawnLocation() {
 		const playerPosition = this.getComponent(this.playerId, position)
-		if (!playerPosition) return null
 
 		const { x: playerX, y: playerY } = playerPosition
 		const screen = gameManager.getApp().screen
@@ -147,10 +178,10 @@ export class SpawnDirectorSystem {
 			const x = playerX + searchRadius * Math.cos(randomAngle)
 			const y = playerY + searchRadius * Math.sin(randomAngle)
 
-			this.foundEntities.clear()
-			this.grid.queryRadius(x, y, WAVE_CLUSTER_RADIUS, this.foundEntities)
+			// The queryRadius method resets the count internally.
+			this.grid.queryRadius(x, y, WAVE_CLUSTER_RADIUS, this.spawnQueryResult)
 
-			if (this.foundEntities.size === 0) {
+			if (this.spawnQueryResult.count === 0) {
 				return { x, y } // Found an empty spot.
 			}
 		}
@@ -172,25 +203,71 @@ export class SpawnDirectorSystem {
 			return
 		}
 
+		// --- Hybrid Pooling: Reuse existing enemies first, then create new ones ---
 		for (let i = 0; i < enemiesToSpawn.length; i++) {
 			const enemyInfo = enemiesToSpawn[i]
+			let reused = false
 
-			// Use a Fibonacci spiral (sunflower) pattern for natural-looking distribution.
-			const radius = Math.sqrt(i + 0.5) * separation
-			const angle = 2 * Math.PI * i * phi
+			// Check if we can reuse an enemy from the pool for this specific type.
+			if (enemyInfo.prefabName === 'spinner') {
+				const pooledSpinner = this.pooledSpinnerQuery.getSingleEntity()
+				if (pooledSpinner) {
+					this._reuseEnemy(pooledSpinner, enemyInfo, location, i, separation, phi, currentTick)
+					reused = true
+				}
+			}
 
-			const enemyX = location.x + radius * Math.cos(angle)
-			const enemyY = location.y + radius * Math.sin(angle)
-
-			enemyInfo.mutators.position.x[0] = enemyX
-			enemyInfo.mutators.position.y[0] = enemyY
-			// This is the critical fix: we must set the dirtyTick for the SpriteDescriptor
-			// so that the SpriteFactorySystem will process this newly created entity on the next frame.
-			enemyInfo.mutators.spriteDescriptor.dirtyTick[0] = currentTick + 1
-
-			this.createEntity(enemyInfo.payload)
+			// If no pooled enemy was available, create a new one.
+			if (!reused) {
+				this._createNewEnemy(enemyInfo, location, i, separation, phi, currentTick)
+			}
 		}
 	}
+
+	_createNewEnemy(enemyInfo, location, index, separation, phi, currentTick) {
+		// Use a Fibonacci spiral (sunflower) pattern for natural-looking distribution.
+		const radius = Math.sqrt(index + 0.5) * separation
+		const angle = 2 * Math.PI * index * phi
+
+		const enemyX = location.x + radius * Math.cos(angle)
+		const enemyY = location.y + radius * Math.sin(angle)
+
+		enemyInfo.mutators.position.x[0] = enemyX
+		enemyInfo.mutators.position.y[0] = enemyY
+		// Stamp the threat cost onto the new enemy.
+		enemyInfo.mutators.threatCost.value[0] = enemyInfo.cost
+		// The command buffer automatically marks the SpriteDescriptor as dirty on creation,
+		// so the SpriteFactorySystem will process this entity correctly.
+
+		this.createEntity(enemyInfo.payload)
+	}
+
+	_reuseEnemy(entityId, enemyInfo, location, index, separation, phi, currentTick) {
+		// --- 1. Calculate new position ---
+		const radius = Math.sqrt(index + 0.5) * separation
+		const angle = 2 * Math.PI * index * phi
+		const enemyX = location.x + radius * Math.cos(angle)
+		const enemyY = location.y + radius * Math.sin(angle)
+
+		// --- 2. Prepare command payloads ---
+		this.positionMutators.position.x[0] = enemyX
+		this.positionMutators.position.y[0] = enemyY
+
+		// Reset health to max. We assume the prefab's default is the max health.
+		this.healthMutators.health.current[0] = this.healthMutators.health.max[0]
+
+		// Set the threat cost for the reused enemy.
+		this.threatCostMutators.threatCost.value[0] = enemyInfo.cost
+
+		// --- 3. Issue commands to reactivate and reset the entity ---
+		this.removeComponent(entityId, isPooled) // Structural change: bring it back to the active world.
+		this.setComponentData(entityId, this.reactivatePayload) // Set lifecycle to ACTIVE.
+		this.setComponentData(entityId, this.positionPayload) // Set new position.
+		this.setComponentData(entityId, this.healthPayload) // Reset health.
+		this.setComponentData(entityId, this.threatCostPayload) // Set the cost.
+		this.setComponentData(entityId, this.resetVelocityPayload) // Reset velocity.
+	}
+
 	/**
 	 * Selects a list of enemies to spawn based on the available budget and weights.
 	 * This version is more robust, ensuring it spends the budget effectively by only
@@ -216,7 +293,8 @@ export class SpawnDirectorSystem {
 
 			// 3. Pick one enemy from the affordable list using weighted random selection.
 			const randomWeight = Math.random() * totalWeight
-			let weightSum = 0, chosenEnemy = null
+			let weightSum = 0,
+				chosenEnemy = null
 			for (const enemy of affordableEnemies) {
 				weightSum += enemy.weight
 				if (randomWeight <= weightSum) {

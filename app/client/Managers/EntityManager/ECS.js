@@ -2,6 +2,7 @@ import * as Schema from '../ComponentManager/ComponentSchema.js'
 
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 const { reconstruct } = await import(`@managers/ComponentManager/ComponentInterpreter.js`)
+const { getConstantsFor, getConstantsForProperty } = await import(`@managers/ComponentManager/ComponentConstants.js`)
 
 const { payloadCompiler } = await import(`@managers/SystemManager/PayloadCompiler.js`)
 
@@ -69,7 +70,6 @@ export class ECS {
 	 * @returns {number} The number of active entities.
 	 */
 	getEntityCount() {
-		// This is more complex now. We can count non-undefined versions.
 		return entityStore.entityVersion.filter(v => v !== undefined).length
 	}
 
@@ -208,6 +208,33 @@ export class ECS {
 		if (!this.entityManager.isEntityActive(entityId)) return false
 		const archetypeId = this.entityManager.getArchetypeForEntity(entityId)
 		return archetypeId !== undefined ? this.entityManager.hasComponentType(archetypeId, componentTypeId) : false
+	}
+
+	/**
+	 * Retrieves the static constant map (for enums or bitmasks) for a specific component.
+	 * This is a developer-friendly helper for system initialization.
+	 * @param {string|number} componentIdentifier - The component name or typeID.
+	 * @returns {object | undefined} The read-only constant map (e.g., `{ STATE: { IDLE: 0, ... } }`), or undefined if not found.
+	 */
+	getConstantsFor(componentIdentifier) {
+		return getConstantsFor(componentIdentifier)
+	}
+
+	/**
+	 * Retrieves the static constant map (for enums or bitmasks) for a specific property of a component.
+	 * This is a developer-friendly helper for system initialization.
+	 * @param {string|number} componentIdentifier - The name or typeID of the component.
+	 * @param {string} propertyName - The name of the property in the component's schema (e.g., 'flags').
+	 * @returns {object | undefined} The read-only constant map (e.g., `{ LEFT: 1, RIGHT: 2, ... }`), or undefined if not found.
+	 */
+	getConstantsForProperty(componentIdentifier, propertyName) {
+		const constants = getConstantsForProperty(componentIdentifier, propertyName)
+		if (constants === undefined) {
+			console.warn(
+				`ECS: Could not find constants for property "${propertyName}" on component "${componentIdentifier}".`,
+			)
+		}
+		return constants
 	}
 
 	/**

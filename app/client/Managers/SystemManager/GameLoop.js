@@ -364,6 +364,9 @@ export class GameLoop {
 		// Broadcast all structural deltas (chunks, archetype pages) to workers.
 		this.workerManager.broadcastDeltas()
 
+		// --- Maintenance Phase ---
+		await this.scheduler.executeMaintenance(this.currentTick)
+
 		// --- Manual Render Call ---
 		const renderStartTime = performance.now()
 

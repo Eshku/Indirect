@@ -1,9 +1,9 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { lifecycleState, viewable, isPooled } = ecs.getTypeIDs()
+const { lifecycleState, viewable } = ecs.getTypeIDs()
 
-const LIFECYCLE = ecs.componentManager.getConstantsForProperty('LifecycleState', 'flags')
+const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 
 /**
  * Manages the visual state for pooled entities.
@@ -15,8 +15,7 @@ const LIFECYCLE = ecs.componentManager.getConstantsForProperty('LifecycleState',
 export class LifecycleVisualSystem {
 	static dependencies = {
 		update: {
-			reads: [viewable],
-			writes: [lifecycleState],
+			reads: [lifecycleState, viewable],
 		},
 	}
 
@@ -25,42 +24,28 @@ export class LifecycleVisualSystem {
 			with: [lifecycleState, viewable],
 			react: [lifecycleState],
 		})
-
-		// Pre-compile a payload to add the isPooled tag.
-		this.addIsPooledPayload = this.compile(isPooled, {}).payload
-
-		// Pre-compile a payload to set the POOLED state.
-		const { payload, mutators } = this.compile(lifecycleState, { flags: LIFECYCLE.POOLED, dirtyTick: 0 })
-		this.pooledStatePayload = payload
-		this.pooledStateMutators = mutators
+		this.scratchBuffer = new Uint32Array(4096) // Max chunk capacity
 	}
 
 	update({ currentTick, lastTick }) {
-		for (const chunk of this.lifecycleQuery.iter(lastTick)) {
+		for (const chunk of this.lifecycleQuery.iter()) {
 			const states = chunk.componentData[lifecycleState]
 			const viewables = chunk.componentData[viewable]
+			const changedCount = chunk.getChangedIndices(lifecycleState, lastTick, this.scratchBuffer)
 
-			for (let i = 0; i < chunk.size; i++) {
-				// Only process entities whose lifecycle state has actually changed since the system last ran.
+			for (let i = 0; i < changedCount; i++) {
+				const indexInChunk = this.scratchBuffer[i]
 
-				if (states.dirtyTick[i] <= lastTick) continue
-
-				const spriteRef = viewables.spriteRef[i]
+				const spriteRef = viewables.spriteRef[indexInChunk]
 				const sprite = engine.assetManager.getDisplayObjectByRef(spriteRef)
 				if (!sprite) continue
 
-				const currentFlags = states.flags[i]
+				const flags = states.flags[indexInChunk]
 
-				if ((currentFlags & LIFECYCLE.DYING) !== 0) {
-					// --- Deactivation Step ---
+				// This system is now purely visual. It hides sprites for entities that are dying or already pooled.
+				if ((flags & LIFECYCLE.DYING) !== 0 || (flags & LIFECYCLE.POOLED) !== 0) {
 					sprite.visible = false
-					const entityId = chunk.entities[i]
-					// Transition from DYING to POOLED. This is the final step of cleanup.
-					// We use commands to perform the structural change and state update.
-					this.pooledStateMutators.lifecycleState.dirtyTick[0] = currentTick + 1
-					this.addComponent(entityId, this.addIsPooledPayload)
-					this.setComponentData(entityId, this.pooledStatePayload)
-				} else if ((currentFlags & LIFECYCLE.ACTIVE) !== 0) {
+				} else if ((flags & LIFECYCLE.ACTIVE) !== 0) {
 					// --- Activation Step ---
 					// This handles both newly created entities and reactivated (un-pooled) ones.
 					sprite.visible = true

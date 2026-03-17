@@ -3,14 +3,23 @@ const { engine } = await import(`@client/Engine.js`)
 const { ecs, physicsManager, queryManager } = engine.getManagers()
 
 const { SpatialHashGrid, SPATIAL_GRID_CONFIG } = await import(`@core/DataStructures/SpatialHashGrid.js`)
+const { aabb, isPooled } = ecs.getTypeIDs()
 
 /**
  * Manages the spatial hash grid on the main thread.
  * This system is responsible for clearing, repositioning (based on player position),
- * and populating the grid with all relevant entities each frame.
+ * and populating the grid with all relevant entities each frame. It also calculates
+ * and caches each entity's AABB into the `AABB` component for other systems to use.
  * This prepares the grid for safe, parallel read-only queries by worker threads.
  */
 export class SpatialHashingSystem {
+	static dependencies = {
+		update: {
+			// This system now writes the calculated AABB for other systems to use.
+			writes: [aabb],
+		},
+	}
+
 	init() {
 		// Get the main-thread instance of the spatial hash grid API.
 		// The SABs are owned by the PhysicsManager.
@@ -18,17 +27,20 @@ export class SpatialHashingSystem {
 		this.grid = new SpatialHashGrid(gridSABs)
 
 		// Query for the player entity to track its position for grid repositioning.
-		const { playerTag, position, rotation, circleCollider, boxCollider, orientedBoxCollider } = ecs.getTypeIDs()
+		const { playerTag, position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer, aabb, isPooled } =
+			ecs.getTypeIDs()
 
 		this.playerQuery = queryManager.getQuery({
 			with: [playerTag, position],
 		})
 
 		// A single, unified query for all collidable entity types.
+		// We also require the new `collisionLayer` component to ensure everything in the grid is categorized.
 		// This is more efficient than multiple queries as it reduces loop overhead.
 		this.collidablesQuery = queryManager.getQuery({
-			with: [position],
+			with: [position, collisionLayer, aabb],
 			any: [circleCollider, boxCollider, orientedBoxCollider],
+			without: [isPooled],
 		})
 
 		// Cache component type IDs for faster access in the update loop.
@@ -37,6 +49,8 @@ export class SpatialHashingSystem {
 		this.circleColliderId = circleCollider
 		this.boxColliderId = boxCollider
 		this.orientedBoxColliderId = orientedBoxCollider
+		this.collisionLayerId = collisionLayer
+		this.aabbId = aabb
 
 		// Cache the last known player position.
 		this.lastPlayerX = 0
@@ -76,6 +90,7 @@ export class SpatialHashingSystem {
 			const boxColliders = chunk.componentData[this.boxColliderId]
 			const orientedBoxColliders = chunk.componentData[this.orientedBoxColliderId]
 			const rotations = chunk.componentData[this.rotationId]
+			const aabbs = chunk.componentData[this.aabbId]
 
 			// OPTIMIZATION: Check component existence once per chunk. Since all entities
 			// in a chunk share the same archetype, this branch is perfectly predictable
@@ -100,7 +115,13 @@ export class SpatialHashingSystem {
 					const maxX = minX + worldHalfWidth * 2
 					const maxY = minY + worldHalfHeight * 2
 
-					this.grid.add(entityId, minX, minY, maxX, maxY)
+					// Write the calculated AABB to the component for other systems to use.
+					aabbs.minX[i] = minX
+					aabbs.minY[i] = minY
+					aabbs.maxX[i] = maxX
+					aabbs.maxY[i] = maxY
+
+					this.grid.add(entityId, chunk.chunkId, i, minX, minY, maxX, maxY)
 				}
 			} else if (circleColliders) {
 				// --- This chunk contains Circle Colliders ---
@@ -109,7 +130,17 @@ export class SpatialHashingSystem {
 					const x = positions.x[i]
 					const y = positions.y[i]
 					const radius = circleColliders.radius[i]
-					this.grid.add(entityId, x - radius, y - radius, x + radius, y + radius)
+					const minX = x - radius
+					const minY = y - radius
+					const maxX = x + radius
+					const maxY = y + radius
+
+					aabbs.minX[i] = minX
+					aabbs.minY[i] = minY
+					aabbs.maxX[i] = maxX
+					aabbs.maxY[i] = maxY
+
+					this.grid.add(entityId, chunk.chunkId, i, minX, minY, maxX, maxY)
 				}
 			} else if (boxColliders) {
 				// --- This chunk contains Box Colliders (AABBs) ---
@@ -123,7 +154,13 @@ export class SpatialHashingSystem {
 					const minY = y - height / 2
 					const maxX = minX + width
 					const maxY = minY + height
-					this.grid.add(entityId, minX, minY, maxX, maxY)
+
+					aabbs.minX[i] = minX
+					aabbs.minY[i] = minY
+					aabbs.maxX[i] = maxX
+					aabbs.maxY[i] = maxY
+
+					this.grid.add(entityId, chunk.chunkId, i, minX, minY, maxX, maxY)
 				}
 			}
 		}

@@ -42,6 +42,8 @@ class WorkerEntry {
 		// These are used in hot paths to avoid allocating new arrays on every job.
 		this.reusableUnlockedMTOJobs = []
 		this.reusableUnlockedAnyJobs = []
+		this.scratchBuffer = null
+		this.DIRTY_HISTORY_LENGTH = 0
 		this.reusableStealBuffer = []
 
 		this.jobs = null
@@ -114,6 +116,7 @@ class WorkerEntry {
 		entityStore.chunkNextInArchetype = new Uint16Array(sharedData.chunkNextInArchetype)
 
 
+		entityStore.chunkMetadata = sharedData.chunkMetadata
 		this.syncChunkDeltas({ newChunks: initialChunks })
 
 		// Store the raw buffers.
@@ -140,6 +143,7 @@ class WorkerEntry {
 			const blobUtilModuleUrl = new URL('../../Core/utils/blob.js', baseUrl)
 			const mpscQueueModuleUrl = new URL('../../Core/Algorithms/MPSCQueue.js', baseUrl)
 			const dequeModuleUrl = new URL('../../Core/Algorithms/WorkStealingDeque.js', baseUrl)
+			const componentSchemaModuleUrl = new URL('../../Managers/ComponentManager/ComponentSchema.js', baseUrl)
 
 			const spatialHashGridModuleUrl = new URL('../../Core/DataStructures/SpatialHashGrid.js', baseUrl)
 
@@ -151,6 +155,7 @@ class WorkerEntry {
 				jobLayoutModule,
 				frameStateLayoutModule,
 				spatialHashGridModule,
+				componentSchemaModule,
 			] = await Promise.all([
 				import(chunkViewModuleUrl.href),
 				import(blobUtilModuleUrl.href),
@@ -159,6 +164,7 @@ class WorkerEntry {
 				import(jobLayoutModuleUrl.href),
 				import(frameStateLayoutModuleUrl.href),
 				import(spatialHashGridModuleUrl.href),
+				import(componentSchemaModuleUrl.href),
 			])
 
 			// Assign all the imported constants to the worker instance for easy access.
@@ -185,6 +191,7 @@ class WorkerEntry {
 
 			// Also assign constants from modules that aren't fully assigned.
 			this.NO_JOB_AVAILABLE = NO_JOB_AVAILABLE
+			this.DIRTY_HISTORY_LENGTH = componentSchemaModule.DIRTY_HISTORY_LENGTH
 
 			// Now that imports are confirmed, proceed with initialization.
 			// Load all kernel modules.
@@ -218,6 +225,10 @@ class WorkerEntry {
 			}
 			// The worker's own deque is at its ID index in the allDeques array.
 			this.localDeque = this.allDeques[self.id]
+
+			// Initialize the scratch buffer. Max chunk capacity is not fixed, but 16KB is the target.
+			// A capacity of 4096 entities should be safe.
+			this.scratchBuffer = new Uint32Array(4096)
 		} catch (e) {
 			console.error(`[Worker ${self.id}] Failed during dynamic module import or initialization:`, e)
 			throw e
@@ -480,7 +491,10 @@ class WorkerEntry {
 
 				if (kernelFn) {
 					try {
-						const kernelContext = { getChunkView: self.getChunkView }
+						const kernelContext = {
+							getChunkView: self.getChunkView,
+							getScratchBuffer: () => this.scratchBuffer,
+						}
 						await kernelFn(payload, systemContext, kernelContext)
 					} catch (error) {
 						console.error(`[Worker ${self.id}] Error in kernel job for ${systemName}.${kernelName}:`, error)
@@ -489,6 +503,9 @@ class WorkerEntry {
 					console.error(`[Worker ${self.id}] Could not find kernel function "${kernelName}" in module "${moduleName}".`)
 				}
 			}
+		} else if (jobType === this.JOB_TYPE.MAINTENANCE) {
+			// payload is the chunkId
+			this.executeMaintenanceJob(payload, this.currentTick)
 		}
 
 		this.processDependents(jobId, threadId, frameId)
@@ -553,6 +570,43 @@ class WorkerEntry {
 		}
 	}
 
+	executeMaintenanceJob(chunkId, currentTick) {
+		const chunkMetadata = entityStore.chunkMetadata[chunkId]
+		if (!chunkMetadata) return
+
+		const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
+
+		// Calculate which history slots to saturate and clear
+		const oldestTickToOverwrite = currentTick + 1 - this.DIRTY_HISTORY_LENGTH
+		const saturatingTick = oldestTickToOverwrite + 1
+		const tickToClear = currentTick + 1
+
+		const oldestFrameIndex = oldestTickToOverwrite % this.DIRTY_HISTORY_LENGTH
+		const saturatingFrameIndex = saturatingTick % this.DIRTY_HISTORY_LENGTH
+		const clearFrameIndex = tickToClear % this.DIRTY_HISTORY_LENGTH
+
+		for (const componentTypeId in chunkMetadata) {
+			const componentMeta = chunkMetadata[componentTypeId]
+			const dirtyMasks = componentMeta.dirtyMasks
+			if (!dirtyMasks) continue
+
+			const oldestSliceStart = oldestFrameIndex * wordsPerFrame
+			const saturatingSliceStart = saturatingFrameIndex * wordsPerFrame
+			const clearSliceStart = clearFrameIndex * wordsPerFrame
+
+			// Saturate: OR the oldest data into the next-oldest slot
+			for (let i = 0; i < wordsPerFrame; i++) {
+				const oldValue = Atomics.load(dirtyMasks, oldestSliceStart + i)
+				if (oldValue !== 0) {
+					Atomics.or(dirtyMasks, saturatingSliceStart + i, oldValue)
+				}
+			}
+
+			// Clear: Zero out the slot for the upcoming frame
+			dirtyMasks.fill(0, clearSliceStart, clearSliceStart + wordsPerFrame)
+		}
+	}
+
 	syncChunkDeltas({ newChunks, destroyedChunks }) {
 		if (destroyedChunks) {
 			for (const chunkId of destroyedChunks) {
@@ -567,6 +621,7 @@ class WorkerEntry {
 				entityStore.chunkComponentData[chunkId] = chunkSyncData.data
 				entityStore.chunkDirtyTicks[chunkId] = chunkSyncData.ticks
 				entityStore.chunkArchetypeDirtyTicks[chunkId] = chunkSyncData.archetypeTicks
+				entityStore.chunkMetadata[chunkId] = chunkSyncData.metadata
 			}
 		}
 	}

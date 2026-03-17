@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { playerTag, enemyTag, position, movementIntent } = ecs.getTypeIDs()
+const { playerTag, enemyTag, position, movementIntent, isPooled } = ecs.getTypeIDs()
 
 /**
  * A simple AI system that makes enemies move towards the player.
@@ -20,6 +20,7 @@ export class EnemyAISystem {
 		// A query for all enemies that are capable of moving.
 		this.enemyQuery = this.getQuery({
 			with: [enemyTag, position, movementIntent],
+			without: [isPooled],
 		})
 
 		// A singleton query to find the player.

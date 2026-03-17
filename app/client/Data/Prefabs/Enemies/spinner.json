@@ -1,5 +1,6 @@
 {
 	"components": {
+		"health": { "current": 100, "max": 100 },
 		"position": { "x": 150, "y": 150 },
 		"rotation": { "angle": 0 },
 		"scale": { "x": 1, "y": 1 },
@@ -11,7 +12,13 @@
 		"layer": { "name": "enemies" },
 		"viewable": {},
 		"tint": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0 },
-		"boxCollider": { "width": 32, "height": 32 },
-		"enemyTag": {}
+		"orientedBoxCollider": { "width": 32, "height": 32 },
+		"collisionLayer": { "group": 2 },
+		"aabb": {},
+		"collisionBuffer": {},
+		"lifecycleState": {},
+		"threatCost": {},
+		"enemyTag": {},
+		"spinnerTag": {}
 	}
 }

@@ -1,3 +1,5 @@
+import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
+
 const ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES = 4096 // 4KB page for component IDs
 const ARCHETYPE_STORE_PAGE_SIZE_IN_U16 = ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES / Uint16Array.BYTES_PER_ELEMENT
 
@@ -26,6 +28,7 @@ export class ChunkView {
 		this.archetypeId = -1
 		this.entities = null
 		this.componentData = null
+		this.metadata = null
 		this._lastTick = -1
 		this._componentIndexMap = new Map()
 	}
@@ -41,6 +44,7 @@ export class ChunkView {
 		this.size = this.entityStore.chunkSizes[chunkId]
 		this.archetypeId = this.entityStore.chunkArchetypeIds[chunkId]
 		this.componentData = this.entityStore.chunkComponentData[chunkId]
+		this.metadata = this.entityStore.chunkMetadata[chunkId]
 		this.entities = this.componentData.entities
 		this._buildComponentIndexMap()
 	}
@@ -98,6 +102,151 @@ export class ChunkView {
 	 */
 	getComponent(typeId) {
 		return this.componentData[typeId]
+	}
+
+	/**
+	 * Scans the bitmask for an enableable component and populates a scratch buffer
+	 * with the indices of all entities for which the component is enabled.
+	 *
+	 * @param {number} componentTypeId The type ID of the component to check.
+	 * @param {Uint32Array} scratchBuffer A pre-allocated buffer to write the indices into.
+	 * @returns {number} The number of enabled entities found.
+	 */
+	getEnabledIndices(componentTypeId, scratchBuffer) {
+		if (!this.metadata) {
+			for (let i = 0; i < this.size; i++) {
+				scratchBuffer[i] = i
+			}
+			return this.size
+		}
+
+		const componentMetadata = this.metadata[componentTypeId]
+		const enabledMask = componentMetadata?.enabledMask
+
+		if (!enabledMask) {
+			// If the component is not enableable, we assume all entities that have it are enabled.
+			// This is fallback for non-enableable components.
+			for (let i = 0; i < this.size; i++) {
+				scratchBuffer[i] = i
+			}
+			return this.size
+		}
+
+		let count = 0
+		const numWords = Math.ceil(this.size / 32)
+
+		for (let i = 0; i < numWords; i++) {
+			let bits = enabledMask[i]
+			if (bits === 0) continue // The "Fast-Skip" (32 entities at once)
+
+			const offset = i << 5
+			// "Gather" loop
+			while (bits !== 0) {
+				const t = bits & -bits // Isolate lowest set bit
+				const indexInWord = 31 - Math.clz32(t)
+				const entityIndex = offset | indexInWord
+
+				// Final check to ensure we don't read past the actual chunk size
+				if (entityIndex >= this.size) break
+
+				scratchBuffer[count++] = entityIndex
+				bits ^= t // Clear the bit and repeat
+			}
+		}
+		return count
+	}
+
+	/**
+	 * Scans the dirty bitmask history for a tracked component and populates a scratch buffer
+	 * with the indices of all entities that have changed between the `lastTick` and the
+	 * current frame's tick.
+	 *
+	 * @param {number} componentTypeId The type ID of the component to check.
+	 * @param {number} lastTick The last tick the calling system ran.
+	 * @param {Uint32Array} scratchBuffer A pre-allocated buffer to write the indices into.
+	 * @returns {number} The number of changed entities found.
+	 */
+	getChangedIndices(componentTypeId, lastTick, scratchBuffer) {
+		const dirtyMasks = this.metadata?.[componentTypeId]?.dirtyMasks;
+
+		if (!dirtyMasks) {
+			// If the component is not tracked, we cannot determine changes.
+			// Returning 0 is the safest behavior, as a reactive system should not
+			// run if its tracked component doesn't support tracking.
+			return 0
+		}
+
+		const currentTick = this._lastTick // The Query sets this via _setLastTick
+		const numWords = Math.ceil(this.entityStore.chunkCapacities[this.chunkId] / 32)
+
+		// Handle history overflow using the Saturated History model.
+		const tickDelta = currentTick - lastTick
+		let startTick;
+		if (tickDelta >= DIRTY_HISTORY_LENGTH) {
+			// If overflowed, we start from the oldest available (and saturated) tick in the history.
+			startTick = currentTick - DIRTY_HISTORY_LENGTH + 1
+		} else {
+			startTick = lastTick + 1
+		}
+		const endTick = currentTick
+
+		if (startTick > endTick) return 0 // No new ticks to process.
+
+		let count = 0
+		for (let wordIndex = 0; wordIndex < numWords; wordIndex++) {
+			let effectiveMask = 0
+
+			// Accumulate changes over the time window.
+			for (let tick = startTick; tick <= endTick; tick++) {
+				const frameIndex = tick % DIRTY_HISTORY_LENGTH
+				const finalWordIndex = frameIndex * numWords + wordIndex
+				// Use Atomics.load for safety, as the maintenance job might be writing to these buffers.
+				effectiveMask |= Atomics.load(dirtyMasks, finalWordIndex)
+			}
+
+			if (effectiveMask === 0) continue // Fast-skip
+
+			// Gather indices from the effective mask.
+			const offset = wordIndex << 5
+			while (effectiveMask !== 0) {
+				const t = effectiveMask & -effectiveMask // Isolate lowest set bit
+				const indexInWord = 31 - Math.clz32(t)
+				const entityIndex = offset | indexInWord
+
+				if (entityIndex >= this.size) break
+
+				scratchBuffer[count++] = entityIndex
+				effectiveMask ^= t // Clear the bit
+			}
+		}
+
+		return count
+	}
+
+	/**
+	 * Marks a specific entity within this chunk as dirty for a given component and tick.
+	 * This is the immediate-mode, high-performance API for use inside kernels.
+	 * It updates both the narrow-phase bitmask and the broad-phase high-water mark.
+	 * @param {number} indexInChunk The entity's index within this chunk.
+	 * @param {number} typeId The component type ID to mark.
+	 * @param {number} tick The current game tick.
+	 */
+	markEntityDirty(indexInChunk, typeId, tick) {
+		const componentMetadata = this.metadata?.[typeId]
+		const dirtyMasks = componentMetadata?.dirtyMasks
+
+		if (dirtyMasks) {
+			const wordsPerFrame = Math.ceil(this.entityStore.chunkCapacities[this.chunkId] / 32)
+			const frameIndex = tick % DIRTY_HISTORY_LENGTH
+			const wordIndexInFrame = indexInChunk >>> 5
+			const bitMask = 1 << (indexInChunk & 31)
+			const finalWordIndex = frameIndex * wordsPerFrame + wordIndexInFrame
+
+			Atomics.or(dirtyMasks, finalWordIndex, bitMask)
+		}
+
+		// Always update the broad-phase tick.
+		this.markDirty(typeId, tick)
 	}
 
 	/**

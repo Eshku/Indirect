@@ -38,6 +38,7 @@ export const componentNameToTypeID = new Map() // Maps lowercase name to typeID
 
 export const MAX_COMPONENTS = 256
 export const EMPTY_BITMASK = 0n
+export const DIRTY_HISTORY_LENGTH = 64
 
 export let nextComponentTypeID = 0
 export const setNextComponentTypeID = id => (nextComponentTypeID = id)

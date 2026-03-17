@@ -79,6 +79,51 @@ export class CommandBuffer {
 	}
 
 	/**
+	 * Records a command to set multiple components' data on an entity using a single pre-compiled payload.
+	 * This is more efficient than calling `setComponentData` multiple times for the same entity.
+	 * Assumes the components already exist.
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {{archetypeId: number, data: ArrayBuffer}} payload The pre-compiled payload from `payloadCompiler.compile`.
+	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
+	 */
+	setComponentsData(entityId, payload, layer = 0) {
+		const offset = this.rawBuffer.offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(OpCodes.SET_COMPONENTS_DATA)
+		this.rawBuffer.writeU64(entityId)
+		// The archetypeId tells the executor which components are packed in the data buffer.
+		this.rawBuffer.writeU16(payload.archetypeId)
+		this.rawBuffer.writeU16(payload.data.byteLength)
+		this.rawBuffer.writeBuffer(payload.data)
+
+		const length = this.rawBuffer.offset - offset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2) // Same sort key as setComponentData
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
+	 * Records a command to set multiple components' data on an entity silently (without marking dirty).
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {{archetypeId: number, data: ArrayBuffer}} payload The pre-compiled payload.
+	 * @param {number} [layer=0] - Execution layer.
+	 */
+	setComponentsDataSilent(entityId, payload, layer = 0) {
+		const offset = this.rawBuffer.offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(OpCodes.SET_COMPONENTS_DATA_SILENT)
+		this.rawBuffer.writeU64(entityId)
+		this.rawBuffer.writeU16(payload.archetypeId)
+		this.rawBuffer.writeU16(payload.data.byteLength)
+		this.rawBuffer.writeBuffer(payload.data)
+
+		const length = this.rawBuffer.offset - offset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2)
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
 	 * Records a command to set a component's data on an entity.
 	 * Assumes the component already exists. For performance, this is not checked here.
 	 * @param {bigint} entityId The entity to modify. * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload from `payloadCompiler.compile`.
@@ -100,6 +145,28 @@ export class CommandBuffer {
 	}
 
 	/**
+	 * Records a command to set a component's data on an entity WITHOUT marking it as dirty.
+	 * This is an advanced, "silent" update for cases like resetting values where no system reaction is desired.
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {{typeID: number, data: ArrayBuffer}} payload The pre-compiled component payload.
+	 * @param {number} [layer=0] - Execution layer.
+	 */
+	setComponentDataSilent(entityId, payload, layer = 0) {
+		const offset = this.rawBuffer.offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_DATA_SILENT)
+		this.rawBuffer.writeU64(entityId)
+		this.rawBuffer.writeU16(payload.typeID)
+		this.rawBuffer.writeU16(payload.data.byteLength)
+		this.rawBuffer.writeBuffer(payload.data)
+
+		const length = this.rawBuffer.offset - offset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2)
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
 	 * Records a command to remove a component from an entity.
 	 * @param {bigint} entityId
 	 * @param {number} componentTypeID
@@ -116,6 +183,52 @@ export class CommandBuffer {
 
 		const length = this.rawBuffer.offset - startOffset
 		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 1) // Use secondary ID to sort removes after adds
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
+	 * Records a command to mark a component as dirty for a specific tick.
+	 * The component must have `tracked: true` in its schema.
+	 * @param {bigint} entityId The entity to mark.
+	 * @param {number} componentTypeID The component's type ID.
+	 * @param {number} tick The tick to mark the component as dirty for.
+	 * @param {number} [layer=0] Execution layer.
+	 */
+	markDirty(entityId, componentTypeID, tick, layer = 0) {
+		const offset = this.rawBuffer.offset
+		const startOffset = offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(OpCodes.MARK_DIRTY)
+		this.rawBuffer.writeU64(entityId)
+		this.rawBuffer.writeU16(componentTypeID)
+		this.rawBuffer.writeU32(tick)
+
+		const length = this.rawBuffer.offset - startOffset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2)
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
+	 * Records a command to enable or disable a component's logic for an entity.
+	 * The component must have `enableable: true` in its schema.
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {number} componentTypeID The component's type ID.
+	 * @param {boolean} enabled The desired enabled state.
+	 * @param {number} [layer=0] Execution layer.
+	 */
+	setComponentEnabled(entityId, componentTypeID, enabled, layer = 0) {
+		const offset = this.rawBuffer.offset
+		const startOffset = offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_ENABLED)
+		this.rawBuffer.writeU64(entityId)
+		this.rawBuffer.writeU16(componentTypeID)
+		this.rawBuffer.writeU8(enabled ? 1 : 0)
+
+		const length = this.rawBuffer.offset - startOffset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2)
 		this.sortableBuffer.add(key, offset, length)
 	}
 

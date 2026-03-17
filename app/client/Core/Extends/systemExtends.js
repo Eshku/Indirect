@@ -21,12 +21,21 @@ export const extensions = {
 	addComponent: commandBuffer.addComponent.bind(commandBuffer),
 	addComponents: commandBuffer.addComponents.bind(commandBuffer),
 	setComponentData: commandBuffer.setComponentData.bind(commandBuffer),
+	setComponentDataSilent: commandBuffer.setComponentDataSilent.bind(commandBuffer),
+	setComponentsData: commandBuffer.setComponentsData.bind(commandBuffer),
+	setComponentsDataSilent: commandBuffer.setComponentsDataSilent.bind(commandBuffer),
+	setComponentEnabled: commandBuffer.setComponentEnabled.bind(commandBuffer),
 	removeComponent: commandBuffer.removeComponent.bind(commandBuffer),
 	destroyEntity: commandBuffer.destroyEntity.bind(commandBuffer),
 	destroyEntitiesInChunk: commandBuffer.destroyEntitiesInChunk.bind(commandBuffer),
 	createEntity: commandBuffer.createEntity.bind(commandBuffer),
 	createEntities: commandBuffer.createEntities.bind(commandBuffer),
 	instantiate: commandBuffer.instantiate.bind(commandBuffer),
+
+	// Advanced API: Manually marks a component as dirty.
+	// Most changes are tracked automatically via `setComponentData`. This is only needed
+	// for indirect changes (e.g., a `Hierarchy` component whose child is destroyed).
+	markDirty: commandBuffer.markDirty.bind(commandBuffer),
 
 	//! Use only for tests / debug / when nessesary.
 	flush: commandBuffer.flush.bind(commandBuffer),

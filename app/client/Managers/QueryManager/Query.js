@@ -1,22 +1,3 @@
-/**
- * Represents a declarative query for entities with a specific set of components.
- *
- * --- ARCHITECTURAL NOTE on Query Design (Unity IJobChunk-Style) ---
- *
- * Design of our query system is inspired model used in
- * Unity's Data-Oriented Technology Stack (DOTS).
- *
- * 1.  **A Single, Consistent API**: `query.iter()` method is single entry point
- *     for all iteration. It yields each **Chunk** of entities that match query's
- *     structural definition. A Chunk is a small, cache-friendly block of entities.
- *
- * 2.  **Unified Inner Loop**: Systems iterate over chunks and then over entities
- *     within them. This allows for a perfectly consistent inner loop, regardless of
- *     whether the query is reactive or not.
- *
- *
- */
-
 import { ChunkView } from './ChunkView.js'
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 
@@ -57,6 +38,7 @@ export class Query {
 		this.id = id
 		this.queryManager = queryManager
 		this.iterationLastTick = null
+		this.iterationCurrentTick = null
 
 		// --- DX Improvement: Normalize single values to arrays ---
 		const normalize = comps => (comps ? (Array.isArray(comps) ? comps : [comps]) : [])
@@ -114,8 +96,9 @@ export class Query {
 
 	*_iterChangedArchetypes() {
 		const lastTick = this.iterationLastTick
+		const currentTick = this.iterationCurrentTick
 
-		this._chunkView._setLastTick(lastTick)
+		this._chunkView._setLastTick(currentTick)
 
 		for (let i = 0; i < this.matchingChunkIds.length; i++) {
 			const chunkId = this.matchingChunkIds[i]
@@ -127,7 +110,7 @@ export class Query {
 				if (!reactiveIndices || !archetypeDirtyTicks) continue
 
 				let isDirtyForQuery = false
-				// This is the core optimization: we only check the few component types this query cares about.
+
 				for (const index of reactiveIndices) {
 					if (Atomics.load(archetypeDirtyTicks, index) > lastTick) {
 						isDirtyForQuery = true

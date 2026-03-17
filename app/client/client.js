@@ -55,32 +55,26 @@ async function loadAtlas(atlasName) {
 }
 
 const preload = async () => {
-	// Load our procedurally generated texture atlas
 	await loadAtlas('atlas')
 
-	await ecs.prefabManager.preload(['player', 'spinner', 'cursor', 'playerProjectile'])
+	await ecs.prefabManager.preload(['player', 'spinner', 'cursor', 'playerProjectile', 'spawnDirector'])
 }
 
-const setupPlayer = async () => {
+const setupEntities = async () => {
 	ecs.instantiate('player')
-}
 
-const setupCursor = async () => {
-	// Instantiate the data-only cursor entity so systems can find it.
 	ecs.instantiate('cursor')
-}
 
-const setupTestEnemies = async () => {
 	ecs.instantiate('spinner')
+
+	ecs.instantiate('spawnDirector')
 }
 
 Logger.start('Setup')
 
 setupLayers()
 await preload()
-await setupPlayer()
-await setupCursor()
-await setupTestEnemies()
+await setupEntities()
 
 await ecs.systemManager.initAll()
 

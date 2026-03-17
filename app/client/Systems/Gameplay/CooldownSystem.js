@@ -17,15 +17,28 @@ export class CooldownSystem {
 		this.query = this.getQuery({
 			with: [weaponCooldown],
 		})
+		this.scratchBuffer = new Uint32Array(4096) // Max chunk capacity
 	}
 
 	update({ deltaTime, currentTick }) {
 		for (const chunk of this.query.iter()) {
 			const timers = chunk.componentData[weaponCooldown].timer
+			const enabledCount = chunk.getEnabledIndices(weaponCooldown, this.scratchBuffer)
 
-			for (let i = 0; i < chunk.size; i++) {
-				if (timers[i] > 0) {
-					timers[i] = Math.max(0, timers[i] - deltaTime)
+			// Only iterate over entities whose cooldown component is enabled.
+			for (let i = 0; i < enabledCount; i++) {
+				const indexInChunk = this.scratchBuffer[i]
+
+				// This check is slightly redundant if components are always disabled
+				// when the timer hits zero, but it's a good defensive measure.
+				if (timers[indexInChunk] > 0) {
+					timers[indexInChunk] = Math.max(0, timers[indexInChunk] - deltaTime)
+
+					if (timers[indexInChunk] === 0) {
+						// The cooldown has finished. Disable the component so we don't
+						// process it again until it's reset.
+						this.setComponentEnabled(chunk.entities[indexInChunk], weaponCooldown, false)
+					}
 				}
 			}
 		}

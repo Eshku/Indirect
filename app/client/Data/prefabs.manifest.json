@@ -2,6 +2,9 @@
 	"player": {
 		"path": "client/Data/Prefabs/Playable/Player.json"
 	},
+	"spawnDirector": {
+		"path": "client/Data/Prefabs/Directors/SpawnDirector.json"
+	},
 	"spinner": {
 		"path": "client/Data/Prefabs/Enemies/spinner.json"
 	},

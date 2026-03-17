@@ -1,6 +1,6 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
-const LIFECYCLE = ecs.componentManager.getConstantsForProperty('LifecycleState', 'flags')
+const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 const {
 	playerTag,
 	shootingIntent,
@@ -15,6 +15,7 @@ const {
 	playerProjectile,
 	isPooled,
 	range,
+	damage,
 } = ecs.getTypeIDs()
 
 /**
@@ -74,32 +75,19 @@ export class PlayerWeaponSystem {
 		this.projectilePayload = payload
 		this.projectileMutators = mutators
 
-		// Pre-compile payloads for reactivating a pooled orb.
-		const { payload: reactivatePayload, mutators: reactivateMutators } = this.compile(lifecycleState, {
-			flags: LIFECYCLE.ACTIVE,
-			dirtyTick: 0,
+		// Pre-compile a single payload to reset all necessary components on a reused projectile.
+		// This is much more efficient than sending multiple `setComponentData` commands.
+		const { payload: resetProjectilePayload, mutators: resetProjectileMutators } = this.compile({
+			lifecycleState: { flags: LIFECYCLE.ACTIVE },
+			distanceTraveled: { value: 0 },
+			owner: {}, // for mutator
+			position: {}, // for mutator
+			velocity: {}, // for mutator
+			range: {}, // for mutator
+			damage: {}, // for mutator
 		})
-		this.reactivatePayload = reactivatePayload
-		this.reactivateMutators = reactivateMutators
-		this.resetDistancePayload = this.compile(distanceTraveled, { value: 0 }).payload
-
-		// Pre-compile payloads and mutators for dynamic data to be set on reactivated orbs.
-		// This is the correct, performant way to handle dynamic data with commands.
-		const { payload: ownerPayload, mutators: ownerMutators } = this.compile(owner)
-		this.ownerPayload = ownerPayload
-		this.ownerMutators = ownerMutators
-
-		const { payload: positionPayload, mutators: positionMutators } = this.compile(position)
-		this.positionPayload = positionPayload
-		this.positionMutators = positionMutators
-
-		const { payload: velocityPayload, mutators: velocityMutators } = this.compile(velocity)
-		this.velocityPayload = velocityPayload
-		this.velocityMutators = velocityMutators
-
-		const { payload: rangePayload, mutators: rangeMutators } = this.compile(range)
-		this.rangePayload = rangePayload
-		this.rangeMutators = rangeMutators
+		this.resetProjectilePayload = resetProjectilePayload
+		this.resetProjectileMutators = resetProjectileMutators
 
 		// Pre-compile a payload and mutator for resetting weapon cooldown.
 		const { payload: cooldownPayload, mutators: cooldownMutators } = this.compile(weaponCooldown)
@@ -134,6 +122,7 @@ export class PlayerWeaponSystem {
 			baseProjectileSpeed: playerStats.speed,
 			inheritanceFactor: playerStats.velocityInheritance,
 			projectileRange: playerStats.range,
+			projectileDamage: playerStats.damage,
 		}
 
 		// Calculate firing vector from player to the cursor.
@@ -143,14 +132,12 @@ export class PlayerWeaponSystem {
 		fireData.normFireX = fireLen > 0 ? fireDirX / fireLen : 0 // Default to no x-movement
 		fireData.normFireY = fireLen > 0 ? fireDirY / fireLen : -1 // Default to firing "up" if cursor is on player
 
-		// --- Hybrid Velocity Calculation ---
 		// Project player's velocity onto firing direction vector using dot product.
 		const inheritedSpeed =
 			(fireData.playerVx * fireData.normFireX + fireData.playerVy * fireData.normFireY) * fireData.inheritanceFactor
 
 		fireData.finalSpeed = Math.max(0, fireData.baseProjectileSpeed + inheritedSpeed)
 
-		// --- Pooling Logic: Reuse first, then create ---
 		const availablePooledProjectile = this.findAvailableProjectile()
 		if (availablePooledProjectile) {
 			this.reuseProjectile(availablePooledProjectile, fireData, currentTick)
@@ -161,6 +148,8 @@ export class PlayerWeaponSystem {
 		// Reset cooldown using a command.
 		this.cooldownMutators.weaponCooldown.timer[0] = playerStats.fireRate
 		this.setComponentData(this.playerId, this.cooldownPayload)
+		// Enable the component so the CooldownSystem will process it.
+		this.setComponentEnabled(this.playerId, weaponCooldown, true)
 	}
 
 	findAvailableProjectile() {
@@ -171,25 +160,19 @@ export class PlayerWeaponSystem {
 	//! Once we have upgrades and whatnot to see how much we actually pool
 
 	reuseProjectile(entityId, fireData, currentTick) {
-		this.ownerMutators.owner.entityId[0] = fireData.playerId
-		this.positionMutators.position.x[0] = fireData.playerX
-		this.positionMutators.position.y[0] = fireData.playerY
-		this.velocityMutators.velocity.x[0] = fireData.normFireX * fireData.finalSpeed
-		this.velocityMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
-		this.rangeMutators.range.value[0] = fireData.projectileRange
+		// Use the single mutator object to update all dynamic data for the reused projectile.
+		this.resetProjectileMutators.owner.entityId[0] = fireData.playerId
+		this.resetProjectileMutators.position.x[0] = fireData.playerX
+		this.resetProjectileMutators.position.y[0] = fireData.playerY
+		this.resetProjectileMutators.velocity.x[0] = fireData.normFireX * fireData.finalSpeed
+		this.resetProjectileMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
+		this.resetProjectileMutators.range.value[0] = fireData.projectileRange
+		this.resetProjectileMutators.damage.value[0] = fireData.projectileDamage
 
-		this.reactivateMutators.lifecycleState.dirtyTick[0] = currentTick + 1
 		// This is the structural change to bring the entity back into the "active" world.
 		this.removeComponent(entityId, isPooled)
-
-		// These commands update the entity's state for its new life.
-		// Align all to happen at the next frame with remove Component command.
-		this.setComponentData(entityId, this.reactivatePayload) // Sets lifecycle to ACTIVE
-		this.setComponentData(entityId, this.resetDistancePayload)
-		this.setComponentData(entityId, this.ownerPayload)
-		this.setComponentData(entityId, this.positionPayload)
-		this.setComponentData(entityId, this.velocityPayload)
-		this.setComponentData(entityId, this.rangePayload)
+		// This single command updates all necessary components for the projectile's new life.
+		this.setComponentsData(entityId, this.resetProjectilePayload)
 	}
 
 	createNewProjectile(fireData, currentTick) {
@@ -199,10 +182,7 @@ export class PlayerWeaponSystem {
 		this.projectileMutators.velocity.x[0] = fireData.normFireX * fireData.finalSpeed
 		this.projectileMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
 		this.projectileMutators.range.value[0] = fireData.projectileRange
-
-		this.projectileMutators.lifecycleState.dirtyTick[0] = currentTick + 1 //! technically redundent, mostly for consistency
-
-		this.projectileMutators.spriteDescriptor.dirtyTick[0] = currentTick + 1
+		this.projectileMutators.damage.value[0] = fireData.projectileDamage
 
 		this.createEntity(this.projectilePayload)
 	}

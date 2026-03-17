@@ -1,9 +1,15 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 const { componentManager } = ecs
-
 const { testManager } = await import(`@client/Managers/TestManager/TestManager.js`)
 const { describe, it, expect } = await import(`@client/Managers/TestManager/TestAPI.js`)
+
+// Imports needed for the new test
+const { ChunkView } = await import('@managers/QueryManager/ChunkView.js')
+import { DIRTY_HISTORY_LENGTH } from '@managers/ComponentManager/ComponentSchema.js'
+const { entityStore } = await import('@managers/EntityManager/EntityManager.js')
+
+const { enableableTestComponent, trackedTestComponent } = ecs.getTypeIDs()
 
 /**
  * A system dedicated to testing the functionality of the SchemaParser and data layer.
@@ -11,19 +17,6 @@ const { describe, it, expect } = await import(`@client/Managers/TestManager/Test
  */
 export class SchemaTestSystem {
 	constructor() {
-		const {
-			primitiveComponent: primitiveComponentID,
-			stringComponent: stringComponentID,
-			enumComponent: enumComponentID,
-			bitmaskComponent: bitmaskComponentID,
-			flatArrayComponent: flatArrayComponentID,
-			rpnComponent: rpnComponentID,
-			componentRefComponent: componentRefComponentID,
-			entityRefArrayComponent: entityRefArrayComponentID,
-		} = componentManager.getTypeIDs()
-
-		// Get the canonical string names for the high-level ECS API.
-		const componentNames = Object.keys(componentManager.getTypeIDs())
 		this.testConfig = {
 			primitiveTypes: true,
 			internedStrings: true,
@@ -38,10 +31,14 @@ export class SchemaTestSystem {
 			flatArrayEntities: true,
 			componentRef: true,
 			rpn: true,
+			enableable: true,
+			tracked: true,
 		}
 	}
 
 	async init() {
+		// Get component IDs after they have been registered.
+
 		describe('Component Schema System', () => {
 			if (this.testConfig.primitiveTypes) {
 				it('should correctly store and retrieve all primitive types', () => {
@@ -273,6 +270,207 @@ export class SchemaTestSystem {
 					expect(retrievedData.formulas_formulaLengths.length).toBe(1)
 
 					ECS.destroyEntity(entityId)
+				})
+			}
+
+			if (this.testConfig.enableable) {
+				it('should correctly toggle and query enableable components', async () => {
+					const entityId = ECS.createEntity({ enableableTestComponent: { value: 1.0 } })
+					// We need to flush to ensure the entity is created and located.
+					this.flush()
+
+					const location = ecs.entityManager.getEntityLocation(entityId)
+					expect(location).toBeDefined()
+
+					const chunkView = new ChunkView(entityStore)
+					chunkView.setChunk(location.chunkId)
+					const scratchBuffer = new Uint32Array(chunkView.size)
+
+					// 1. Check initial state (should be enabled by default thanks to our fix)
+					let enabledCount = chunkView.getEnabledIndices(enableableTestComponent, scratchBuffer)
+					expect(enabledCount).toBe(1)
+					expect(scratchBuffer[0]).toBe(location.indexInChunk)
+
+					// 2. Disable the component
+					this.setComponentEnabled(entityId, enableableTestComponent, false)
+					this.flush() // Execute the command
+
+					// 3. Check disabled state
+					// The chunk view is still valid as the entity has not moved.
+					enabledCount = chunkView.getEnabledIndices(enableableTestComponent, scratchBuffer)
+					expect(enabledCount).toBe(0)
+
+					// 4. Re-enable the component
+					this.setComponentEnabled(entityId, enableableTestComponent, true)
+					this.flush()
+
+					// 5. Check enabled state again
+					enabledCount = chunkView.getEnabledIndices(enableableTestComponent, scratchBuffer)
+					expect(enabledCount).toBe(1)
+					expect(scratchBuffer[0]).toBe(location.indexInChunk)
+
+					ECS.destroyEntity(entityId)
+				})
+			}
+
+			if (this.testConfig.tracked) {
+				describe('Tracked Components', () => {
+					it('should correctly track and query dirty components', async () => {
+						const entityId = ECS.createEntity({ trackedTestComponent: { value: 1.0 } })
+						this.flush() // Ensure entity is created
+
+						const location = ecs.entityManager.getEntityLocation(entityId)
+						expect(location).toBeDefined()
+
+						const chunkView = new ChunkView(entityStore)
+						chunkView.setChunk(location.chunkId)
+						const scratchBuffer = new Uint32Array(chunkView.size)
+
+						// --- Test 1: Immediate-mode marking ---
+						chunkView.markEntityDirty(location.indexInChunk, trackedTestComponent, 1)
+						chunkView._setLastTick(1) // Simulate current tick for getChangedIndices
+						let changedCount = chunkView.getChangedIndices(trackedTestComponent, 0, scratchBuffer)
+						expect(changedCount).toBe(1, 'Immediate mark at tick 1 should be detected when querying (0, 1]')
+						expect(scratchBuffer[0]).toBe(location.indexInChunk)
+
+						// --- Test 2: No changes since last tick ---
+						chunkView._setLastTick(1) // current tick is 1
+						changedCount = chunkView.getChangedIndices(trackedTestComponent, 1, scratchBuffer)
+						expect(changedCount).toBe(0, 'Should not detect changes from the same tick')
+
+						// --- Test 3: Deferred-mode marking ---
+						this.markDirty(entityId, trackedTestComponent, 3) // Mark for a future tick
+						this.flush() // Execute the command
+						chunkView._setLastTick(3)
+						changedCount = chunkView.getChangedIndices(trackedTestComponent, 2, scratchBuffer)
+						expect(changedCount).toBe(1, 'Deferred mark at tick 3 should be detected when querying (2, 3]')
+						expect(scratchBuffer[0]).toBe(location.indexInChunk)
+
+						// --- Test 4: Querying over a window of time ---
+						chunkView.markEntityDirty(location.indexInChunk, trackedTestComponent, 5)
+						chunkView._setLastTick(10) // Simulate time has passed to tick 10
+						changedCount = chunkView.getChangedIndices(trackedTestComponent, 4, scratchBuffer)
+						expect(changedCount).toBe(1, 'Should detect change at tick 5 within a window of (4, 10]')
+						expect(scratchBuffer[0]).toBe(location.indexInChunk)
+
+						// --- Test 5: History Overflow Read Logic (Hit Case) ---
+						// This test verifies that the read logic correctly calculates the start
+						// of the historical window when an overflow occurs.
+						chunkView._setLastTick(4 + DIRTY_HISTORY_LENGTH) // currentTick = 68. lastTick = 4. tickDelta = 64.
+						// This triggers the overflow condition. The history window to check should become [5, 68].
+						// Our change at tick 5 should be the very first thing it finds.
+						changedCount = chunkView.getChangedIndices(trackedTestComponent, 4, scratchBuffer)
+						expect(changedCount).toBe(1, 'Should detect change at the start of an overflowed history window')
+						expect(scratchBuffer[0]).toBe(location.indexInChunk)
+
+						ECS.destroyEntity(entityId)
+					})
+
+					it('should preserve changes on overflow via Saturated History', async () => {
+						const entityId = ECS.createEntity({ trackedTestComponent: { value: 1.0 } })
+						this.flush()
+
+						const location = ecs.entityManager.getEntityLocation(entityId)
+						const chunkView = new ChunkView(entityStore)
+						chunkView.setChunk(location.chunkId)
+						const scratchBuffer = new Uint32Array(chunkView.size)
+						const wordsPerFrame = Math.ceil(chunkView.capacity / 32)
+						const dirtyMasks = entityStore.chunkMetadata[location.chunkId][trackedTestComponent].dirtyMasks
+
+						/**
+						 * This is a helper function that simulates the core logic of the end-of-frame maintenance job.
+						 * It's included here to test the "Saturated History" feature without needing to run the full scheduler.
+						 * It performs two actions:
+						 * 1. Saturate: It copies the bitmask from the oldest frame into the next-oldest frame.
+						 * 2. Clear: It clears the bitmask for the frame that is about to be used.
+						 */
+						const simulateMaintenanceJobForTick = currentTick => {
+							const oldestTickToOverwrite = currentTick + 1 - DIRTY_HISTORY_LENGTH
+							const saturatingTick = oldestTickToOverwrite + 1
+							const tickToClear = currentTick + 1
+
+							const oldestFrameIndex = oldestTickToOverwrite % DIRTY_HISTORY_LENGTH
+							const saturatingFrameIndex = saturatingTick % DIRTY_HISTORY_LENGTH
+							const clearFrameIndex = tickToClear % DIRTY_HISTORY_LENGTH
+
+							const oldestSliceStart = oldestFrameIndex * wordsPerFrame
+							const saturatingSliceStart = saturatingFrameIndex * wordsPerFrame
+							const clearSliceStart = clearFrameIndex * wordsPerFrame
+
+							// Saturate: OR the oldest data into the next-oldest slot
+							for (let i = 0; i < wordsPerFrame; i++) {
+								const oldValue = Atomics.load(dirtyMasks, oldestSliceStart + i)
+								if (oldValue !== 0) {
+									Atomics.or(dirtyMasks, saturatingSliceStart + i, oldValue)
+								}
+							}
+
+							// Clear: Zero out the slot for the upcoming frame
+							dirtyMasks.fill(0, clearSliceStart, clearSliceStart + wordsPerFrame)
+						}
+
+						// 1. Mark a change at an early tick.
+						const changeTick = 5
+						chunkView.markEntityDirty(location.indexInChunk, trackedTestComponent, changeTick)
+
+						// 2. Simulate the passage of time by running the maintenance job repeatedly.
+						// We run it up to the point where the data from tick 5 would have been saturated
+						// all the way into the slot for tick 37.
+						// The job at tick (5 + 63) = 68 saturates 5->6.
+						// The job at tick (6 + 63) = 69 saturates 6->7.
+						// ...
+						// The job at tick (36 + 63) = 99 saturates 36->37. 
+						for (let tick = changeTick + DIRTY_HISTORY_LENGTH - 1; tick <= 36 + DIRTY_HISTORY_LENGTH - 1; tick++) {
+							simulateMaintenanceJobForTick(tick)
+						}
+
+						// 3. Now, query from a time far in the future, where the original change at tick 5
+						// is long outside the history window.
+						const queryTick = 100
+						chunkView._setLastTick(queryTick)
+
+						// Query for changes since tick 4. This will trigger an overflow read.
+						// The query's effective start tick will be (100 - 64 + 1) = 37.
+						// Because we simulated the maintenance job, the change from tick 5 should now
+						// be present in the bitmask for tick 37.
+						const changedCount = chunkView.getChangedIndices(trackedTestComponent, 4, scratchBuffer)
+
+						// This is the key assertion. The change from tick 5 should have been preserved.
+						expect(changedCount).toBe(1, 'Saturated change should be detected on history overflow')
+						expect(scratchBuffer[0]).toBe(location.indexInChunk)
+
+						ECS.destroyEntity(entityId)
+					})
+
+					it('should NOT mark component as dirty when using setComponentDataSilent', () => {
+						const { payload } = this.compile(trackedTestComponent, { value: 999 })
+
+						// 1. Create the entity. This is immediate and marks the component dirty for the current tick.
+						const entityId = ECS.createEntity({ trackedTestComponent: { value: 1.0 } })
+						const creationTick = ecs.systemManager.currentTick
+
+						// 2. Queue the silent set command.
+						this.setComponentDataSilent(entityId, payload)
+
+						// 3. Flush the command buffer. This executes the silent set.
+						this.flush()
+
+						// 4. Setup the chunk view for verification.
+						const location = ecs.entityManager.getEntityLocation(entityId)
+						const chunkView = new ChunkView(entityStore)
+						chunkView.setChunk(location.chunkId)
+						const scratchBuffer = new Uint32Array(chunkView.size)
+
+						// 5. VERIFICATION: Check for changes in a window that *excludes* the creation tick.
+						const nextTick = creationTick + 1
+						chunkView._setLastTick(nextTick) // Simulate time is now tick 2
+						const changedCount = chunkView.getChangedIndices(trackedTestComponent, creationTick, scratchBuffer)
+						expect(changedCount).toBe(0, 'setComponentDataSilent should not trigger change detection in a subsequent tick window')
+
+						// Verify that the data was, in fact, updated
+						const componentData = ECS.getComponent(entityId, 'trackedTestComponent')
+						expect(componentData.value).toBe(999)
+					})
 				})
 			}
 		})
