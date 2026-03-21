@@ -35,6 +35,16 @@
 		 bypassing electron bridge overhead for function calls -->
 
 		<script src="./../../node_modules/pixi.js/dist/pixi.min.js"></script>
+
+		<script>
+
+			//Prevent pixi from creating (and using) workers.
+			;(async () => {
+				await PIXI.Assets.init({ preferWorkers: false })
+
+				PIXI.loadTextures.config.preferWorkers = false
+			})()
+		</script>
 		<script src="./../../node_modules/xxhash-wasm/umd/xxhash-wasm.js"></script>
 
 		<script src="./client.js" type="module"></script>

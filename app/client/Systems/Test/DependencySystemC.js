@@ -24,13 +24,11 @@ export class DependencySystemC {
 		this.query = this.getQuery({ with: [position, velocity, dependencyTestTag] })
 	}
 
-	schedule() {
-		const jobs = []
-		const chunkIds = this.query.getChunks()
-		for (const chunkId of chunkIds) {
-			jobs.push({ kernel: dependencyC, payload: chunkId })
-		}
-		return jobs
+	/**
+	 * @param {import('../../Managers/SystemManager/JobWriter.js').JobWriter} jobWriter
+	 */
+	schedule(jobWriter) {
+		jobWriter.scheduleForEachChunk(this.query, dependencyC)
 	}
 
 	destroy() {

@@ -255,6 +255,8 @@ export class WorkStealingDeque {
 		const h = Atomics.load(this.queueStates, this.headOffset)
 		const t = Atomics.load(this.queueStates, this.tailOffset)
 
+		
+
 		const size = t - h
 		if (size <= 0n) {
 			return false
@@ -264,8 +266,7 @@ export class WorkStealingDeque {
 		const numToSteal = size > 1n ? (size + 1n) / 2n : 1n
 		out_stolenJobs.length = 0
 
-		// Steal one-by-one. This is slower but guarantees correctness by avoiding
-		// the race condition inherent in the previous batch-claim approach.
+
 		for (let i = 0; i < numToSteal; i++) {
 			const job = this.steal()
 			if (job !== this.NO_JOB_AVAILABLE) {

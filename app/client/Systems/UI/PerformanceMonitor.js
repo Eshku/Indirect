@@ -82,7 +82,6 @@ export class PerformanceMonitor {
 	init() {
 		this.systemManager = systemManager
 		this._createPanel()
-		this.systemManager.enablePerformanceTimings()
 		// @ts-ignore
 		window.performanceMonitor = this
 	}
@@ -99,12 +98,22 @@ export class PerformanceMonitor {
 	updateTimings(deltaTime) {
 		this.listUpdateAccumulator += deltaTime
 		const now = performance.now()
-		for (const systemName in this.systemManager.systemTimings) {
+		// The systemTimings object is now keyed by numeric system ID for real systems,
+		// and by string name for pseudo-systems like 'Render' and 'Command Buffer'.
+		for (const key in this.systemManager.systemTimings) {
+			let systemName
+			const numericKey = Number(key)
+			if (Number.isNaN(numericKey)) {
+				systemName = key // 'Render', 'Command Buffer'
+			} else {
+				systemName = this.systemManager.getSystemNameById(numericKey)
+			}
+
 			// If the system has been explicitly untracked, ignore its timings.
 			if (this.untrackedSystems.has(systemName)) {
 				continue
 			}
-			const timingData = this.systemManager.systemTimings[systemName]
+			const timingData = this.systemManager.systemTimings[key]
 
 			if (!this.history[systemName]) {
 				this.history[systemName] = []
@@ -882,8 +891,6 @@ export class PerformanceMonitor {
 	}
 
 	destroy() {
-		this.systemManager.disablePerformanceTimings()
-
 		const styleId = 'performance-monitor-styles'
 		const styleElement = document.getElementById(styleId)
 		if (styleElement) {

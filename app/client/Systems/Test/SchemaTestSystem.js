@@ -90,7 +90,7 @@ export class SchemaTestSystem {
 
 			if (this.testConfig.enums) {
 				it('should correctly store and retrieve enum values', () => {
-					const stateConstants = componentManager.getConstantsForProperty('EnumComponent', 'state')
+					const stateConstants = ecs.getConstantsForProperty('EnumComponent', 'state')
 					const initialData = { state: stateConstants.JUMPING } // Use numeric value
 					const entityId = ECS.createEntity({ EnumComponent: initialData })
 
@@ -105,7 +105,7 @@ export class SchemaTestSystem {
 
 			if (this.testConfig.enumConstants) {
 				it('should correctly retrieve enum constants via the ComponentManager', () => {
-					const stateConstants = componentManager.getConstantsForProperty('EnumComponent', 'state')
+					const stateConstants = ecs.getConstantsForProperty('EnumComponent', 'state')
 					expect(stateConstants).toBeDefined()
 					expect(stateConstants).toEqual({ IDLE: 0, RUNNING: 1, JUMPING: 2 })
 				})
@@ -113,11 +113,11 @@ export class SchemaTestSystem {
 
 			if (this.testConfig.bitmasks) {
 				it('should correctly store and retrieve bitmask values', () => {
-					const flagConstants = componentManager.getConstantsForProperty('BitmaskComponent', 'flags')
+					const flagConstants = ecs.getConstantsForProperty('BitmaskComponent', 'flags')
 					const initialData = { flags: flagConstants.FLAG_A | flagConstants.FLAG_C } // Use numeric value
-					const entityId = ECS.createEntity({ BitmaskComponent: initialData })
+					const entityId = ecs.createEntity({ BitmaskComponent: initialData })
 
-					const retrievedData = ECS.getComponent(entityId, 'BitmaskComponent')
+					const retrievedData = ecs.getComponent(entityId, 'BitmaskComponent')
 
 					// The component now returns the raw numeric bitmask.
 					const expectedFlags = flagConstants.FLAG_A | flagConstants.FLAG_C
@@ -129,7 +129,7 @@ export class SchemaTestSystem {
 
 			if (this.testConfig.bitmaskConstants) {
 				it('should correctly retrieve bitmask constants via the ComponentManager', () => {
-					const flagConstants = componentManager.getConstantsForProperty('BitmaskComponent', 'flags')
+					const flagConstants = ecs.getConstantsForProperty('BitmaskComponent', 'flags')
 					expect(flagConstants).toBeDefined()
 					expect(flagConstants).toEqual({ FLAG_A: 1, FLAG_B: 2, FLAG_C: 4, FLAG_D: 8 })
 				})
@@ -155,7 +155,7 @@ export class SchemaTestSystem {
 
 			if (this.testConfig.flatArrayEnums) {
 				it('should correctly store and retrieve a flat array of enums', () => {
-					const enumArrayConstants = componentManager.getConstantsForProperty('FlatArrayComponent', 'enumArray')
+					const enumArrayConstants = ecs.getConstantsForProperty('FlatArrayComponent', 'enumArray')
 					const initialData = {
 						enumArray: [enumArrayConstants.VAL2, enumArrayConstants.VAL1], // Use numeric values
 					}

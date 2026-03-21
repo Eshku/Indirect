@@ -167,7 +167,7 @@ export class ChunkView {
 	 * @returns {number} The number of changed entities found.
 	 */
 	getChangedIndices(componentTypeId, lastTick, scratchBuffer) {
-		const dirtyMasks = this.metadata?.[componentTypeId]?.dirtyMasks;
+		const dirtyMasks = this.metadata?.[componentTypeId]?.dirtyMasks
 
 		if (!dirtyMasks) {
 			// If the component is not tracked, we cannot determine changes.
@@ -181,7 +181,7 @@ export class ChunkView {
 
 		// Handle history overflow using the Saturated History model.
 		const tickDelta = currentTick - lastTick
-		let startTick;
+		let startTick
 		if (tickDelta >= DIRTY_HISTORY_LENGTH) {
 			// If overflowed, we start from the oldest available (and saturated) tick in the history.
 			startTick = currentTick - DIRTY_HISTORY_LENGTH + 1
@@ -232,18 +232,16 @@ export class ChunkView {
 	 * @param {number} tick The current game tick.
 	 */
 	markEntityDirty(indexInChunk, typeId, tick) {
-		const componentMetadata = this.metadata?.[typeId]
-		const dirtyMasks = componentMetadata?.dirtyMasks
+		const componentMetadata = this.metadata[typeId]
+		const dirtyMasks = componentMetadata.dirtyMasks
 
-		if (dirtyMasks) {
-			const wordsPerFrame = Math.ceil(this.entityStore.chunkCapacities[this.chunkId] / 32)
-			const frameIndex = tick % DIRTY_HISTORY_LENGTH
-			const wordIndexInFrame = indexInChunk >>> 5
-			const bitMask = 1 << (indexInChunk & 31)
-			const finalWordIndex = frameIndex * wordsPerFrame + wordIndexInFrame
+		const wordsPerFrame = Math.ceil(this.entityStore.chunkCapacities[this.chunkId] / 32)
+		const frameIndex = tick % DIRTY_HISTORY_LENGTH
+		const wordIndexInFrame = indexInChunk >>> 5
+		const bitMask = 1 << (indexInChunk & 31)
+		const finalWordIndex = frameIndex * wordsPerFrame + wordIndexInFrame
 
-			Atomics.or(dirtyMasks, finalWordIndex, bitMask)
-		}
+		Atomics.or(dirtyMasks, finalWordIndex, bitMask)
 
 		// Always update the broad-phase tick.
 		this.markDirty(typeId, tick)

@@ -19,7 +19,7 @@ export function testKernel(payload, systemContext, kernelContext) {
 	const { speed, position, velocity } = systemContext
 
 	// The kernel is responsible for interpreting the payload.
-	const chunk = kernelContext.getChunkView(payload)
+	const chunk = parallel.getChunkView(payload)
 
 	// Direct data access is more performant and data-oriented than chunk.getComponent().
 	const positions = chunk.componentData[position]

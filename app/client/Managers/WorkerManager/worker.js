@@ -30,13 +30,15 @@ class WorkerEntry {
 		// --- Worker State ---
 		this.isInitialized = false
 		this.logicRegistry = {}
-		this.ChunkView = null
 		this.localDeque = null
 		this.mainThreadInbox = null
 		this.allDeques = []
-		this.chunkViewInstance = null
 		this.importFromString = null
+		this.hashFn = null // To store the h64 function
+		this.archetypeMap = null
 		this.spatialHashGrid = null
+
+		this.chunkViewPool = []
 
 		// --- Reusable Arrays to Reduce GC Pressure ---
 		// These are used in hot paths to avoid allocating new arrays on every job.
@@ -66,6 +68,7 @@ class WorkerEntry {
 		// This is now a global, read-only object for kernels.
 		self.frameContext = {}
 		this.systemContexts = {} // Static, system-specific contexts.
+		this.kernelContext = null
 
 		self.onmessage = this.handleMessage.bind(this)
 	}
@@ -119,10 +122,8 @@ class WorkerEntry {
 		entityStore.chunkMetadata = sharedData.chunkMetadata
 		this.syncChunkDeltas({ newChunks: initialChunks })
 
-		// Store the raw buffers.
 		this.jobs = jobsSAB
 		this.dependents = dependentsSAB
-		// Create reusable views to avoid allocating new TypedArray objects in hot loops.
 		this.jobsView = new Int32Array(this.jobs)
 		this.dependentsView = new Uint32Array(this.dependents)
 		this.frameState = new BigInt64Array(frameStateSAB)
@@ -144,6 +145,9 @@ class WorkerEntry {
 			const mpscQueueModuleUrl = new URL('../../Core/Algorithms/MPSCQueue.js', baseUrl)
 			const dequeModuleUrl = new URL('../../Core/Algorithms/WorkStealingDeque.js', baseUrl)
 			const componentSchemaModuleUrl = new URL('../../Managers/ComponentManager/ComponentSchema.js', baseUrl)
+			const archetypeHashMapModuleUrl = new URL('../../Core/DataStructures/SharedArchetypeHashMap.js', baseUrl)
+			const xxhashWasmModuleUrl = new URL('../../../../node_modules/xxhash-wasm/esm/xxhash-wasm.js', baseUrl)
+			const parallelAPIModuleUrl = new URL('./parallelAPI.js', baseUrl)
 
 			const spatialHashGridModuleUrl = new URL('../../Core/DataStructures/SpatialHashGrid.js', baseUrl)
 
@@ -156,6 +160,9 @@ class WorkerEntry {
 				frameStateLayoutModule,
 				spatialHashGridModule,
 				componentSchemaModule,
+				archetypeHashMapModule,
+				xxhashModule,
+				parallelAPIModule,
 			] = await Promise.all([
 				import(chunkViewModuleUrl.href),
 				import(blobUtilModuleUrl.href),
@@ -165,9 +172,11 @@ class WorkerEntry {
 				import(frameStateLayoutModuleUrl.href),
 				import(spatialHashGridModuleUrl.href),
 				import(componentSchemaModuleUrl.href),
+				import(archetypeHashMapModuleUrl.href),
+				import(xxhashWasmModuleUrl.href),
+				import(parallelAPIModuleUrl.href),
 			])
 
-			// Assign all the imported constants to the worker instance for easy access.
 			Object.assign(this, jobLayoutModule)
 			Object.assign(this, frameStateLayoutModule)
 
@@ -185,15 +194,19 @@ class WorkerEntry {
 			const { MPSCQueue } = mpscQueueModule
 			const { WorkStealingDeque, NO_JOB_AVAILABLE } = dequeModule
 			const { SpatialHashGrid } = spatialHashGridModule
-			// Assign the imported classes and functions to the worker instance.
-			this.ChunkView = ChunkView
+			const { SharedArchetypeHashMap } = archetypeHashMapModule
+			const xxhashDefault = xxhashModule.default
+			const { h64Raw } = await xxhashDefault()
+			this.hashFn = h64Raw
+
+			const { ParallelAPI } = parallelAPIModule
 			this.importFromString = importFromString
 
-			// Also assign constants from modules that aren't fully assigned.
 			this.NO_JOB_AVAILABLE = NO_JOB_AVAILABLE
 			this.DIRTY_HISTORY_LENGTH = componentSchemaModule.DIRTY_HISTORY_LENGTH
 
-			// Now that imports are confirmed, proceed with initialization.
+			this.archetypeMap = new SharedArchetypeHashMap(sharedData.archetypeMapBuffer, this.hashFn)
+
 			// Load all kernel modules.
 			for (const moduleName in kernelCode) {
 				const code = kernelCode[moduleName]
@@ -202,18 +215,15 @@ class WorkerEntry {
 				this.logicRegistry[moduleName] = kernelModule
 			}
 
-			this.chunkViewInstance = new this.ChunkView(entityStore)
-
-			// Create the worker's local instance of the SpatialHashGrid API.
-			this.spatialHashGrid = new SpatialHashGrid(spatialHashGridSABs)
-			// Make it available on the global worker scope so schedule functions can access it.
-			self.spatialHashGrid = this.spatialHashGrid
-			// Make a helper for getting a chunk view available globally.
-			// This will be part of the kernelContext object passed to kernels.
-			self.getChunkView = chunkId => {
-				this.chunkViewInstance.setChunk(chunkId)
-				return this.chunkViewInstance
+			const CHUNK_VIEW_POOL_SIZE = 8 // A reasonable pool size for complex kernels.
+			for (let i = 0; i < CHUNK_VIEW_POOL_SIZE; i++) {
+				this.chunkViewPool.push(new ChunkView(entityStore))
 			}
+
+			// Make the parallel API globally available to all kernels in this worker.
+			self.parallel = new ParallelAPI({ pool: this.chunkViewPool })
+			this.spatialHashGrid = new SpatialHashGrid(spatialHashGridSABs)
+			self.spatialHashGrid = this.spatialHashGrid // Make it available on the global worker scope so kernels can access it.
 
 			// All workers get a handle to the same MPSC queue to send jobs to the main thread.
 			this.mainThreadInbox = new MPSCQueue(mainThreadInbox)
@@ -229,6 +239,10 @@ class WorkerEntry {
 			// Initialize the scratch buffer. Max chunk capacity is not fixed, but 16KB is the target.
 			// A capacity of 4096 entities should be safe.
 			this.scratchBuffer = new Uint32Array(4096)
+
+			this.kernelContext = {
+				getScratchBuffer: () => this.scratchBuffer,
+			}
 		} catch (e) {
 			console.error(`[Worker ${self.id}] Failed during dynamic module import or initialization:`, e)
 			throw e
@@ -294,10 +308,10 @@ class WorkerEntry {
 					return
 				case 'hmr-context-update':
 					// A single kernel's static context has been updated via HMR.
-					if (!this.systemContexts[payload.systemName]) {
-						this.systemContexts[payload.systemName] = {}
+					if (!this.systemContexts[payload.systemId]) {
+						this.systemContexts[payload.systemId] = {}
 					}
-					this.systemContexts[payload.systemName][payload.kernelName] = payload.context
+					this.systemContexts[payload.systemId][payload.kernelId] = payload.context
 					return
 				case 'sync-chunk-deltas':
 					this.syncChunkDeltas(payload)
@@ -306,6 +320,10 @@ class WorkerEntry {
 					for (const pageSAB of payload.pages) {
 						entityStore.packedComponentIdPages.push(new Uint16Array(pageSAB))
 					}
+					return
+				case 'archetype-map-resize':
+					// The main thread has resized the map. We just need to point our instance to the new buffer.
+					this.archetypeMap = new this.archetypeMap.constructor(payload.archetypeMapBuffer, this.hashFn)
 					return
 				default:
 					throw new Error(`[Worker] Unknown job type: ${type}`)
@@ -476,31 +494,30 @@ class WorkerEntry {
 		const jobPayload = jobsView[jobOffset + this.JOB_PAYLOAD_OFFSET]
 
 		const jobType = jobPayload >> 24
-		const payload = jobPayload & 0x00ffffff
-		const systemName = this.idToSystemName[systemId]
+		const payload = jobPayload & 0x00ffffff;
 
 		if (jobType === this.JOB_TYPE.KERNEL) {
 			const kernelId = jobsView[jobOffset + this.JOB_KERNEL_ID_OFFSET]
 			const kernelMeta = this.kernelMetadata.get(kernelId)
 			if (!kernelMeta) {
-				console.error(`[Worker ${self.id}] Could not find metadata for kernel ID ${kernelId}.`)
+				console.error(`[Worker ${self.id}] Could not find metadata for kernel ID ${kernelId}.`);
 			} else {
 				const { name: kernelName, moduleName } = kernelMeta
 				const kernelFn = this.logicRegistry[moduleName]?.[kernelName]
-				const systemContext = this.systemContexts[systemName]?.[kernelName]
+				const systemContext = this.systemContexts[systemId]?.[kernelId]
 
 				if (kernelFn) {
 					try {
-						const kernelContext = {
-							getChunkView: self.getChunkView,
-							getScratchBuffer: () => this.scratchBuffer,
-						}
-						await kernelFn(payload, systemContext, kernelContext)
+						self.parallel.resetJobState() // Reset pool for each job.
+						await kernelFn(payload, systemContext, this.kernelContext);
 					} catch (error) {
+						// Only look up system name on error.
+						const systemName = this.idToSystemName[systemId]
 						console.error(`[Worker ${self.id}] Error in kernel job for ${systemName}.${kernelName}:`, error)
 					}
 				} else {
-					console.error(`[Worker ${self.id}] Could not find kernel function "${kernelName}" in module "${moduleName}".`)
+					const systemName = this.idToSystemName[systemId]
+					console.error(`[Worker ${self.id}] Could not find kernel function "${kernelName}" in module "${moduleName}" for system "${systemName}".`)
 				}
 			}
 		} else if (jobType === this.JOB_TYPE.MAINTENANCE) {

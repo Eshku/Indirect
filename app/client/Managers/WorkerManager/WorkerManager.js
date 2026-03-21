@@ -1,5 +1,4 @@
 const { eventEmitter } = await import(`@core/Classes/EventEmitter.js`)
-const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 const { kernelRegistry } = await import(`@managers/SystemManager/KernelRegistry.js`)
 
 /**
@@ -15,28 +14,60 @@ export class WorkerManager {
 		this.workerCount = 0
 		this.totalThreads = 1
 
+		/** @private */
+		this._initialPayload = {}
+
 		/** @type {Function | null} */
 		this.importFromString = null
 
-		// This will be populated by HMR or a production build script.
 		this.logicRegistry = {}
 		this.sharedBuffers = {}
 
-		this.systemContextCache = new Map()
-
 		this.hmrListenerId = null
+	}
+
+	/**
+	 * Queues a resource to be included in the initial payload sent to workers.
+	 * This replaces the SharedResourceRegistry.
+	 * @param {string} name The key for the resource in the payload.
+	 * @param {any} resource The resource to send.
+	 */
+	addInitialResource(name, resource) {
+		if (this._initialPayload.hasOwnProperty(name)) {
+			console.warn(`[WorkerManager] Initial resource with name "${name}" already registered. Overwriting.`)
+		}
+		this._initialPayload[name] = resource
+	}
+
+	/**
+	 * Broadcasts a message of a specific type to all workers.
+	 * This is the universal channel for all runtime updates.
+	 * @param {string} type A string identifier for the message (e.g., 'sync-deltas', 'hmr-update').
+	 * @param {object} [payload={}] The data associated with the message.
+	 * @param {Transferable[]} [transferList] Optional array of transferable objects. If not provided, they will be auto-detected.
+	 */
+	broadcast(type, payload = {}, transferList) {
+		const message = { type, ...payload }
+		// By default, postMessage will use the structured clone algorithm.
+		// SharedArrayBuffers are handled correctly (shared by reference).
+		// Regular ArrayBuffers are cloned (copied), which is the safe default.
+		// If a developer needs to transfer ownership for performance, they must
+		// explicitly provide the `transferList`. 
+		this.workers.forEach(worker => {
+			worker.postMessage(message, transferList)
+		})
 	}
 
 	async init() {
 		const hardwareConcurrency = navigator.hardwareConcurrency || 4
 
-		// Add a reference to the job graph's shared state.
 		// Leave one core for the main thread, renderer, etc.
 		this.workerCount = Math.max(1, hardwareConcurrency - 1)
-		this.totalThreads = this.workerCount + 1
+		this.totalThreads = this.workerCount + 1 // Main thread + workers
+
+		this.addInitialResource('totalThreads', this.totalThreads)
 
 		const { createURLFromString } = await import(`@core/utils/blob.js`)
-		// This is a dynamic import that will only be resolved in a dev environment
 		this.importFromString = (await import(`@core/utils/blob.js`)).importFromString
 
 		const workerURL = new URL(`./worker.js`, import.meta.url)
@@ -70,37 +101,20 @@ export class WorkerManager {
 	 * @param {import('../../client/Engine.js').Engine} engine
 	 */
 	async initializeWorkers(engine) {
-		const { entityManager, physicsManager, systemManager } = engine.getManagers()
-
-		this.entityManager = entityManager
-
-		// Get the shared buffers from the scheduler.
-		const scheduler = systemManager.gameLoop.scheduler
-		this.sharedBuffers = scheduler.getSharedBuffers()
-
-		const sharedData = this.entityManager.getSharedData()
+		this.entityManager = engine.getManagers().entityManager
+		this.systemManager = engine.getManagers().systemManager
 
 		const workerPromises = []
 
-		const systemIdMap = {}
-		for (const [name, id] of systemManager.systemNameToId.entries()) {
-			systemIdMap[name] = id
-		}
-
-		const kernelCode = kernelRegistry.getAllKernelCode()
-		const kernelMetadata = kernelRegistry.getKernelMetadata()
-
-		const initialChunks = {}
-		for (let i = 0; i < this.entityManager.nextChunkId; i++) {
-			initialChunks[i] = {
-				data: this.entityManager.getSharedComponentData(i),
-				ticks: this.entityManager.getSharedDirtyTicks(i),
-				archetypeTicks: entityStore.chunkArchetypeDirtyTicks[i],
-			}
+		// The init payload is now built internally from registered resources.
+		const initMessage = {
+			type: 'init',
+			...this._initialPayload,
 		}
 
 		// Now, send the full init payload to each worker and wait for them to be ready.
 		for (const worker of this.workers) {
+			const finalPayload = { ...initMessage, workerId: worker.id, baseUrl: import.meta.url }
 			const readyPromise = new Promise((resolve, reject) => {
 				const handleWorkerMessage = event => {
 					const { type, error } = event.data
@@ -129,68 +143,27 @@ export class WorkerManager {
 			})
 
 			// Send the initialization payload to the worker.
-			worker.postMessage({
-				type: 'init',
-				baseUrl: import.meta.url,
-				workerId: worker.id,
-				sharedData,
-				// Send the main SABs
-				frameStateSAB: this.sharedBuffers.frameStateSAB,
-				jobsSAB: this.sharedBuffers.jobsSAB,
-				dependentsSAB: this.sharedBuffers.dependentsSAB,
-				frameContextSAB: this.sharedBuffers.frameContextSAB,
-				// Send the MPSC inbox for workers to send MTO jobs to the main thread
-				mainThreadInbox: this.sharedBuffers.mainThreadInbox,
-				dequeBuffers: this.sharedBuffers.dequeBuffers, // Send the array of deque buffers
-				systemIdMap,
-				spatialHashGridSABs: physicsManager.getSpatialHashGridSABs(),
-				totalThreads: this.totalThreads,
-				initialChunks,
-				kernelCode,
-				kernelMetadata,
-			})
+			// No transfer list is needed. SharedArrayBuffers are automatically shared by reference.
+			// Any other data (including regular ArrayBuffers) is safely cloned.
+			worker.postMessage(finalPayload)
 			workerPromises.push(readyPromise)
 		}
 
 		await Promise.all(workerPromises)
+
+		// The initial payload is no longer needed and can be cleared to free memory
+		// and prevent accidental re-use.
+		this._initialPayload = null
 	}
 
 	/**
 	 * Gathers and broadcasts the initial static context for all parallel systems.
 	 * This is called once after all systems have been instantiated.
-	 * @param {import('../../ECS/SystemManager/SystemManager.js').SystemManager} systemManager
 	 */
-	broadcastInitialSystemContexts(systemManager) {
-		const allContexts = {}
-		for (const systemName of systemManager.systemNameToId.keys()) {
-			const system = systemManager.getSystem(systemName)
-			if (!system) continue
-
-			const metadata = systemManager.systemMetadataCache.get(systemName)
-			if (!metadata?.dependencies) continue
-
-			const systemContexts = {}
-			let hasAnyContext = false
-
-			// Iterate over all declared dependencies (methods and kernels)
-			for (const kernelName in metadata.dependencies) {
-				const context = this.getSystemContext(system, kernelName, systemManager)
-				if (Object.keys(context).length > 0) {
-					systemContexts[kernelName] = context
-					hasAnyContext = true
-				}
-			}
-
-			if (hasAnyContext) {
-				allContexts[systemName] = systemContexts
-			}
-		}
-		this.workers.forEach(worker => {
-			worker.postMessage({
-				type: 'init-contexts',
-				systemContexts: allContexts,
-			})
-		})
+	broadcastInitialSystemContexts() {
+		// Get the pre-compiled context object from the SystemManager, which is the source of truth.
+		const allContexts = this.systemManager.getSystemContexts()
+		this.broadcast('init-contexts', { systemContexts: allContexts })
 	}
 
 	/**
@@ -202,18 +175,11 @@ export class WorkerManager {
 		const archetypePageDeltas = this.entityManager.getAndClearArchetypePageDeltas()
 
 		if (chunkDeltas.newChunks || chunkDeltas.destroyedChunks) {
-			this.workers.forEach(worker => {
-				worker.postMessage({
-					type: 'sync-chunk-deltas',
-					...chunkDeltas,
-				})
-			})
+			this.broadcast('sync-chunk-deltas', chunkDeltas)
 		}
 
 		if (archetypePageDeltas) {
-			this.workers.forEach(worker => {
-				worker.postMessage({ type: 'sync-archetype-store-pages', pages: archetypePageDeltas })
-			})
+			this.broadcast('sync-archetype-store-pages', { pages: archetypePageDeltas })
 		}
 	}
 
@@ -224,52 +190,6 @@ export class WorkerManager {
 	 */
 	getSystemLogic(systemName) {
 		return this.logicRegistry[systemName]?.logic
-	}
-
-	/**
-	 * Builds the context for a specific system's schedule function.
-	 * This is used to gather static data to be sent to workers.
-	 * @param {object} system - The actual system instance.
-	 * @param {string} kernelName - The name of the kernel/method to get context for.
-	 * @param {import('../../ECS/SystemManager/SystemManager.js').SystemManager} systemManager
-	 * @returns {object}
-	 */
-	getSystemContext(system, kernelName, systemManager) {
-		const systemName = system.constructor.name
-		const metadata = systemManager.systemMetadataCache.get(systemName)
-		const kernelDeps = metadata?.dependencies?.[kernelName]
-
-		if (!kernelDeps || !kernelDeps.context) {
-			return {} // No context defined for this kernel
-		}
-
-		const finalContext = kernelDeps.context
-
-		// --- Validation for the new architecture ---
-		// We are enforcing that the context must be a plain object.
-		// The "Context Factory" pattern (a function) and legacy array pattern are deprecated.
-		if (typeof finalContext !== 'object' || finalContext === null || Array.isArray(finalContext)) {
-			console.error(
-				`[WorkerManager] FATAL: System "${systemName}" kernel "${kernelName}" has an invalid context definition. Context must be a plain object.`,
-			)
-			return {}
-		}
-
-		// Validate the final context object to ensure only serializable data is passed.
-		for (const key in finalContext) {
-			const value = finalContext[key]
-			const valueType = typeof value
-
-			if (valueType === 'function') {
-				console.error(
-					`[WorkerManager] FATAL: System "${systemName}" kernel "${kernelName}" has a context property "${key}" of type "function". ` +
-						`Functions cannot be passed in kernel contexts.`,
-				)
-			}
-			// We now allow plain objects. The structured clone algorithm used by postMessage
-			// will handle them. It will throw its own error for non-serializable types (e.g. DOM elements).
-		}
-		return finalContext
 	}
 
 	/**
@@ -284,50 +204,13 @@ export class WorkerManager {
 			'[WorkerManager] hotSwapScheduleLogic is deprecated and will be removed. Kernel HMR is not yet implemented.',
 		)
 	}
-	/**
-	 * Gathers the new context from a hot-swapped system instance and broadcasts it to all workers.
-	 * @param {string} systemName The name of the system that was swapped.
-	 * @param {object} systemInstance The new instance of the system.
-	 * @param {import('../../ECS/SystemManager/SystemManager.js').SystemManager} systemManager
-	 */
-	hotSwapSystemContext(systemName, systemInstance, systemManager) {
-		const metadata = systemManager.systemMetadataCache.get(systemName)
-		if (!metadata?.dependencies) return
-
-		for (const kernelName in metadata.dependencies) {
-			const newContext = this.getSystemContext(systemInstance, kernelName, systemManager)
-			if (Object.keys(newContext).length > 0) {
-				this.workers.forEach(worker => {
-					worker.postMessage({
-						type: 'hmr-context-update',
-						systemName,
-						kernelName, // Let the worker know which kernel's context to update
-						context: newContext,
-					})
-				})
-			}
-		}
-	}
-
-	/**
-	 * Sends schedule logic code to all workers.
-	 * @param {{systemName: string, dependencies: string[], code: string}} logicData
-	 * @private
-	 */
-	broadcastLogicToWorkers(logicData) {
-		this.workers.forEach(worker => {
-			worker.postMessage({
-				type: 'hmr-schedule-update',
-				...logicData,
-			})
-		})
-	}
 
 	destroy() {
 		for (const worker of this.workers) {
 			worker.terminate()
 		}
-		this.workers = []
+		this.workers.length = 0
+
 		eventEmitter.off(this.hmrListenerId)
 	}
 }

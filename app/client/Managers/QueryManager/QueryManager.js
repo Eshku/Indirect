@@ -43,8 +43,7 @@ export class QueryManager {
 	 */
 	_getCachedQueryKey(options) {
 		// --- Fast Path ---
-		// The first level of caching uses the options object reference itself as the key. This is
-		// extremely fast if the same options object instance is passed to getQuery repeatedly.
+		// The first level of caching uses the options object reference itself as the key. 
 		if (this.keyCache.has(options)) {
 			return this.keyCache.get(options)
 		}

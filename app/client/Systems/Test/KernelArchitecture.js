@@ -93,26 +93,14 @@ export class KernelArchitecture {
 
 	/**
 	 * Runs ONCE per frame on the MAIN THREAD to create jobs for static, predictable work.
+	 * @param {import('../../Managers/SystemManager/JobWriter.js').JobWriter} jobWriter
 	 */
-	schedule() {
-		const jobs = []
-		const chunkIds = this.query.getChunks()
+	schedule(jobWriter) {
+		// Schedule a job for each chunk to be processed by the main kernel.
+		jobWriter.scheduleForEachChunk(this.query, testKernel)
 
-		// Job for the main kernel
-		for (const chunkId of chunkIds) {
-			jobs.push({
-				kernel: testKernel,
-				payload: chunkId,
-			})
-		}
-		//todo circular buffer, not an object.
-		// Job for the logging kernel
-		jobs.push({
-			kernel: loggingKernel,
-			payload: 0, // Payload is unused
-		})
-
-		return jobs
+		// Schedule a single custom job for the logging kernel.
+		jobWriter.scheduleCustom(loggingKernel, 0) // Payload is unused
 	}
 
 	/**

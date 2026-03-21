@@ -8,7 +8,7 @@ export function parallelCpu(payload, systemContext, kernelContext) {
 	const { position, velocity } = systemContext
 	const { currentTick } = frameContext
 
-	const chunk = kernelContext.getChunkView(payload)
+	const chunk = parallel.getChunkView(payload)
 	const positions = chunk.componentData[position]
 	const velocities = chunk.componentData[velocity]
 

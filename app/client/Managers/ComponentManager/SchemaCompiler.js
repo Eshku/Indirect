@@ -200,8 +200,7 @@ Object.assign(TypeProcessors, {
 		 * the compiler generates individual properties `my_array0`, `my_array1`, and `my_array2`, each with its
 		 * own `Uint32Array` in the chunk.
 		 * It also creates an implicit `my_array_count` property (a `u8`) to store the *current* length of the
-		 * array for each entity, which can be less than the total capacity. This design keeps data access
-		 * extremely fast and cache-friendly for fixed-size collections.
+		 * array for each entity, which can be less than the total capacity.
 		 */ parse(propName, definition, componentInfo, implicitKeys, componentName, constants) {
 			if (definition.shared) {
 				throw new Error(

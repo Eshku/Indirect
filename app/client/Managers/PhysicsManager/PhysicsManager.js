@@ -55,8 +55,10 @@ export class PhysicsManager {
 
 	/**
 	 * Initializes the PhysicsManager. This is where shared resources are created.
+	 * @param {import('../../Engine.js').Engine} engine
 	 */
-	init() {
+	init(engine) {
+		const { workerManager } = engine.getManagers()
 		// 1. Create the shared buffers for the spatial hash grid.
 		this.spatialHashGridSABs = this._createSpatialGridSABs(SPATIAL_GRID_CONFIG)
 
@@ -72,6 +74,10 @@ export class PhysicsManager {
 				collisionMatrixView[groupIndex] = LayerMasks[group]
 			}
 		}
+
+		// Register all shared data with the sharedResourceRegistry for worker initialization.
+		workerManager.addInitialResource('spatialHashGridSABs', this.getSpatialHashGridSABs())
+		workerManager.addInitialResource('collisionMatrixSAB', this.getCollisionMatrixSAB())
 	}
 
 	/**

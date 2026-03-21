@@ -1,6 +1,6 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
-const { churnTag, churnData, verification } = ecs.getTypeIDs()
+const { churnTag, churnData, verification, position, velocity, rotation, componentA, componentB } = ecs.getTypeIDs()
 const { dataIntegrity } = ecs.getKernelIDs()
 /**
  * A critical data integrity test system designed to detect stale data and memory corruption
@@ -50,19 +50,26 @@ export class DataIntegrityTestSystem {
 		this.phaseTimer = this.creationPhaseDuration
 		this.isCreationPhase = true
 
+		// --- Archetype Variant Setup for Resize Test ---
+		// This list of component combinations will be used to create a variety of unique
+		// archetypes, forcing the SharedArchetypeHashMap to resize.
+		this.archetypeVariantCounter = 0
+		this.archetypeVariants = [
+			{}, // Base archetype { churnTag, churnData, verification }
+			{ position: {} }, // + position
+			{ velocity: {} }, // + velocity
+			{ rotation: {} }, // + rotation
+			{ componentA: {} }, // + componentA
+			{ componentB: {} }, // + componentB
+			{ position: {}, velocity: {} }, // + position, velocity
+			{ position: {}, rotation: {} }, // + position, rotation
+		]
+
 		// --- Queries ---
 		this.churnQuery = this.getQuery({ with: [churnTag] })
 		this.query = this.getQuery({ with: [churnTag, churnData, verification] })
 
 		// --- Payloads ---
-		const { payload, mutators } = this.compile({
-			churnTag: {},
-			churnData: { creationTick: 0, entityId: 0n }, // Initialize entityId to 0
-			verification: { status: 0 }, // 0: unchecked, 1: ok, -1: fail, 2: logged
-		})
-		this.creationPayload = payload
-		this.creationMutators = mutators
-
 		const { payload: verificationPayload } = this.compile(
 			verification,
 			{ status: 2 }, // The data we want to set
@@ -86,11 +93,19 @@ export class DataIntegrityTestSystem {
 			// Create new entities if we are below the max count.
 			const currentCount = this.churnQuery.count
 			if (currentCount < this.maxEntities) {
+				// This loop now creates entities with different archetypes to trigger
+				// the SharedArchetypeHashMap resize mechanism.
 				for (let i = 0; i < this.creationBatchSize; i++) {
-					this.creationMutators.churnData.creationTick[0] = currentTick
-					// entityId is left as 0, to be primed by the 'schedule' job.
+					const variantData = this.archetypeVariants[this.archetypeVariantCounter]
+					const { payload } = this.compile({
+						churnTag: {},
+						churnData: { creationTick: currentTick, entityId: 0n },
+						verification: { status: 0 },
+						...variantData,
+					})
+					this.createEntity(payload)
 
-					this.createEntity(this.creationPayload)
+					this.archetypeVariantCounter = (this.archetypeVariantCounter + 1) % this.archetypeVariants.length
 				}
 			}
 		} else {
@@ -110,17 +125,12 @@ export class DataIntegrityTestSystem {
 		}
 	}
 
-	schedule() {
-		const jobs = []
-		const chunkIds = this.query.getChunks()
-
-		for (const chunkId of chunkIds) {
-			jobs.push({
-				kernel: dataIntegrity,
-				payload: chunkId,
-			})
-		}
-		return jobs
+	/**
+	 * Schedules a data integrity check job for each relevant chunk.
+	 * @param {import('../../Managers/SystemManager/JobWriter.js').JobWriter} jobWriter
+	 */
+	schedule(jobWriter) {
+		jobWriter.scheduleForEachChunk(this.query, dataIntegrity)
 	}
 
 	// Runs on the main thread after parallel jobs. Reports any detected corruption.

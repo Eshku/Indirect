@@ -4,6 +4,10 @@ const { engine } = await import('@client/Engine.js')
 
 await engine.init()
 
+
+
+const { h32, h32ToString, h32Raw, create32, h64, h64ToString, h64Raw, create64 } = await xxhash() //xxhash-wasm
+
 const { gameManager, assetManager, layerManager, uiManager, inputManager, ecs } = engine.getManagers()
 
 const setupLayers = () => {

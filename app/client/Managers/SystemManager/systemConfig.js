@@ -107,15 +107,16 @@ export const systemSchedule = {
 		{ name: 'FpsCounter', frequency: 'visuals' },
 
 		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
-	],
+	], 
 
 	//! Do not run benchmark \ test systems with other systems together, high query overlap potential.
 
 	Benchmark: [
-		/* { name: 'CPUBenchmark', frequency: 'logic' }, */
-		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */
-		/* { name: 'RWMBenchmark', frequency: 'logic' },  */
-		/* { name: 'MemoryBenchmark', frequency: 'logic' }, */
+
+		/* { name: 'CPUBenchmark', frequency: 'visuals' }, */
+	/* { name: 'ParallelCPUBenchmark', frequency: 'visuals' }, */
+		/* { name: 'RWMBenchmark', frequency: 'visuals' },  */
+		/* { name: 'MemoryBenchmark', frequency: 'visuals' }, */
 		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
@@ -135,6 +136,7 @@ export const systemSchedule = {
 		/* { name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
 		/* { name: 'QueryTestSystem', frequency: 'none' }, */
+		/* { name: 'SharedArchetypeHashMapTestSystem', frequency: 'none' }, */
 		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */
 	],
 

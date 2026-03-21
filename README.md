@@ -56,25 +56,25 @@ Long-term vision is to build a high-performance, **data-oriented**, and **parall
 
 Components are defined as plain JavaScript objects that act as a schema, dictating how data is stored.
 
-- **`PlayerTag` (Tag Component):**
+- **`playerTag` (Tag Component):**
 
   ```javascript
-  export const PlayerTag = {}
+  export const playerTag = {}
   ```
 
-- **`Health` (Primitive Types):**
+- **`health` (Primitive Types):**
 
   ```javascript
-  export const Health = {
+  export const health = {
   	value: { type: 'f32', default: 100 },
   	max: { type: 'f32', default: 100 },
   }
   ```
 
-- **`Name` (String):**
+- **`name` (String):**
 
   ```javascript
-  export const Name = {
+  export const name = {
   	name: { type: 'string', default: 'No Name' },
   }
   ```
@@ -103,8 +103,8 @@ Primary way to iterate is `query.iter()`, which yields [`Chunk Views`](app/clien
 
 Engine uses a hybrid parallel job scheduler that separates main-thread **orchestration** (in a System) from parallel **execution** (in a Kernel).
 
-- **System Class (`.js`):** Lives on main thread. It defines queries and schedules jobs for a frame.
-- **Kernel Module (`/app/client/Kernels/*.js`):** A plain JavaScript module containing a pure "kernel" function that executes on a workers in parallel.
+- **System Class (`.js`):** Lives on main thread. It defines queries and uses a `JobWriter` to schedule jobs for a frame.
+- **Kernel Module (`/app/client/Kernels/*.js`):** A plain JavaScript module containing a pure "kernel" function that executes on a worker in parallel.
 
 **System Lifecycle & API:**
 
@@ -112,20 +112,20 @@ System methods are executed in a specific, guaranteed order. An `async init()` m
 
 - **`init()`**: (Optional) `async` method for one-time setup. A system has access to its API here.
 - **`update(frameContext)`**: (Optional) Runs on **main thread**. For logic that cannot be parallelized.
-- **`schedule(frameContext)`**: (Optional) Runs on **main thread** to create and return an array of jobs for the scheduler. This is a job factory.
+- **`schedule(jobWriter, frameContext)`**: (Optional) Runs on **main thread** to schedule jobs using the provided `JobWriter` API. This method defines the work to be done.
 - **`process(frameContext)`**: (Optional) Runs on **main thread** after all other jobs for this system are complete. It's a finalizer.
 - **`destroy()`**: (Optional) `async` method for cleanup.
 
 **Execution Order:**
 
-1.  **`schedule()`**: Creates and returns job definitions. It does not contain game logic itself, but defines work to be done.
-2.  **`update()`**: Runs on the main thread after `schedule()`. It is used for any logic that must run sequentially before parallel kernels begin.
-3.  **Kernel Execution**: Kernel jobs created by `schedule()` are now executed in parallel.
-4.  **`process()`**: Runs on the main thread after all of the system's `update()` and kernel jobs have finished.
+1.  **Job Creation**: The `schedule()` method of all active systems is called on the main thread. It uses a `JobWriter` to populate a shared job buffer. This step only *defines* the work.
+2.  **`update()`**: The `update()` method of systems runs on the main thread. It is used for any logic that must run sequentially before parallel kernels begin.
+3.  **Kernel Execution**: Kernel jobs created during job creation phase are now executed in parallel across worker threads.
+4.  **`process()`**: The `process()` method runs on the main thread after all of a system's `update()` and kernel jobs have finished.
 
 **Declaring Dependencies:**
 
-A system declares its data access patterns and dependencies in a `static dependencies` object.
+System declares its data access patterns and dependencies in a `static dependencies` object. The key for each entry must match the kernel function's name.
 
 - **`reads`/`writes`**: An array of component Type IDs. Informs scheduler about data access to prevent race conditions.
 - **`context`**: A plain object containing static data passed to a kernel.
@@ -137,14 +137,14 @@ This example shows a `PhysicsSystem` that schedules a kernel to apply gravity.
 
 **1. Kernel (`/app/client/Kernels/`)**
 
-A kernel is a pure function that runs on a worker, receiving all its data via arguments. Frame-specific data is available on `self.frameContext`.
+A kernel is a pure function that runs on a worker, receiving all its data via arguments. Frame-specific data is available on `self.frameContext`, and thread-safe helpers are on the global `parallel` object.
 
 ```javascript
 /**
  * A "kernel" function that applies gravity and updates position.
  * @param {number} payload - chunkId to process, passed from the job definition.
  * @param {object} systemContext - Read-only data from system's static dependencies `context` block.
- * @param {object} kernelContext - Helpers, like getChunkView.
+ * @param {object} kernelContext - Thread-local helpers, like getScratchBuffer.
  */
 export function applyGravityAndMove(payload, systemContext, kernelContext) {
 	// Frame-specific data is globally available on the worker.
@@ -152,8 +152,8 @@ export function applyGravityAndMove(payload, systemContext, kernelContext) {
 	// System-specific static data is passed in.
 	const { gravity, position, velocity } = systemContext
 
-	// Use the helper to get a view into the chunk's data.
-	const chunk = kernelContext.getChunkView(payload)
+	// Use the global helper to get a view into the chunk's data.
+	const chunk = parallel.getChunkView(payload)
 	const positions = chunk.componentData[position]
 	const velocities = chunk.componentData[velocity]
 
@@ -187,6 +187,7 @@ const { applyGravityAndMove } = ecs.getKernelIDs()
 export class PhysicsSystem {
 	// Declare all data access and execution dependencies statically.
 	static dependencies = {
+		// The key 'applyGravityAndMove' must match the kernel function name.
 		applyGravityAndMove: {
 			reads: [velocity],
 			writes: [position, velocity],
@@ -204,16 +205,10 @@ export class PhysicsSystem {
 		this.query = this.getQuery({ with: [position, velocity] })
 	}
 
-	// Runs on the main thread to generate concurrent jobs for a frame.
-	schedule(frameContext) {
-		const jobs = []
-		const chunkIds = this.query.getChunks()
-
-		// Create one job for each chunk of entities.
-		for (const chunkId of chunkIds) {
-			jobs.push({ kernel: applyGravityAndMove, payload: chunkId })
-		}
-		return jobs
+	// Runs on the main thread to schedule concurrent jobs for the frame.
+	schedule(jobWriter, frameContext) {.
+		// Runs applyGravityAndMove function for every chunk on this.query in parallel.
+		jobWriter.scheduleForEachChunk(this.query, applyGravityAndMove)
 	}
 }
 ```

@@ -26,7 +26,6 @@ export class ParallelCPUBenchmark {
 			with: [position, velocity, parallelCpuTag],
 		})
 
-		// Create a large number of entities to generate many chunks (high parallelism).
 		this.entityCount = 10_000
 
 		const { payload } = this.compile({
@@ -40,18 +39,10 @@ export class ParallelCPUBenchmark {
 		this.spawnEntities()
 	}
 
-	schedule() {
-		const jobs = []
-		const chunkIds = this.query.getChunks()
-
-		//todo circular buffer, not an object.
-		for (const chunkId of chunkIds) {
-			jobs.push({
-				kernel: parallelCpu,
-				payload: chunkId,
-			})
-		}
-		return jobs
+	schedule(jobWriter, frameContext) {
+		// The new signature receives a JobWriter instance.
+		// This is a zero-allocation operation from the system's perspective.
+		jobWriter.scheduleForEachChunk(this.query, parallelCpu)
 	}
 
 	spawnEntities() {

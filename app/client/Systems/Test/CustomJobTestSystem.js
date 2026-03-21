@@ -51,17 +51,11 @@ export class CustomJobTestSystem {
 
 	/**
 	 * Runs on the main thread to create jobs.
+	 * @param {import('../../Managers/SystemManager/JobWriter.js').JobWriter} jobWriter
 	 */
-	schedule() {
-		// Create a single "listener" kernel job.
-		// The payload is a custom value, not a chunkId.
-		const jobs = [
-			{
-				kernel: customJob,
-				payload: 42, // Our custom payload
-			},
-		]
-		return jobs
+	schedule(jobWriter) {
+		// Create a single "listener" kernel job with a custom payload.
+		jobWriter.scheduleCustom(customJob, 42) // Our custom payload
 	}
 
 	/**

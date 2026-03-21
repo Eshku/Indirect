@@ -28,8 +28,9 @@ class KernelRegistry {
 	 * Registers all kernel functions from the loaded modules.
 	 * @param {Map<string, object>} kernelModules - A map of loaded kernel modules from the loader.
 	 * @param {Object.<string, string>} kernelCode - A map of kernel module names to their source code.
+	 * @param {import('../WorkerManager/WorkerManager.js').WorkerManager} workerManager
 	 */
-	registerKernelModules(kernelModules, kernelCode) {
+	registerKernelModules(kernelModules, kernelCode, workerManager) {
 		this.kernelCode = kernelCode
 
 		for (const [moduleName, module] of kernelModules.entries()) {
@@ -68,6 +69,10 @@ class KernelRegistry {
 				)
 			}
 		}
+
+		// Now that kernelCode and kernelMetadata are fully populated, register them for worker initialization.
+		workerManager.addInitialResource('kernelCode', this.getAllKernelCode())
+		workerManager.addInitialResource('kernelMetadata', this.getKernelMetadata())
 	}
 
 	/**
@@ -75,10 +80,9 @@ class KernelRegistry {
 	 * This solves the initialization order problem where a system module needs a kernel ID
 	 * before the kernel registry has been populated.
 	 * e.g., `const { myKernel } = ecs.getKernelIDs()`
-	 * @private
 	 */
-	setKernelIdObject(idObject) {
-		this._kernelIdObject = Object.freeze(idObject)
+	setKernelIdObject() {
+		this._kernelIdObject = Object.freeze(Object.fromEntries(this.kernelNameToId))
 	}
 
 	getKernelIds() {

@@ -26,7 +26,6 @@ export class ApplyVelocity {
 			const velArrays = chunk.componentData[velocity]
 
 			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				// This loop is hot. We just perform the integration. No branching, no marking.
 				posArrays.x[indexInChunk] += velArrays.x[indexInChunk] * deltaTime
 				posArrays.y[indexInChunk] += velArrays.y[indexInChunk] * deltaTime
 			}

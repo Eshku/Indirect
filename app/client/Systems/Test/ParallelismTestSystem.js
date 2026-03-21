@@ -170,17 +170,11 @@ export class ParallelismTestSystem {
 		}
 	}
 
-	schedule() {
-		const jobs = []
-		const chunkIds = this.query.getChunks()
-
-		for (const chunkId of chunkIds) {
-			jobs.push({
-				kernel: parallelismTest,
-				payload: chunkId,
-			})
-		}
-		return jobs
+	/**
+	 * @param {import('../../Managers/SystemManager/JobWriter.js').JobWriter} jobWriter
+	 */
+	schedule(jobWriter) {
+		jobWriter.scheduleForEachChunk(this.query, parallelismTest)
 	}
 
 	process({ deltaTime, currentTick }) {

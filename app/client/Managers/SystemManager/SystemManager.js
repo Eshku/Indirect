@@ -42,9 +42,7 @@ export class SystemManager {
 		this.commandBuffer = commandBuffer
 
 		this.commandBufferExecutor = null
-
 		this.systemTimings = {}
-		this.isPerformanceMonitoringEnabled = false
 
 		// A flat list of all system names to be managed, derived from systemConfig.js.
 		this._systemList = new Sequence()
@@ -55,6 +53,12 @@ export class SystemManager {
 
 		// Caches pre-analyzed static metadata for each system class.
 		this.systemMetadataCache = new Map()
+
+		// Caches the filtered, structured context objects for fast lookups and worker distribution. This cache is
+		// built once during initialization (`_buildAndCacheSystemContexts`) and updated during HMR. It provides
+		// O(1) access to a kernel's context, avoiding repeated metadata lookups during job execution on both the
+		// main thread and workers.
+		this.allSystemContexts = {}
 
 		// --- Persistent System ID Mapping ---
 		this.systemIdCounter = 0
@@ -108,15 +112,8 @@ export class SystemManager {
 			}
 		}
 
-		// Get our manager dependencies from the engine instance.
-		const {
-			entityManager,
-			componentManager,
-			queryManager,
-			prefabManager,
-			workerManager,
-			gameManager,
-		} = engine.getManagers()
+		const { entityManager, componentManager, queryManager, prefabManager, workerManager, gameManager } = 
+			engine.getManagers()
 
 		this.entityManager = entityManager
 		this.componentManager = componentManager
@@ -149,7 +146,7 @@ export class SystemManager {
 		const kernelNames = kernelFileNames.map(fileName => toCamelCase(fileName.replace('.js', '')))
 
 		this._assignAllIdsFromNames(systemNames, kernelNames)
-		this._createHonestIdObjects()
+		this._createIdObjects()
 
 		// --- Phase 2: Module Loading & Registration ---
 		const systemModules = new Map()
@@ -164,7 +161,7 @@ export class SystemManager {
 		const { loadedModules: kernelModules, kernelCode } = await loadAllKernels(kernelFileTree)
 
 		systemRegistry.registerSystemClasses(systemModules)
-		kernelRegistry.registerKernelModules(kernelModules, kernelCode)
+		kernelRegistry.registerKernelModules(kernelModules, kernelCode, this.workerManager)
 
 		// --- Analysis Step ---
 		this._analyzeAndCacheSystems()
@@ -206,16 +203,12 @@ export class SystemManager {
 		// Sort all groups to enforce the canonical execution order.
 		this._sortAllGroups()
 
+		// Build the fast-access context cache now that all systems are instantiated.
+		this._buildAndCacheSystemContexts()
+
 		// Send the initial, static context data for all parallel systems to the workers.
-		this.workerManager.broadcastInitialSystemContexts(this)
-	}
-
-	enablePerformanceTimings() {
-		this.isPerformanceMonitoringEnabled = true
-	}
-
-	disablePerformanceTimings() {
-		this.isPerformanceMonitoringEnabled = false
+		// The workerManager will pull the cached contexts from this manager.
+		this.workerManager.broadcastInitialSystemContexts()
 	}
 
 	/**
@@ -228,6 +221,14 @@ export class SystemManager {
 	}
 
 	/**
+	 * Retrieves the pre-compiled, structured object containing all kernel contexts.
+	 * @returns {Object.<number, Object.<number, object>>}
+	 */
+	getSystemContexts() {
+		return this.allSystemContexts
+	}
+
+	/**
 	 * Retrieves an object mapping all registered kernel names to their numeric IDs.
 	 * @returns {Object.<string, number>} An object mapping kernel names to their IDs.
 	 */
@@ -236,23 +237,16 @@ export class SystemManager {
 	}
 
 	/**
-	 * Creates the final, "honest" frozen objects for ID access.
+	 * Creates the final, frozen objects for ID access.
 	 * This is called after all IDs have been assigned from filenames.
 	 * @private
 	 */
-	_createHonestIdObjects() {
-		const systemIdObject = {}
-		for (const [name, id] of this.systemNameToId.entries()) {
-			systemIdObject[name] = id
-		}
-		this._systemIdObject = Object.freeze(systemIdObject)
+	_createIdObjects() {
+		this._systemIdObject = Object.fromEntries(this.systemNameToId)
+		this.workerManager.addInitialResource('systemIdMap', this._systemIdObject)
 
 		// Also trigger the creation in the kernel registry
-		const kernelIdObject = {}
-		for (const [name, id] of kernelRegistry.kernelNameToId.entries()) {
-			kernelIdObject[name] = id
-		}
-		kernelRegistry.setKernelIdObject(kernelIdObject)
+		kernelRegistry.setKernelIdObject()
 	}
 	/**
 	 * Clears the system timings object. Called by the GameLoop once per frame.
@@ -311,7 +305,6 @@ export class SystemManager {
 	 * @private
 	 */
 	_analyzeAndCacheSystems() {
-		// This method is now simpler as it doesn't need to assign IDs.
 		this.systemMetadataCache.clear()
 		this._buildInitialMetadata()
 		this._resolveAndValidateControlFlow()
@@ -325,7 +318,6 @@ export class SystemManager {
 	 * @private
 	 */
 	_assignAllIdsFromNames(systemNames, kernelNames) {
-		// Re-populate the maps from the canonical registry.
 		this.systemIdCounter = 0
 		this.systemNameToId.clear()
 		this.idToSystemName.clear()
@@ -346,21 +338,28 @@ export class SystemManager {
 	_buildInitialMetadata() {
 		for (const [systemName, SystemClass] of systemRegistry.systemClasses.entries()) {
 			const metadata = {
-				id: this.systemNameToId.get(systemName),
+				id: this.getSystemId(systemName),
 				name: systemName,
 				// The 'schedule' method is now exclusively for creating jobs (the "Job Factory").
 				hasSchedule: !!SystemClass.prototype.schedule,
-				hasUpdate: !!SystemClass.prototype.update,
+				hasUpdate: !!SystemClass.prototype.update, // This is a boolean, not a method reference.
 				hasProcess: !!SystemClass.prototype.process,
-				dependencies: this._analyzeSystemDependencies(SystemClass, systemName),
-				// --- DX Improvement: Normalize single values to arrays ---
-				runsAfter: SystemClass.runsAfter ? (Array.isArray(SystemClass.runsAfter) ? SystemClass.runsAfter : [SystemClass.runsAfter]) : [],
+				dependencies: this._analyzeSystemDependencies(SystemClass, systemName), // This will now return a Map
+				// --- DX : Normalize single values to arrays ---
+				runsAfter: SystemClass.runsAfter
+					? Array.isArray(SystemClass.runsAfter)
+						? SystemClass.runsAfter
+						: [SystemClass.runsAfter]
+					: [],
 				runsBefore: SystemClass.runsBefore
-					? Array.isArray(SystemClass.runsBefore) ? SystemClass.runsBefore : [SystemClass.runsBefore]
+					? Array.isArray(SystemClass.runsBefore)
+						? SystemClass.runsBefore
+						: [SystemClass.runsBefore]
 					: [],
 				// Final ID arrays will be populated in the next pass.
 			}
-			this.systemMetadataCache.set(systemName, metadata)
+			// The cache is now keyed by the numeric system ID for fast lookups in the Scheduler.
+			this.systemMetadataCache.set(metadata.id, metadata)
 		}
 	}
 
@@ -373,13 +372,33 @@ export class SystemManager {
 	 * @private
 	 */
 	_analyzeSystemDependencies(SystemClass, systemName) {
-		const finalDependencies = {}
+		// The dependency map is now keyed by numeric IDs (kernelId or JOB_TYPE) for performance.
+		const finalDependencies = new Map()
 
 		const dependencies = SystemClass.dependencies
 		if (dependencies) {
 			// Iterate over all declared dependency keys (e.g., 'update', 'process', 'myKernel').
 			for (const methodName in dependencies) {
 				const methodDeps = dependencies[methodName]
+				if (typeof methodDeps !== 'object' || methodDeps === null || Array.isArray(methodDeps)) {
+					continue
+				}
+				let key
+
+				// Translate the string method/kernel name into a numeric ID.
+				if (methodName === 'update') {
+					key = 0 // JOB_TYPE.UPDATE
+				} else if (methodName === 'process') {
+					key = 2 // JOB_TYPE.PROCESS
+				} else {
+					key = kernelRegistry.kernelNameToId.get(methodName)
+					if (key === undefined) {
+						console.warn(
+							`[SystemManager] System "${systemName}" has dependencies for an unknown kernel "${methodName}".`,
+						)
+						continue
+					}
+				}
 
 				// --- DX Improvement: Normalize single values to arrays ---
 				const reads = methodDeps.reads ? (Array.isArray(methodDeps.reads) ? methodDeps.reads : [methodDeps.reads]) : []
@@ -430,7 +449,7 @@ export class SystemManager {
 					}
 				}
 
-				finalDependencies[methodName] = newMethodDeps
+				finalDependencies.set(key, newMethodDeps)
 			}
 		}
 		return finalDependencies
@@ -461,12 +480,14 @@ export class SystemManager {
 		}
 
 		// Second pass: process `runsBefore` and check for conflicts, now with real IDs.
-		for (const [sourceSystemName, sourceMetadata] of this.systemMetadataCache.entries()) {
-			if (sourceMetadata.runsBefore.length === 0) continue
+		for (const [sourceSystemId, sourceMetadata] of this.systemMetadataCache.entries()) {
+			if (!sourceMetadata.runsBefore || sourceMetadata.runsBefore.length === 0) continue
 
 			for (const targetSystemId of sourceMetadata.runsBefore) {
+				// targetSystemId is already a number
+				const targetMetadata = this.systemMetadataCache.get(targetSystemId) // Use ID directly
+				const sourceSystemName = this.idToSystemName.get(sourceSystemId)
 				const targetSystemName = this.idToSystemName.get(targetSystemId)
-				const targetMetadata = this.systemMetadataCache.get(targetSystemName)
 
 				if (targetMetadata) {
 					// CONFLICT CHECK 1: A runsBefore B, but also A runsAfter B.
@@ -764,21 +785,6 @@ export class SystemManager {
 	}
 
 	/**
-	 * "Primes" a system's reactive queries with the correct last tick.
-	 * This is a performance-critical helper called just before a system's job is executed.
-	 * @param {object} system The system to prime.
-	 * @param {number} lastTick The last tick the system's group ran.
-	 * @param {number} currentTick The current frame's tick.
-	 */
-	primeSystemQueries(system, lastTick, currentTick) {
-		if (system.reactive) {
-			for (const query of system.reactiveQueries) {
-				query.iterationLastTick = lastTick
-				query.iterationCurrentTick = currentTick
-			}
-		}
-	}
-	/**
 	 * Unregisters a system instance from the manager.
 	 * The system must be de-queued from all update groups before it can be unregistered.
 	 * @param {object|string} systemOrName - The system instance or its class name to unregister.
@@ -982,8 +988,26 @@ export class SystemManager {
 
 		await newInstance.init?.()
 
-		// Broadcast the new context to workers to handle changes in constructor-defined properties.
-		this.workerManager.hotSwapSystemContext(systemName, newInstance, this)
+		// --- HMR Context Update ---
+		// Re-calculate the context for the swapped system and broadcast it to workers.
+		const systemId = this.getSystemId(systemName)
+		const metadata = this.systemMetadataCache.get(systemId)
+		if (metadata?.dependencies) {
+			// Ensure the system entry exists in the main thread's cache
+			if (!this.allSystemContexts[systemId]) {
+				this.allSystemContexts[systemId] = {}
+			}
+			// Iterate over the system's kernels and update/broadcast their contexts.
+			for (const kernelId of metadata.dependencies.keys()) {
+				const newContext = this._getKernelContext(systemId, kernelId)
+				// Update the local cache for the main thread's scheduler.
+				this.allSystemContexts[systemId][kernelId] = newContext
+
+				if (Object.keys(newContext).length > 0) {
+					this.workerManager.broadcast('hmr-context-update', { systemId, kernelId, context: newContext })
+				}
+			}
+		}
 
 		// 5. Re-queue the new system instance into its correct update group.
 		// The frequency is still stored in _systemConfig from the initial load.
@@ -1035,28 +1059,104 @@ export class SystemManager {
 		return systemName ? systemRegistry.getSystem(systemName) : undefined
 	}
 	/**
+	 * Builds the context for a specific system's kernel.
+	 * This is a private helper used during the context caching phase.
+	 * @param {number} systemId - The numeric ID of the system.
+	 * @param {number} kernelId - The numeric ID of the kernel/method to get context for.
+	 * @returns {object}
+	 * @private
+	 */
+	_getKernelContext(systemId, kernelId) {
+		const metadata = this.systemMetadataCache.get(systemId)
+		const kernelDeps = metadata?.dependencies?.get(kernelId)
+		if (!kernelDeps || !kernelDeps.context) {
+			return {} // No context defined for this kernel
+		}
+
+		const finalContext = kernelDeps.context
+
+		// For logging purposes only.
+		const systemName = this.getSystemNameById(systemId)
+		const kernelName = kernelRegistry.idToKernel.get(kernelId)?.name || kernelId
+
+		// --- Validation for the new architecture ---
+		// We are enforcing that the context must be a plain object.
+		// The "Context Factory" pattern (a function) and legacy array pattern are deprecated.
+		if (typeof finalContext !== 'object' || finalContext === null || Array.isArray(finalContext)) {
+			console.error(
+				`[SystemManager] FATAL: System "${systemName}" kernel "${kernelName}" has an invalid context definition. Context must be a plain object.`,
+			)
+			return {}
+		}
+
+		// Validate the final context object to ensure only serializable data is passed.
+		for (const key in finalContext) {
+			const value = finalContext[key]
+			const valueType = typeof value
+			if (valueType === 'function') {
+				console.error(
+					`[SystemManager] FATAL: System "${systemName}" kernel "${kernelName}" has a context property "${key}" of type "function". ` +
+						`Functions cannot be passed in kernel contexts.`,
+				)
+			}
+		}
+		return finalContext
+	}
+
+	/**
+	 * Gathers and caches the static context for all parallel systems.
+	 * This is called once after all systems have been instantiated.
+	 * @private
+	 */
+	_buildAndCacheSystemContexts() {
+		const allContexts = {}
+		// Iterate over system IDs, not names, for performance.
+		for (const systemId of this.idToSystemName.keys()) {
+			const system = this.getSystemById(systemId)
+			if (!system) continue
+
+			const metadata = this.systemMetadataCache.get(systemId)
+			if (!metadata?.dependencies) continue
+
+			const systemContexts = {}
+			let hasAnyContext = false
+
+			// Iterate over numeric kernel IDs.
+			for (const kernelId of metadata.dependencies.keys()) {
+				const context = this._getKernelContext(systemId, kernelId)
+				if (Object.keys(context).length > 0) {
+					systemContexts[kernelId] = context
+					hasAnyContext = true
+				}
+			}
+
+			if (hasAnyContext) {
+				allContexts[systemId] = systemContexts
+			}
+		}
+		this.allSystemContexts = allContexts
+	}
+	/**
 	 * Records the execution time for a specific part of a system's logic.
 	 * This is called by the Scheduler after a job completes.
-	 * @param {string} systemName - The name of the system.
+	 * @param {number | string} systemIdOrName - The ID of the system, or name for pseudo-systems.
 	 * @param {number|'total'} jobType - The type of job, from the JOB_TYPE enum or 'total'.
 	 * @param {number} duration - The execution time in milliseconds.
 	 */
-	recordSystemTiming(systemName, jobType, duration) {
-		if (!this.isPerformanceMonitoringEnabled) return
-
-		const timings = this.systemTimings[systemName] || { update: 0, schedule: 0, process: 0, total: 0 }
+	recordSystemTiming(systemIdOrName, jobType, duration) {
+		const timings = this.systemTimings[systemIdOrName] || { update: 0, schedule: 0, process: 0, total: 0 }
 
 		// If jobType is a number from the JOB_TYPE enum, record it in the specific phase.
-		if (typeof jobType === 'number') {
-			const JOB_TYPE_NAMES = ['update', 'schedule', 'process']
-			const jobTypeName = JOB_TYPE_NAMES[jobType]
-			if (jobTypeName) {
-				timings[jobTypeName] += duration
-			}
-		}
+
+		// JOB_TYPE.UPDATE = 0, .KERNEL = 1, .PROCESS = 2. KERNEL is used for schedule() timing.
+		const JOB_TYPE_NAMES = { 0: 'update', 1: 'schedule', 2: 'process' }
+		const jobTypeName = JOB_TYPE_NAMES[jobType]
+
+		timings[jobTypeName] += duration
+
 		// All durations contribute to the system's total time for the frame.
 		timings.total += duration
-		this.systemTimings[systemName] = timings
+		this.systemTimings[systemIdOrName] = timings
 	}
 
 	/**

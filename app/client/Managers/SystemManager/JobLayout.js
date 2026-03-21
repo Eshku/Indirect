@@ -4,8 +4,8 @@ export const MAX_DEPENDENTS = 65536 // Max total dependents across all jobs
 export const MAX_THREADS = 16 // Max total threads (main + workers)
 
 export const CACHE_LINE_SIZE = 64 // In bytes, for padding to avoid false sharing
-export const JOB_STRIDE_IN_BYTES = CACHE_LINE_SIZE
-export const JOB_STRIDE_IN_U32 = JOB_STRIDE_IN_BYTES / 4 // 16
+export const JOB_STRIDE_IN_BYTES = CACHE_LINE_SIZE * 2 // 128 bytes
+export const JOB_STRIDE_IN_U32 = JOB_STRIDE_IN_BYTES / 4 // 32
 
 // --- Job Data Layout (within the 64-byte stride) ---
 // --- "Cold" Data (written once, read by one thread at a time) ---
@@ -17,10 +17,12 @@ export const JOB_DEP_LIST_COUNT_OFFSET = 3 // Number of dependents in the list
 export const JOB_SYSTEM_ID_OFFSET = 4 // ID of the system this job belongs to
 export const JOB_KERNEL_ID_OFFSET = 5 // ID of the kernel to execute for KERNEL jobs.
 
-// The dependency counter is the "hot" field, frequently written to by multiple threads.
-// We place it at a separate location within the 64-byte stride (at index 8, which is 32 bytes in)
-// to minimize "false sharing" with the other read-only fields of the same job struct.
-export const JOB_DEP_COUNTER_OFFSET = 8
+// --- "Hot" Data (written frequently by many threads) ---.
+// The dependency counter is the single "hot" field, as many threads may try to
+// decrement it concurrently. By placing it on its own cache line within the
+// 128-byte stride, we completely eliminate false sharing between the hot counter
+// and the cold data of the same job, as well as between adjacent jobs.
+export const JOB_DEP_COUNTER_OFFSET = 16 // 16 * 4 bytes = 64 byte offset
 
 /**
  * Enum for the different types of jobs the scheduler can handle.

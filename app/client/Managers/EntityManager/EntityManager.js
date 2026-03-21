@@ -1,4 +1,6 @@
 import * as Schema from '../ComponentManager/ComponentSchema.js'
+const { SharedArchetypeHashMap } = await import(`@core/DataStructures/SharedArchetypeHashMap.js`)
+const { h64Raw } = await xxhash()
 /**
  * Manages all entities, archetypes, and their component data.
  * This class is the heart of the ECS, owning the core data structures that track every entity.
@@ -62,7 +64,7 @@ export const entityStore = {
 	nextEntityIndex: 1,
 
 	// --- Archetype Management (Currently Main-thread only structures) ---
-	archetypeLookup: new Map(),
+	archetypeLookup: null, // Will be initialized as SharedArchetypeHashMap
 	archetypeTransitions: new Array(MAX_ARCHETYPES),
 	// Paged buffer for component IDs. The array of pages is main-thread only.
 	// Workers receive the SABs inside and sync new pages.
@@ -115,6 +117,7 @@ export class EntityManager {
 		this.componentManager = null
 		this.systemManager = null
 		this.prefabManager = null
+		this.workerManager = null
 
 		// Tracks chunk IDs created within a single frame for delta-syncing to workers.
 		this.newlyCreatedChunks = []
@@ -127,11 +130,35 @@ export class EntityManager {
 		this.componentManager = ecs.componentManager
 		this.systemManager = ecs.systemManager
 		this.prefabManager = ecs.prefabManager
+		this.workerManager = ecs.workerManager
+
+		// Initialize the shared archetype map
+		entityStore.archetypeLookup = new SharedArchetypeHashMap({
+			initialCapacity: 512, // A reasonable starting capacity. If a resize ever triggers, the capacity will double.
+			workerManager: this.workerManager,
+		}, h64Raw)
 
 		// Initialize the first page for the packed component ID buffer.
 		const initialPage = new Uint16Array(new SharedArrayBuffer(ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES))
 		entityStore.packedComponentIdPages.push(initialPage)
 		this.newlyCreatedArchetypePages.push(initialPage.buffer)
+
+		// Register all shared data with the sharedResourceRegistry for worker initialization.
+		this.workerManager.addInitialResource('sharedData', this.getSharedData())
+
+		// Pre-gather all existing chunks for the initial worker sync.
+		const initialChunks = {}
+		for (let i = 0; i < entityStore.nextChunkId; i++) {
+			// Only include active chunks, not ones that have been freed.
+			if (entityStore.chunkArchetypeIds[i]) {
+				initialChunks[i] = {
+					data: this.getSharedComponentData(i),
+					archetypeTicks: entityStore.chunkArchetypeDirtyTicks[i],
+					metadata: entityStore.chunkMetadata[i],
+				}
+			}
+		}
+		this.workerManager.addInitialResource('initialChunks', initialChunks)
 	}
 
 	/**
@@ -152,6 +179,7 @@ export class EntityManager {
 			archetypeLastNonFullChunkId: entityStore.archetypeLastNonFullChunkId.buffer,
 			archetypeComponentListStartIndices: entityStore.archetypeComponentListStartIndices.buffer,
 			packedComponentIdPageSABs: entityStore.packedComponentIdPages.map(p => p.buffer),
+			archetypeMapBuffer: entityStore.archetypeLookup.buffer,
 
 			// --- Chunk Metadata ---
 			chunkArchetypeIds: entityStore.chunkArchetypeIds.buffer,
@@ -424,8 +452,7 @@ export class EntityManager {
 		}
 
 		// 2. "Sweep" Phase: Invalidate the chunk by setting its size to 0.
-		// The chunk's memory is NOT de-allocated. It is kept in the archetype's pool
-		// to be reused, which is extremely fast and cache-friendly.
+		// The chunk's memory is NOT de-allocated.
 		entityStore.chunkSizes[chunkId] = 0
 	}
 
@@ -523,10 +550,9 @@ export class EntityManager {
 	}
 
 	getArchetypeByMask(archetypeMask, sortedTypeIDs) {
-		// The key must be a primitive. A string is the easiest way to represent the multi-part mask.
-		const key = archetypeMask.join(',')
-		if (entityStore.archetypeLookup.has(key)) {
-			return entityStore.archetypeLookup.get(key)
+		const existingId = entityStore.archetypeLookup.lookup(archetypeMask)
+		if (existingId !== undefined) {
+			return existingId
 		}
 
 		const id = Atomics.add(entityStore.nextArchetypeId, 0, 1)
@@ -571,7 +597,7 @@ export class EntityManager {
 
 		entityStore.archetypeTransitions[id] = { add: {}, remove: {} }
 
-		entityStore.archetypeLookup.set(key, id)
+		entityStore.archetypeLookup.insert(archetypeMask, id)
 		this.queryManager.registerArchetype(id)
 		return id
 	}
@@ -744,7 +770,7 @@ export class EntityManager {
 	}
 
 	clearAllArchetypes() {
-		entityStore.archetypeLookup.clear()
+		if (entityStore.archetypeLookup) entityStore.archetypeLookup.clear()
 		Atomics.store(entityStore.nextArchetypeId, 0, 0)
 		entityStore.archetypeMasks.fill(0n)
 		entityStore.archetypeComponentCounts.fill(0)

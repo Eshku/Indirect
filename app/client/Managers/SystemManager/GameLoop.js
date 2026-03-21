@@ -365,7 +365,7 @@ export class GameLoop {
 		this.workerManager.broadcastDeltas()
 
 		// --- Maintenance Phase ---
-		await this.scheduler.executeMaintenance(this.currentTick)
+		await this.scheduler.executeMaintenance(this.currentTick, this.frameContext)
 
 		// --- Manual Render Call ---
 		const renderStartTime = performance.now()

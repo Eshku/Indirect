@@ -51,17 +51,12 @@ export class ContextTestSystem {
 		console.log(`%c[ContextTestSystem] update (tick ${currentTick}): Wrote value -> ${valueToWrite}`, 'color: orange')
 	}
 
-	schedule() {
-		const jobs = []
-		const chunkIds = this.query.getChunks()
-
-		for (const chunkId of chunkIds) {
-			jobs.push({
-				kernel: contextTest,
-				payload: chunkId,
-			})
-		}
-		return jobs
+	/**
+	 * Schedules a kernel job for each chunk to test context passing.
+	 * @param {import('../../Managers/SystemManager/JobWriter.js').JobWriter} jobWriter
+	 */
+	schedule(jobWriter) {
+		jobWriter.scheduleForEachChunk(this.query, contextTest)
 	}
 
 	process({ currentTick }) {

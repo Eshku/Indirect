@@ -9,7 +9,7 @@ export function parallelismTest(payload, systemContext, kernelContext) {
 	const { currentTick } = frameContext
 	const { position, velocity, rightBoundary, leftBoundary } = systemContext
 
-	const chunk = kernelContext.getChunkView(payload)
+	const chunk = parallel.getChunkView(payload)
 	const positions = chunk.componentData[position]
 	const velocities = chunk.componentData[velocity]
 
