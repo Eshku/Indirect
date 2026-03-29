@@ -4,24 +4,24 @@ const { ecs } = engine.getManagers()
 
 const benchmarkConfig = {
 	// Options: 'creation', 'destruction', 'structuralChange', 'setData'
-	activeBenchmark: 'creation',
+	activeBenchmark: 'setData',
 
 	creation: {
 		entityCount: 0, // Not used for this test as it starts with an empty world.
-		batchSize: 2_000, //2k
-		//!using slow path for both creation and destruction, measuring worst cases for both
+		batchSize: 4_000, //4k after JiT.
+		// using slow path for both creation and destruction, measuring worst cases for both
 	},
 	destruction: {
-		entityCount: 100_000,
+		entityCount: 400_000,
 		batchSize: 5_000, //5k
 	},
 	structuralChange: {
 		entityCount: 100_000,
-		batchSize: 5_000, //5k+
+		batchSize: 4_000, //4k
 	},
 	setData: {
 		entityCount: 100_000,
-		batchSize: 5_000, //5k+
+		batchSize: 7_500, //7k+
 	},
 }
 
@@ -83,6 +83,8 @@ export class CommandBufferBenchmarkSystem {
 				this._updateSetData()
 				break
 		}
+		//this system is responsible for executing command buffer on it's own.
+		this.flush()
 	}
 
 	_updateCreation() {

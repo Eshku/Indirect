@@ -140,7 +140,10 @@ export class GameLoop {
 	 * @param {import('./SystemManager.js').SystemManager} systemManager - The system manager instance.
 	 */
 	constructor() {
-		this.lastTick = 0
+		// lastTick starts at -1. The first logic tick to complete will be tick 1.
+		// This ensures that on the very first frame, reactive queries checking for changes
+		// since `lastTick` (i.e., `dirtyTick > -1`) will correctly include changes made at `tick = 0`.
+		this.lastTick = -1
 		this.currentTick = 1
 		this.frameCounter = 0
 
@@ -164,6 +167,7 @@ export class GameLoop {
 			alpha: 0,
 			currentTick: 0,
 			lastTick: 0,
+			frameCounter: 0,
 		}
 	}
 
@@ -264,8 +268,11 @@ export class GameLoop {
 			this.frameContext.currentTick = this.currentTick
 			this.frameContext.lastTick = this.systemManager.updateGroups.input.lastTick
 			this.frameContext.alpha = 0 // Not applicable, but set for consistency
+			this.frameContext.frameCounter = this.frameCounter
 			await this.scheduler.execute(inputSystems, this.frameContext, this.frameCounter)
 		}
+
+		//todo limit amount of frames to execute in a single frame - could help with spikes a bit.
 
 		// --- 2. Logic Phase (Fixed Timestep) ---
 		// This loop ensures deterministic updates for gameplay and physics.
@@ -274,7 +281,7 @@ export class GameLoop {
 		// It's important to update the group's lastTick *after* its execution for a given tick.
 		// We capture the last tick value *before* the loop, as this is what reactive systems
 		// in this group will compare against.
-		const lastLogicTickForGroup = this.systemManager.updateGroups.logic.lastTick
+		let lastLogicTickForGroup = this.systemManager.updateGroups.logic.lastTick
 
 		const logicSystems = this.systemManager.updateGroups.logic.systems
 
@@ -284,12 +291,15 @@ export class GameLoop {
 				this.frameContext.currentTick = this.currentTick
 				this.frameContext.lastTick = lastLogicTickForGroup
 				this.frameContext.alpha = 0 // Not applicable
+
+				this.frameContext.frameCounter = this.frameCounter
 				await this.scheduler.execute(logicSystems, this.frameContext, this.frameCounter)
 			}
 
 			// After logic systems run for a tick, we update the group's last tick and advance the global tick.
 			this.lastTick = this.currentTick
 			this.systemManager.updateGroups.logic.lastTick = this.currentTick
+			lastLogicTickForGroup = this.currentTick // Update for the next iteration
 			this.currentTick++
 			this.accumulator -= this.FIXED_TIMESTEP
 		}
@@ -309,6 +319,7 @@ export class GameLoop {
 				this.frameContext.currentTick = this.currentTick
 				this.frameContext.lastTick = group.lastTick
 				this.frameContext.alpha = 0 // Not applicable
+				this.frameContext.frameCounter = this.frameCounter
 				await this.scheduler.execute(group.systems, this.frameContext, this.frameCounter)
 				group.accumulator = 0 // Reset accumulator for this group
 			}
@@ -324,6 +335,7 @@ export class GameLoop {
 			this.frameContext.alpha = alpha
 			this.frameContext.currentTick = this.currentTick
 			this.frameContext.lastTick = this.systemManager.updateGroups.visuals.lastTick
+			this.frameContext.frameCounter = this.frameCounter
 
 			// Await the completion of all jobs for this group.
 			await this.scheduler.execute(visualsSystems, this.frameContext, this.frameCounter)
@@ -331,10 +343,13 @@ export class GameLoop {
 
 		// --- 5. Post-Execution Frame Finalization ---
 
-		// --- Command Buffer Flush ---
-		// This must happen after all system groups are complete.
-		const cbFlushStartTime = performance.now()
-		this.systemManager.commandBufferExecutor.execute(this.systemManager.commandBuffer, this.currentTick)
+		// Flush all deferred commands from all systems.
+		// This is the single point in the frame where all structural changes (creations,
+		// deletions, component add/remove) are applied to the world.
+		const cbStartTime = performance.now()
+		this.systemManager.commandBuffer.flush()
+		const cbEndTime = performance.now()
+		this.systemManager.recordSystemTiming('Command Buffer', 'total', cbEndTime - cbStartTime)
 
 		// Sync the last-run tick for all non-logic groups to the last completed logic tick of this frame.
 		// This ensures reactivity is consistent across all of them for the next frame.
@@ -344,11 +359,6 @@ export class GameLoop {
 				group.lastTick = this.lastTick
 			}
 		}
-
-		const cbFlushEndTime = performance.now()
-
-		// --- Performance Data Recording ---
-		this.systemManager.recordSystemTiming('Command Buffer', 'total', cbFlushEndTime - cbFlushStartTime)
 
 		// The PerformanceMonitor's own `update` job has run. Now we call its special methods
 		// to collect the complete timing data for the frame and update its display.

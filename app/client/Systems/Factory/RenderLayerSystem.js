@@ -3,6 +3,7 @@ const { ecs, layerManager, assetManager } = engine.getManagers()
 const { stringInterningTable } = await import(`@indirect/StringInterningTable.js`)
 
 const { viewable, layer } = ecs.getTypeIDs()
+const { SpriteFactorySystem } = ecs.getSystemIDs()
 
 const UNINITIALIZED_REF = 0
 
@@ -13,48 +14,36 @@ const UNINITIALIZED_REF = 0
  * and the Layer component (when an entity's layer is changed).
  */
 export class RenderLayerSystem {
+	// This system must run AFTER the factories have created a spriteRef.
+	static runsAfter = [SpriteFactorySystem]
+
 	init() {
 		this.layerQuery = this.getQuery({
 			with: [viewable, layer],
-			react: [viewable, layer], // React to sprite creation OR layer changes
+			modified: [viewable, layer], // React to sprite creation OR layer changes
 		})
 
-		// Allocate scratch buffers for change detection.
-		// Assuming max chunk capacity is <= 4096
-		this.scratchBuffer1 = new Uint32Array(4096)
-		this.scratchBuffer2 = new Uint32Array(4096)
 		this.stringStorage = stringInterningTable.storage
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
-		// The query iterator is primed by the SystemManager and culls chunks with no relevant changes.
+		// The reactive query now only returns chunks containing entities whose `viewable` or `layer` has changed.
 		for (const chunk of this.layerQuery.iter()) {
 			const viewableArrays = chunk.componentData[viewable]
 			const layerArrays = chunk.componentData[layer]
 
-			// Gather all unique indices that have changed for either component.
-			const changedIndices = new Set()
-			const viewableChangedCount = chunk.getChangedIndices(viewable, lastTick, this.scratchBuffer1)
-			for (let i = 0; i < viewableChangedCount; i++) {
-				changedIndices.add(this.scratchBuffer1[i])
-			}
-			const layerChangedCount = chunk.getChangedIndices(layer, lastTick, this.scratchBuffer2)
-			for (let i = 0; i < layerChangedCount; i++) {
-				changedIndices.add(this.scratchBuffer2[i])
-			}
-
-			if (changedIndices.size === 0) continue
-
-			for (const indexInChunk of changedIndices) {
+			// We can now iterate over all entities in the returned chunk, as the query itself is the filter.
+			// The `getChangedIndices` and scratch buffer pattern is no longer needed here.
+			// Note: This assumes the new query implementation will eventually provide a way to get
+			// only the changed indices directly, but for now, iterating the whole pre-filtered chunk is correct.
+			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				const spriteRef = viewableArrays.spriteRef[indexInChunk]
 				if (spriteRef === UNINITIALIZED_REF) continue
 
 				const sprite = assetManager.getDisplayObjectByRef(spriteRef)
-				if (!sprite) continue
 
 				const layerName = this.stringStorage[layerArrays.name[indexInChunk]]
 				const targetLayer = layerManager.getLayer(layerName)
-				if (!targetLayer) continue
 
 				if (sprite.parent !== targetLayer) {
 					targetLayer.addChild(sprite)

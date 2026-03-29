@@ -1,6 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, physicsManager } = engine.getManagers()
 const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
+const { PhysicsLayers } = await import(`@managers/PhysicsManager/PhysicsManager.js`)
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
 
@@ -11,10 +12,12 @@ const {
 	boxCollider,
 	orientedBoxCollider,
 	collisionLayer,
-	collisionBuffer,
-	aabb, // The new AABB component calculated by SpatialHashingSystem
+	damageCollisionBuffer,
+	aabb,
 	isPooled,
 } = ecs.getTypeIDs()
+
+const { SpatialHashingSystem } = ecs.getSystemIDs()
 
 /**
  * Performs collision detection for all collidable entities.
@@ -25,10 +28,10 @@ const {
 export class CollisionDetectionSystem {
 	static dependencies = {
 		// This is a hard dependency: the grid MUST be populated before this system runs.
-		runsAfter: [ecs.getSystemIDs().SpatialHashingSystem],
+		runsAfter: [SpatialHashingSystem],
 		update: {
 			reads: [position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer, aabb],
-			writes: [collisionBuffer],
+			writes: [damageCollisionBuffer],
 		},
 	}
 
@@ -40,10 +43,17 @@ export class CollisionDetectionSystem {
 		const collisionMatrixSAB = physicsManager.getCollisionMatrixSAB()
 		this.collisionMatrix = new Uint32Array(collisionMatrixSAB)
 
-		// Query for all entities that can collide and have a buffer to report collisions into.
-		this.collidablesQuery = this.getQuery({
-			with: [position, collisionLayer, collisionBuffer, aabb],
-			any: [circleCollider, boxCollider, orientedBoxCollider],
+		// Query for all entities that can receive damage events. Used for clearing buffers.
+		this.damageableQuery = this.getQuery({
+			with: [damageCollisionBuffer],
+			without: [isPooled],
+		})
+
+		// Query for "aggressors" - entities that initiate collision checks (player, projectiles).
+		// This is the key optimization: we iterate over the small set of aggressors, not the large set of all enemies.
+		this.aggressorQuery = this.getQuery({
+			with: [position, collisionLayer, aabb],
+			any: [circleCollider, boxCollider, orientedBoxCollider], // Must have a shape
 			without: [isPooled],
 		})
 
@@ -54,7 +64,7 @@ export class CollisionDetectionSystem {
 		this.boxColliderId = boxCollider
 		this.orientedBoxColliderId = orientedBoxCollider
 		this.collisionLayerId = collisionLayer
-		this.collisionBufferId = collisionBuffer
+		this.damageCollisionBufferId = damageCollisionBuffer // This is the only buffer we write to now
 		this.aabbId = aabb
 
 		const MAX_QUERY_RESULTS = 1024 // A reasonable default, can be tuned.
@@ -92,24 +102,29 @@ export class CollisionDetectionSystem {
 
 		// --- Pass 1: Clear Buffers ---
 		// Reset the collision count for all entities from the previous frame.
-		for (const chunk of this.collidablesQuery.iter()) {
-			const buffers = chunk.componentData[this.collisionBufferId]
-			if (chunk.size > 0) {
-				// `fill` is an efficient way to reset part of a TypedArray.
-				buffers.count.fill(0, 0, chunk.size)
-				// Mark the buffer as dirty so reactive systems know it has been reset.
-				chunk.markDirty(this.collisionBufferId, currentTick)
+		for (const chunk of this.damageableQuery.iter()) {
+			const damageBuffers = chunk.componentData[damageCollisionBuffer]
+			if (damageBuffers) {
+				damageBuffers.count.fill(0, 0, chunk.size)
 			}
+			// We will only mark a chunk's buffer as dirty if a collision is actually written to it.
 		}
+		this.currentTick = currentTick
 
 		// --- Pass 2: Detect and Record Collisions ---
-		for (const chunkA of this.collidablesQuery.iter()) {
+		// This is the aggressor-driven loop. We only iterate over players and projectiles.
+		for (const chunkA of this.aggressorQuery.iter()) {
 			const aabbsA = chunkA.componentData[this.aabbId]
 			const layersA = chunkA.componentData[this.collisionLayerId]
 
 			for (let i = 0; i < chunkA.size; i++) {
-				const entityAId = chunkA.entities[i]
+				// If this entity is an enemy, skip it. Enemies don't initiate checks in this model.
+				const groupA = layersA.group[i]
+				if (groupA === PhysicsLayers.ENEMY) {
+					continue
+				}
 
+				const entityAId = chunkA.entities[i]
 				// Broad-phase: Get potential colliders from the grid.
 				// The queryBox method now resets the count internally.
 				this.grid.queryBox(aabbsA.minX[i], aabbsA.minY[i], aabbsA.maxX[i], aabbsA.maxY[i], this.queryResult)
@@ -118,9 +133,9 @@ export class CollisionDetectionSystem {
 				for (let j = 0; j < this.queryResult.count; j++) {
 					const entityBId = this.queryResult.entityIds[j]
 
-					// "Upper Triangle" check to avoid processing pairs twice (A-B vs B-A) and self-collision.
-					// This is the core optimization that replaces the `processedPairs` Set.
-					if (entityAId >= entityBId) {
+					// Self-collision check. The upper-triangle check is no longer needed
+					// because our outer loop is only aggressors.
+					if (entityAId === entityBId) {
 						continue
 					}
 
@@ -130,10 +145,11 @@ export class CollisionDetectionSystem {
 					const chunkB = this.reusableChunkView
 
 					// The grid can contain entities that don't have a collision buffer.
-					// We must check that the neighbor has a buffer before trying to process it.
+					// We must check that the neighbor has at least one buffer before trying to process it.
 					// This check is crucial because the spatial hash grid is populated with all collidables,
-					// but our query here is only for those with a collisionBuffer.
-					if (!chunkB.componentData[this.collisionBufferId]) {
+					// but our primary query is only for entities that can receive events.
+					if (
+						!chunkB.componentData[this.damageCollisionBufferId]					) {
 						continue
 					}
 
@@ -141,7 +157,6 @@ export class CollisionDetectionSystem {
 					const indexBInChunk = this.queryResult.entityIndices[j]
 
 					// Layer mask check: see if the entities' layers allow them to interact.
-					const groupA = layersA.group[i]
 					const groupB = layersB.group[indexBInChunk]
 
 					// Look up the masks from the global collision matrix.
@@ -149,7 +164,7 @@ export class CollisionDetectionSystem {
 					const canBCollideA = (this.collisionMatrix[groupB] & groupA) !== 0
 
 					if (canACollideB && canBCollideA) {
-						this._checkAndRecordCollision(chunkA, i, chunkB, indexBInChunk)
+						this._checkAndRecordCollision(chunkA, i, chunkB, indexBInChunk, entityAId, entityBId)
 					}
 				}
 			}
@@ -166,9 +181,7 @@ export class CollisionDetectionSystem {
 	 * @param {number} indexB
 	 * @private
 	 */
-	_checkAndRecordCollision(chunkA, indexA, chunkB, indexB) {
-		const entityAId = chunkA.entities[indexA]
-		const entityBId = chunkB.entities[indexB]
+	_checkAndRecordCollision(chunkA, indexA, chunkB, indexB, entityAId, entityBId) {
 
 		// --- Gather all necessary component data without creating objects ---
 		const posA = chunkA.componentData[this.positionId]
@@ -205,7 +218,7 @@ export class CollisionDetectionSystem {
 		}
 		// Case 2: Box vs Box (AABB vs AABB)
 		else if (boxA && boxB) {
-			// The AABBs are pre-calculated by SpatialHashingSystem. This is a very fast check.
+			// The AABBs are pre-calculated by SpatialHashingSystem.
 			if (
 				aabbA.minX[indexA] < aabbB.maxX[indexB] &&
 				aabbA.maxX[indexA] > aabbB.minX[indexB] &&
@@ -310,8 +323,8 @@ export class CollisionDetectionSystem {
 	}
 
 	// --- SAT (Separating Axis Theorem) Helper Methods (Allocation-Free) ---
-
-	/**
+	
+    /**
 	 * Calculates the world-space corners of an OBB and writes them to output buffers.
 	 * @param {Float32Array} out_cornersX - Output buffer for X coordinates.
 	 * @param {Float32Array} out_cornersY - Output buffer for Y coordinates.
@@ -424,7 +437,7 @@ export class CollisionDetectionSystem {
 
 		return true // No separating axis found
 	}
-	
+
 	_checkOBBvsCircle(obbChunk, obbIndex, circleChunk, circleIndex) {
 		const posO = obbChunk.componentData[this.positionId]
 		const obb = obbChunk.componentData[this.orientedBoxColliderId]
@@ -510,7 +523,7 @@ export class CollisionDetectionSystem {
 
 		return true
 	}
-	
+
 	_checkOBBvsAABB(obbChunk, obbIndex, aabbChunk, aabbIndex) {
 		// This is a simplified OBB vs OBB check where the second OBB has an angle of 0.
 		const posO = obbChunk.componentData[this.positionId]
@@ -580,23 +593,43 @@ export class CollisionDetectionSystem {
 
 	/** Adds a collision event to an entity's buffer. */
 	_addCollision(chunk, indexInChunk, otherEntityId) {
-		const buffer = chunk.componentData[this.collisionBufferId]
+		const buffer = chunk.componentData[this.damageCollisionBufferId]
+		// If the entity doesn't have the required buffer type, do nothing.
+		if (!buffer) return
+
 		const count = buffer.count[indexInChunk]
 		const capacity = buffer.capacity[indexInChunk]
 
 		if (count < capacity) {
-			// This switch is allocation-free and much faster than creating a temporary array.
 			switch (count) {
-				case 0: buffer.event0[indexInChunk] = otherEntityId; break
-				case 1: buffer.event1[indexInChunk] = otherEntityId; break
-				case 2: buffer.event2[indexInChunk] = otherEntityId; break
-				case 3: buffer.event3[indexInChunk] = otherEntityId; break
-				case 4: buffer.event4[indexInChunk] = otherEntityId; break
-				case 5: buffer.event5[indexInChunk] = otherEntityId; break
-				case 6: buffer.event6[indexInChunk] = otherEntityId; break
-				case 7: buffer.event7[indexInChunk] = otherEntityId; break
+				case 0:
+					buffer.event0[indexInChunk] = otherEntityId
+					break
+				case 1:
+					buffer.event1[indexInChunk] = otherEntityId
+					break
+				case 2:
+					buffer.event2[indexInChunk] = otherEntityId
+					break
+				case 3:
+					buffer.event3[indexInChunk] = otherEntityId
+					break
+				case 4:
+					buffer.event4[indexInChunk] = otherEntityId
+					break
+				case 5:
+					buffer.event5[indexInChunk] = otherEntityId
+					break
+				case 6:
+					buffer.event6[indexInChunk] = otherEntityId
+					break
+				case 7:
+					buffer.event7[indexInChunk] = otherEntityId
+					break
 			}
 			buffer.count[indexInChunk]++
+
+			chunk.markEntityDirty(indexInChunk, this.damageCollisionBufferId, this.currentTick)
 		}
 	}
 }

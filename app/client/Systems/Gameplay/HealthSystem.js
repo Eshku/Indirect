@@ -1,9 +1,10 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { health, lifecycleState } = ecs.getTypeIDs()
+const { health, lifecycleState, playerTag } = ecs.getTypeIDs()
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
+const { DamageSystem } = ecs.getSystemIDs()
 
 /**
  * Monitors entities with health and marks them as 'DYING' when their health drops to zero or below.
@@ -12,9 +13,9 @@ const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 export class HealthSystem {
 	static dependencies = {
 		// Must run after any system that can modify health (e.g., DamageSystem).
-		runsAfter: [ecs.getSystemIDs().DamageSystem],
+		runsAfter: [DamageSystem],
 		update: {
-			reads: [health],
+			reads: [health, lifecycleState],
 			writes: [lifecycleState],
 		},
 	}
@@ -23,13 +24,13 @@ export class HealthSystem {
 		// A reactive query that only triggers for entities whose health has changed.
 		this.healthQuery = this.getQuery({
 			with: [health, lifecycleState],
-			react: [health],
+			modified: [health],
 		})
 
-		// Pre-compile the payload to set the DYING state.
-		const { payload } = this.compile(lifecycleState, { flags: LIFECYCLE.DYING })
-		this.dyingPayload = payload
-		this.scratchBuffer = new Uint32Array(4096) // Max chunk capacity
+		this.playerQuery = this.getQuery({ with: [playerTag] })
+		this.playerId = this.playerQuery.getSingleEntity()
+
+		this.scratchBuffer = this.getScratchBuffer(health)
 	}
 
 	update({ currentTick, lastTick }) {
@@ -40,13 +41,15 @@ export class HealthSystem {
 
 			for (let i = 0; i < changedCount; i++) {
 				const indexInChunk = this.scratchBuffer[i]
+				const entityId = chunk.entities[indexInChunk]
+
 				// Check if health has dropped to or below zero.
 				if (healths.current[indexInChunk] <= 0) {
 					// Only mark as DYING if it's currently ACTIVE. This prevents
 					// redundant commands for entities already dying or pooled.
 					if ((states.flags[indexInChunk] & LIFECYCLE.ACTIVE) !== 0) {
-						const entityId = chunk.entities[indexInChunk]
-						this.setComponentData(entityId, this.dyingPayload)
+						states.flags[indexInChunk] = LIFECYCLE.DYING
+						chunk.markEntityDirty(indexInChunk, lifecycleState, currentTick)
 					}
 				}
 			}

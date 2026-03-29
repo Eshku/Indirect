@@ -31,7 +31,7 @@ export const PhysicsLayers = Object.freeze({
 export const LayerMasks = Object.freeze({
 	[PhysicsLayers.NONE]: PhysicsLayers.NONE,
 	[PhysicsLayers.PLAYER]: PhysicsLayers.ENEMY | PhysicsLayers.PICKUP,
-	[PhysicsLayers.ENEMY]: PhysicsLayers.PLAYER | PhysicsLayers.ENEMY | PhysicsLayers.PLAYER_PROJECTILE,
+	[PhysicsLayers.ENEMY]: PhysicsLayers.PLAYER | PhysicsLayers.PLAYER_PROJECTILE,
 	[PhysicsLayers.PLAYER_PROJECTILE]: PhysicsLayers.ENEMY,
 	[PhysicsLayers.PICKUP]: PhysicsLayers.PLAYER,
 })

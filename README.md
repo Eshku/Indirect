@@ -90,14 +90,21 @@ Components are defined as plain JavaScript objects that act as a schema, dictati
 
 ### Queries
 
-Systems use queries to find chunks that have a specific set of components.
+Systems use queries to find and iterate over groups of entities that possess a specific set of components.
+
+**Query Types:**
+
+**Basic Queries**:
 
 - **`with`**: Components that must be present.
-- **`without`**: Components that must not be present.
-- **`any`**: At least one of these components must be present.
-- **`react`**: Query only returns chunks where one of these components has changed since system last ran.
+- **`without`**: Components that must _not_ be present.
+- **`any`**: A list of components where at least one must be present.
 
-Primary way to iterate is `query.iter()`, which yields [`Chunk Views`](app/client/Managers/QueryManager/ChunkView.js) for processing.
+**Reactive**:
+
+- **`modified`**: Component's data has been modified.
+- **`added`**: Component was added.
+- **`removed`**:Component has been removed.
 
 ### Parallelism: A Kernel-Based Job Scheduler
 
@@ -118,7 +125,7 @@ System methods are executed in a specific, guaranteed order. An `async init()` m
 
 **Execution Order:**
 
-1.  **Job Creation**: The `schedule()` method of all active systems is called on the main thread. It uses a `JobWriter` to populate a shared job buffer. This step only *defines* the work.
+1.  **Job Creation**: The `schedule()` method of all active systems is called on the main thread. It uses a `JobWriter` to populate a shared job buffer. This step only _defines_ the work.
 2.  **`update()`**: The `update()` method of systems runs on the main thread. It is used for any logic that must run sequentially before parallel kernels begin.
 3.  **Kernel Execution**: Kernel jobs created during job creation phase are now executed in parallel across worker threads.
 4.  **`process()`**: The `process()` method runs on the main thread after all of a system's `update()` and kernel jobs have finished.

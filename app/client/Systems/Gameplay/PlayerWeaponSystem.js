@@ -12,10 +12,12 @@ const {
 	distanceTraveled,
 	lifecycleState,
 	cursorTag,
+	rotation,
 	playerProjectile,
 	isPooled,
 	range,
 	damage,
+	hitHistory,
 } = ecs.getTypeIDs()
 
 /**
@@ -31,7 +33,6 @@ export class PlayerWeaponSystem {
 				shootingIntent,
 				playerWeaponStats,
 				position,
-				velocity,
 				weaponCooldown, // Reads the timer
 				// Other entities
 				cursorTag,
@@ -44,7 +45,7 @@ export class PlayerWeaponSystem {
 	init() {
 		// Query for the player and all components we need to read.
 		this.playerQuery = this.getQuery({
-			with: [playerTag, shootingIntent, playerWeaponStats, weaponCooldown, position, velocity],
+			with: [playerTag, shootingIntent, playerWeaponStats, weaponCooldown, position],
 		})
 
 		// Query for projectiles in the pool using the `isPooled` tag component.
@@ -71,58 +72,61 @@ export class PlayerWeaponSystem {
 
 		// Pre-compile full projectile entity for maximum creation performance.
 		// We will use mutators to set dynamic values (position, velocity, owner) at fire time.
-		const { payload, mutators } = this.compile('playerProjectile')
+		const { payload, mutators } = this.compile('slashingArc')
 		this.projectilePayload = payload
 		this.projectileMutators = mutators
 
 		// Pre-compile a single payload to reset all necessary components on a reused projectile.
 		// This is much more efficient than sending multiple `setComponentData` commands.
-		const { payload: resetProjectilePayload, mutators: resetProjectileMutators } = this.compile({
-			lifecycleState: { flags: LIFECYCLE.ACTIVE },
+		const { payload: reusePayload, mutators: reuseMutators } = this.compile({
+			owner: {},
+			position: {},
+			velocity: {},
+			rotation: {},
+			range: {},
+			damage: {},
 			distanceTraveled: { value: 0 },
-			owner: {}, // for mutator
-			position: {}, // for mutator
-			velocity: {}, // for mutator
-			range: {}, // for mutator
-			damage: {}, // for mutator
+			hitHistory: { count: 0 },
+			lifecycleState: { flags: LIFECYCLE.ACTIVE },
 		})
-		this.resetProjectilePayload = resetProjectilePayload
-		this.resetProjectileMutators = resetProjectileMutators
-
-		// Pre-compile a payload and mutator for resetting weapon cooldown.
-		const { payload: cooldownPayload, mutators: cooldownMutators } = this.compile(weaponCooldown)
-		this.cooldownPayload = cooldownPayload
-		this.cooldownMutators = cooldownMutators
+		this.reuseProjectilePayload = reusePayload
+		this.reuseProjectileMutators = reuseMutators
 	}
 
 	update({ currentTick }) {
-		// Read components for player.
-		const intent = this.getComponent(this.playerId, shootingIntent)
-		const cooldown = this.getComponent(this.playerId, weaponCooldown)
+		let intentValue, cooldownTimer, playerX, playerY, playerStats, cursorX, cursorY
+
+		const playerChunk = this.playerQuery.getSingleChunk()
+
+		intentValue = playerChunk.componentData[shootingIntent].shootingIntent[0]
+		cooldownTimer = playerChunk.componentData[weaponCooldown].timer[0]
+		playerX = playerChunk.componentData[position].x[0]
+		playerY = playerChunk.componentData[position].y[0]
+		playerStats = playerChunk.componentData[playerWeaponStats] // Keep SoA object for multiple property access
 
 		// Check for intent and if cooldown is ready.
-		if (!intent || !cooldown || intent.shootingIntent !== 1 || cooldown.timer > 0) {
+		if (intentValue !== 1 || cooldownTimer > 0) {
 			return
 		}
 
-		// Now that we know we need to fire, gather all required data.
-		const playerPos = this.getComponent(this.playerId, position)
-		const playerVel = this.getComponent(this.playerId, velocity)
-		const playerStats = this.getComponent(this.playerId, playerWeaponStats)
-		const cursor = this.getComponent(this.cursorId, position)
+		const cursorChunk = this.cursorQuery.getSingleChunk()
+		if (cursorChunk) {
+			cursorX = cursorChunk.componentData[position].x[0]
+			cursorY = cursorChunk.componentData[position].y[0]
+		}
 
 		const fireData = {
 			playerId: this.playerId,
-			playerX: playerPos.x,
-			playerY: playerPos.y,
-			cursorX: cursor.x,
-			cursorY: cursor.y,
-			playerVx: playerVel.x,
-			playerVy: playerVel.y,
-			baseProjectileSpeed: playerStats.speed,
-			inheritanceFactor: playerStats.velocityInheritance,
-			projectileRange: playerStats.range,
-			projectileDamage: playerStats.damage,
+			playerX: playerX,
+			playerY: playerY,
+			cursorX: cursorX,
+			cursorY: cursorY,
+			baseProjectileSpeed: playerStats.speed[0],
+			projectileRange: playerStats.range[0],
+			projectileDamage: playerStats.damage[0],
+			angle: 0,
+			spawnX: 0,
+			spawnY: 0,
 		}
 
 		// Calculate firing vector from player to the cursor.
@@ -132,11 +136,20 @@ export class PlayerWeaponSystem {
 		fireData.normFireX = fireLen > 0 ? fireDirX / fireLen : 0 // Default to no x-movement
 		fireData.normFireY = fireLen > 0 ? fireDirY / fireLen : -1 // Default to firing "up" if cursor is on player
 
-		// Project player's velocity onto firing direction vector using dot product.
-		const inheritedSpeed =
-			(fireData.playerVx * fireData.normFireX + fireData.playerVy * fireData.normFireY) * fireData.inheritanceFactor
+		// The angle of the aim direction.
+		// We use atan2(y, x) to get the angle. However, in many 2D game engines,
+		// the Y-axis points down, whereas the mathematical `atan2` function assumes Y points up.
+		// This can cause rotations to feel "reversed" when aiming vertically.
+		// By negating the Y component, we align the angle calculation with the visual coordinate system.
+		const aimAngle = Math.atan2(-fireData.normFireY, fireData.normFireX)
+		// The slash rotation should be perpendicular to the aim direction. We add 90 degrees (PI/2 radians).
+		fireData.angle = aimAngle + Math.PI / 2
 
-		fireData.finalSpeed = Math.max(0, fireData.baseProjectileSpeed + inheritedSpeed)
+		const PROJECTILE_SPAWN_OFFSET = 64 // Half the projectile's depth (128/2) to spawn it at the player's edge.
+		fireData.spawnX = fireData.playerX + fireData.normFireX * PROJECTILE_SPAWN_OFFSET
+		fireData.spawnY = fireData.playerY + fireData.normFireY * PROJECTILE_SPAWN_OFFSET
+
+		fireData.finalSpeed = fireData.baseProjectileSpeed
 
 		const availablePooledProjectile = this.findAvailableProjectile()
 		if (availablePooledProjectile) {
@@ -145,42 +158,54 @@ export class PlayerWeaponSystem {
 			this.createNewProjectile(fireData, currentTick)
 		}
 
-		// Reset cooldown using a command.
-		this.cooldownMutators.weaponCooldown.timer[0] = playerStats.fireRate
-		this.setComponentData(this.playerId, this.cooldownPayload)
+		// Reset cooldown using direct writes for better performance and immediate effect.
+		const cooldowns = playerChunk.componentData[weaponCooldown]
+		cooldowns.timer[0] = playerStats.fireRate[0]
 		// Enable the component so the CooldownSystem will process it.
-		this.setComponentEnabled(this.playerId, weaponCooldown, true)
+		playerChunk.enableComponent(0, weaponCooldown)
 	}
 
 	findAvailableProjectile() {
-		return this.pooledProjectileQuery.getSingleEntity()
+		// `iter()` is a generator, so this will stop after the first non-empty chunk.
+		for (const chunk of this.pooledProjectileQuery.iter()) {
+			if (chunk.size > 0) {
+				// Return the chunk and the index of the first available entity.
+				return { chunk, index: 0, entityId: chunk.entities[0] }
+			}
+		}
+		return null
 	}
 
-	//! pre-allocate all to get rid of branching? 1k should be enough? Might be worth testing later on
-	//! Once we have upgrades and whatnot to see how much we actually pool
+	//! pre-allocate all to get rid of branching once we have some idea how many we can have.
 
-	reuseProjectile(entityId, fireData, currentTick) {
-		// Use the single mutator object to update all dynamic data for the reused projectile.
-		this.resetProjectileMutators.owner.entityId[0] = fireData.playerId
-		this.resetProjectileMutators.position.x[0] = fireData.playerX
-		this.resetProjectileMutators.position.y[0] = fireData.playerY
-		this.resetProjectileMutators.velocity.x[0] = fireData.normFireX * fireData.finalSpeed
-		this.resetProjectileMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
-		this.resetProjectileMutators.range.value[0] = fireData.projectileRange
-		this.resetProjectileMutators.damage.value[0] = fireData.projectileDamage
+	reuseProjectile(pooledInfo, fireData, currentTick) {
+		const { entityId } = pooledInfo
 
-		// This is the structural change to bring the entity back into the "active" world.
+		// Use the pre-compiled mutators to modify the pre-compiled payload's buffer
+		this.reuseProjectileMutators.owner.entityId[0] = fireData.playerId
+		this.reuseProjectileMutators.position.x[0] = fireData.spawnX
+		this.reuseProjectileMutators.position.y[0] = fireData.spawnY
+		this.reuseProjectileMutators.velocity.x[0] = fireData.normFireX * fireData.finalSpeed
+		this.reuseProjectileMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
+		this.reuseProjectileMutators.rotation.angle[0] = fireData.angle
+		this.reuseProjectileMutators.range.value[0] = fireData.projectileRange
+		this.reuseProjectileMutators.damage.value[0] = fireData.projectileDamage
+
+		// Issue deferred commands to make the state change atomic from the perspective of other systems.
+		// 1. This is the structural change that moves the entity to an "active" archetype.
 		this.removeComponent(entityId, isPooled)
-		// This single command updates all necessary components for the projectile's new life.
-		this.setComponentsData(entityId, this.resetProjectilePayload)
+		// 2. This single command updates all necessary components for the projectile's new life.
+		// All data changes will be applied *after* the structural change is complete.
+		this.setComponentsData(entityId, this.reuseProjectilePayload)
 	}
 
 	createNewProjectile(fireData, currentTick) {
 		this.projectileMutators.owner.entityId[0] = fireData.playerId
-		this.projectileMutators.position.x[0] = fireData.playerX
-		this.projectileMutators.position.y[0] = fireData.playerY
+		this.projectileMutators.position.x[0] = fireData.spawnX
+		this.projectileMutators.position.y[0] = fireData.spawnY
 		this.projectileMutators.velocity.x[0] = fireData.normFireX * fireData.finalSpeed
 		this.projectileMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
+		this.projectileMutators.rotation.angle[0] = fireData.angle
 		this.projectileMutators.range.value[0] = fireData.projectileRange
 		this.projectileMutators.damage.value[0] = fireData.projectileDamage
 

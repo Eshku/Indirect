@@ -74,11 +74,25 @@ export class ECS {
 	}
 
 	/**
+	 * Gets the correct tick for an immediate-mode operation.
+	 * Before the game loop starts, this is 0. During the loop, it's the current tick.
+	 * @private
+	 */
+	_getImmediateTick() {
+		// The game loop is not available during the initial manager init phase.
+		if (!this.systemManager?.gameLoop) return 0
+		// For pre-loop setup (frame 0), use tick 0.
+		if (this.systemManager.gameLoop.frameCounter === 0) return 0
+		// For in-loop calls, timestamp with the *next* tick to ensure next-frame reactivity, mirroring the command buffer's behavior.
+		return this.systemManager.currentTick + 1
+	}
+
+	/**
 	 * Creates an entity immediately.
 	 */
 	createEntity(componentsInput = {}) {
 		if (Object.keys(componentsInput).length === 0) {
-			return this.entityManager.createEntity()
+			return this.entityManager.createEntity() // This doesn't need a tick.
 		}
 
 		// Binary path as the command buffer,
@@ -87,7 +101,7 @@ export class ECS {
 		const entityID = this.entityManager.createEntityFromAosPayload(
 			payload.archetypeId,
 			payload.data,
-			this.systemManager.currentTick,
+			this._getImmediateTick(),
 		)
 		return entityID
 	}
@@ -111,7 +125,7 @@ export class ECS {
 		const entityID = this.entityManager.createEntityFromAosPayload(
 			payload.archetypeId,
 			payload.data,
-			this.systemManager.currentTick,
+			this._getImmediateTick(),
 		)
 		return entityID
 	}
@@ -133,7 +147,7 @@ export class ECS {
 		}
 		// Use the payload compiler to create the minimal binary payload for the new component.
 		const { payload } = this.payloadCompiler.compile(componentTypeId, data)
-		return this.entityManager.addComponent(entityId, componentTypeId, payload.data, this.systemManager.currentTick)
+		return this.entityManager.addComponent(entityId, componentTypeId, payload.data, this._getImmediateTick())
 	}
 
 	/**
@@ -145,7 +159,7 @@ export class ECS {
 			// No need to warn, the component isn't even registered in the system.
 			return false
 		}
-		return this.entityManager.removeComponent(entityId, componentTypeId, this.systemManager.currentTick)
+		return this.entityManager.removeComponent(entityId, componentTypeId, this._getImmediateTick())
 	}
 
 	/**

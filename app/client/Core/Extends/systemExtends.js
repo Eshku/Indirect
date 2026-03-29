@@ -24,7 +24,8 @@ export const extensions = {
 	setComponentDataSilent: commandBuffer.setComponentDataSilent.bind(commandBuffer),
 	setComponentsData: commandBuffer.setComponentsData.bind(commandBuffer),
 	setComponentsDataSilent: commandBuffer.setComponentsDataSilent.bind(commandBuffer),
-	setComponentEnabled: commandBuffer.setComponentEnabled.bind(commandBuffer),
+	enableComponent: commandBuffer.enableComponent.bind(commandBuffer),
+	disableComponent: commandBuffer.disableComponent.bind(commandBuffer),
 	removeComponent: commandBuffer.removeComponent.bind(commandBuffer),
 	destroyEntity: commandBuffer.destroyEntity.bind(commandBuffer),
 	destroyEntitiesInChunk: commandBuffer.destroyEntitiesInChunk.bind(commandBuffer),
@@ -37,13 +38,18 @@ export const extensions = {
 	// for indirect changes (e.g., a `Hierarchy` component whose child is destroyed).
 	markDirty: commandBuffer.markDirty.bind(commandBuffer),
 
-	//! Use only for tests / debug / when nessesary.
-	flush: commandBuffer.flush.bind(commandBuffer),
+
 
 	//query
 	getQuery: queryManager.getQuery.bind(queryManager),
-	
-	//todo rename it better on both sides, it is to get simple entity component.
-	//getEntityComponent? idk
-	getComponent: entityManager.getComponent.bind(entityManager),
+	getScratchBuffer: queryManager.getScratchBuffer.bind(queryManager),
+
+	// entity manager
+	getEntityLocation: entityManager.getEntityLocation.bind(entityManager),
+
+
+	//! Not recommended unless absolutely nessesary
+	//! could be used as additional command buffer execution system
+	//! could be usefull for tests \ debug.
+	flush: commandBuffer.flush.bind(commandBuffer),
 }

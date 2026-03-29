@@ -42,10 +42,6 @@ const { PrefabLoader } = await import(`@managers/PrefabManager/PrefabLoader.js`)
 
  */
 
-//todo shorthands + defaults are not doing well together.
-//! need a way for both prefab manager and compiler to reuse some function / method
-//! or make one of them authority on json (or json-like data)-parsing - including defaults and shorthands.
-//! They should parsing json data exact same way.
 export class PrefabManager {
 	constructor() {
 		// --- Permanent Caches for Prefab Templates ---
@@ -281,14 +277,14 @@ export class PrefabManager {
 			Object.keys(source).forEach(key => {
 				if (this._isObject(source[key]) && key in target && this._isObject(target[key])) {
 					// Recursive merge for nested objects
-					output[key] = this._deepMerge(target[key], source[key]);
+					output[key] = this._deepMerge(target[key], source[key])
 				} else {
 					// Default behavior: source property overwrites target property
 					output[key] = source[key]
 				}
 			})
-		} 
-		return output;
+		}
+		return output
 	}
 
 	/**

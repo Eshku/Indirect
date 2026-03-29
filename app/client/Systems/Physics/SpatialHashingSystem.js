@@ -3,7 +3,9 @@ const { engine } = await import(`@client/Engine.js`)
 const { ecs, physicsManager, queryManager } = engine.getManagers()
 
 const { SpatialHashGrid, SPATIAL_GRID_CONFIG } = await import(`@core/DataStructures/SpatialHashGrid.js`)
-const { aabb, isPooled } = ecs.getTypeIDs()
+
+const { aabb, isPooled, position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer } =
+	ecs.getTypeIDs()
 
 /**
  * Manages the spatial hash grid on the main thread.
@@ -16,19 +18,27 @@ export class SpatialHashingSystem {
 	static dependencies = {
 		update: {
 			// This system now writes the calculated AABB for other systems to use.
+			reads: [position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer],
 			writes: [aabb],
 		},
 	}
 
 	init() {
-		// Get the main-thread instance of the spatial hash grid API.
-		// The SABs are owned by the PhysicsManager.
 		const gridSABs = physicsManager.getSpatialHashGridSABs()
 		this.grid = new SpatialHashGrid(gridSABs)
 
 		// Query for the player entity to track its position for grid repositioning.
-		const { playerTag, position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer, aabb, isPooled } =
-			ecs.getTypeIDs()
+		const {
+			playerTag,
+			position,
+			rotation,
+			circleCollider,
+			boxCollider,
+			orientedBoxCollider,
+			collisionLayer,
+			aabb,
+			isPooled,
+		} = ecs.getTypeIDs()
 
 		this.playerQuery = queryManager.getQuery({
 			with: [playerTag, position],
@@ -83,24 +93,50 @@ export class SpatialHashingSystem {
 		// Process all collidable entities in a single, efficient loop.
 		for (const chunk of this.collidablesQuery.iter()) {
 			const positions = chunk.componentData[this.positionId]
-			const entities = chunk.entities
 
 			// These components may or may not exist on the chunk's archetype.
 			const circleColliders = chunk.componentData[this.circleColliderId]
 			const boxColliders = chunk.componentData[this.boxColliderId]
 			const orientedBoxColliders = chunk.componentData[this.orientedBoxColliderId]
 			const rotations = chunk.componentData[this.rotationId]
+
 			const aabbs = chunk.componentData[this.aabbId]
 
-			// OPTIMIZATION: Check component existence once per chunk. Since all entities
-			// in a chunk share the same archetype, this branch is perfectly predictable
-			// after the first entity, leading to highly efficient processing.
-			if (orientedBoxColliders) {
-				// --- This chunk contains Oriented Box Colliders ---
-				for (let i = 0; i < chunk.size; i++) {
-					const entityId = entities[i]
-					const x = positions.x[i]
-					const y = positions.y[i]
+			// This loop calculates a single, unified AABB for each entity,
+			// correctly encompassing all of its potential collider shapes.
+			for (let i = 0; i < chunk.size; i++) {
+				const x = positions.x[i]
+				const y = positions.y[i]
+
+				let minX = Infinity,
+					minY = Infinity,
+					maxX = -Infinity,
+					maxY = -Infinity
+				let hasCollider = false
+
+				// Accumulate bounds from circle collider if it exists
+				if (circleColliders) {
+					const radius = circleColliders.radius[i]
+					minX = Math.min(minX, x - radius)
+					minY = Math.min(minY, y - radius)
+					maxX = Math.max(maxX, x + radius)
+					maxY = Math.max(maxY, y + radius)
+					hasCollider = true
+				}
+
+				// Accumulate bounds from box collider if it exists
+				if (boxColliders) {
+					const halfWidth = boxColliders.width[i] / 2
+					const halfHeight = boxColliders.height[i] / 2
+					minX = Math.min(minX, x - halfWidth)
+					minY = Math.min(minY, y - halfHeight)
+					maxX = Math.max(maxX, x + halfWidth)
+					maxY = Math.max(maxY, y + halfHeight)
+					hasCollider = true
+				}
+
+				// Accumulate bounds from oriented box collider if it exists
+				if (orientedBoxColliders) {
 					const angle = rotations.angle[i]
 					const halfWidth = orientedBoxColliders.width[i] / 2
 					const halfHeight = orientedBoxColliders.height[i] / 2
@@ -110,57 +146,22 @@ export class SpatialHashingSystem {
 					const worldHalfWidth = halfWidth * c + halfHeight * s
 					const worldHalfHeight = halfWidth * s + halfHeight * c
 
-					const minX = x - worldHalfWidth
-					const minY = y - worldHalfHeight
-					const maxX = minX + worldHalfWidth * 2
-					const maxY = minY + worldHalfHeight * 2
+					minX = Math.min(minX, x - worldHalfWidth)
+					minY = Math.min(minY, y - worldHalfHeight)
+					maxX = Math.max(maxX, x + worldHalfWidth)
+					maxY = Math.max(maxY, y + worldHalfHeight)
+					hasCollider = true
+				}
 
+				// Only add to grid if a collider was found and bounds are valid.
+				if (hasCollider) {
 					// Write the calculated AABB to the component for other systems to use.
 					aabbs.minX[i] = minX
 					aabbs.minY[i] = minY
 					aabbs.maxX[i] = maxX
 					aabbs.maxY[i] = maxY
 
-					this.grid.add(entityId, chunk.chunkId, i, minX, minY, maxX, maxY)
-				}
-			} else if (circleColliders) {
-				// --- This chunk contains Circle Colliders ---
-				for (let i = 0; i < chunk.size; i++) {
-					const entityId = entities[i]
-					const x = positions.x[i]
-					const y = positions.y[i]
-					const radius = circleColliders.radius[i]
-					const minX = x - radius
-					const minY = y - radius
-					const maxX = x + radius
-					const maxY = y + radius
-
-					aabbs.minX[i] = minX
-					aabbs.minY[i] = minY
-					aabbs.maxX[i] = maxX
-					aabbs.maxY[i] = maxY
-
-					this.grid.add(entityId, chunk.chunkId, i, minX, minY, maxX, maxY)
-				}
-			} else if (boxColliders) {
-				// --- This chunk contains Box Colliders (AABBs) ---
-				for (let i = 0; i < chunk.size; i++) {
-					const entityId = entities[i]
-					const x = positions.x[i]
-					const y = positions.y[i]
-					const width = boxColliders.width[i]
-					const height = boxColliders.height[i]
-					const minX = x - width / 2
-					const minY = y - height / 2
-					const maxX = minX + width
-					const maxY = minY + height
-
-					aabbs.minX[i] = minX
-					aabbs.minY[i] = minY
-					aabbs.maxX[i] = maxX
-					aabbs.maxY[i] = maxY
-
-					this.grid.add(entityId, chunk.chunkId, i, minX, minY, maxX, maxY)
+					this.grid.add(chunk.entities[i], chunk.chunkId, i, minX, minY, maxX, maxY)
 				}
 			}
 		}

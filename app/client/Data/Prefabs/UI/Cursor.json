@@ -1,7 +1,6 @@
 {
 	"components": {
 		"position": { "x": 0, "y": 0 },
-		"cursorTag": {},
-		"cursorState": {}
+		"cursorTag": {}
 	}
 }

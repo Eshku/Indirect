@@ -1,7 +1,6 @@
 import { RawCommandBuffer } from './RawCommandBuffer.js'
 import { SortableCommandBuffer, SortKeyLayout, SortPhase } from './SortableCommandBuffer.js'
 import { OpCodes } from './CommandOpcodes.js'
-import * as Schema from '../ComponentManager/ComponentSchema.js'
 
 const SOA_BUFFER_INITIAL_CAPACITY = 1024
 
@@ -41,18 +40,7 @@ export class CommandBuffer {
 	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
 	 */
 	addComponent(entityId, payload, layer = 0) {
-		const offset = this.rawBuffer.offset
-
-		const entityIndex = Number(entityId & 0xffffffffn)
-		this.rawBuffer.writeU8(OpCodes.ADD_COMPONENT)
-		this.rawBuffer.writeU64(entityId)
-		this.rawBuffer.writeU16(payload.typeID)
-		this.rawBuffer.writeU16(payload.data.byteLength)
-		this.rawBuffer.writeBuffer(payload.data)
-
-		const length = this.rawBuffer.offset - offset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 0)
-		this.sortableBuffer.add(key, offset, length)
+		this._recordSingleComponentPayloadCommand(OpCodes.ADD_COMPONENT, entityId, payload, layer, 0)
 	}
 
 	/**
@@ -63,19 +51,7 @@ export class CommandBuffer {
 	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
 	 */
 	addComponents(entityId, payload, layer = 0) {
-		const offset = this.rawBuffer.offset
-
-		const entityIndex = Number(entityId & 0xffffffffn)
-		this.rawBuffer.writeU8(OpCodes.ADD_COMPONENTS)
-		this.rawBuffer.writeU64(entityId)
-		// The archetypeId tells the executor which components are packed in the data buffer.
-		this.rawBuffer.writeU16(payload.archetypeId)
-		this.rawBuffer.writeU16(payload.data.byteLength)
-		this.rawBuffer.writeBuffer(payload.data)
-
-		const length = this.rawBuffer.offset - offset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 0)
-		this.sortableBuffer.add(key, offset, length)
+		this._recordMultiComponentPayloadCommand(OpCodes.ADD_COMPONENTS, entityId, payload, layer, 0)
 	}
 
 	/**
@@ -87,19 +63,7 @@ export class CommandBuffer {
 	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
 	 */
 	setComponentsData(entityId, payload, layer = 0) {
-		const offset = this.rawBuffer.offset
-
-		const entityIndex = Number(entityId & 0xffffffffn)
-		this.rawBuffer.writeU8(OpCodes.SET_COMPONENTS_DATA)
-		this.rawBuffer.writeU64(entityId)
-		// The archetypeId tells the executor which components are packed in the data buffer.
-		this.rawBuffer.writeU16(payload.archetypeId)
-		this.rawBuffer.writeU16(payload.data.byteLength)
-		this.rawBuffer.writeBuffer(payload.data)
-
-		const length = this.rawBuffer.offset - offset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2) // Same sort key as setComponentData
-		this.sortableBuffer.add(key, offset, length)
+		this._recordMultiComponentPayloadCommand(OpCodes.SET_COMPONENTS_DATA, entityId, payload, layer, 2)
 	}
 
 	/**
@@ -109,18 +73,7 @@ export class CommandBuffer {
 	 * @param {number} [layer=0] - Execution layer.
 	 */
 	setComponentsDataSilent(entityId, payload, layer = 0) {
-		const offset = this.rawBuffer.offset
-
-		const entityIndex = Number(entityId & 0xffffffffn)
-		this.rawBuffer.writeU8(OpCodes.SET_COMPONENTS_DATA_SILENT)
-		this.rawBuffer.writeU64(entityId)
-		this.rawBuffer.writeU16(payload.archetypeId)
-		this.rawBuffer.writeU16(payload.data.byteLength)
-		this.rawBuffer.writeBuffer(payload.data)
-
-		const length = this.rawBuffer.offset - offset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2)
-		this.sortableBuffer.add(key, offset, length)
+		this._recordMultiComponentPayloadCommand(OpCodes.SET_COMPONENTS_DATA_SILENT, entityId, payload, layer, 2)
 	}
 
 	/**
@@ -130,18 +83,7 @@ export class CommandBuffer {
 	 * @param {number} [layer=0] - Execution layer for fine-grained ordering.
 	 */
 	setComponentData(entityId, payload, layer = 0) {
-		const offset = this.rawBuffer.offset
-
-		const entityIndex = Number(entityId & 0xffffffffn)
-		this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_DATA)
-		this.rawBuffer.writeU64(entityId)
-		this.rawBuffer.writeU16(payload.typeID)
-		this.rawBuffer.writeU16(payload.data.byteLength)
-		this.rawBuffer.writeBuffer(payload.data)
-
-		const length = this.rawBuffer.offset - offset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2) // Secondary ID to sort after add/remove
-		this.sortableBuffer.add(key, offset, length)
+		this._recordSingleComponentPayloadCommand(OpCodes.SET_COMPONENT_DATA, entityId, payload, layer, 2)
 	}
 
 	/**
@@ -152,18 +94,7 @@ export class CommandBuffer {
 	 * @param {number} [layer=0] - Execution layer.
 	 */
 	setComponentDataSilent(entityId, payload, layer = 0) {
-		const offset = this.rawBuffer.offset
-
-		const entityIndex = Number(entityId & 0xffffffffn)
-		this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_DATA_SILENT)
-		this.rawBuffer.writeU64(entityId)
-		this.rawBuffer.writeU16(payload.typeID)
-		this.rawBuffer.writeU16(payload.data.byteLength)
-		this.rawBuffer.writeBuffer(payload.data)
-
-		const length = this.rawBuffer.offset - offset
-		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2)
-		this.sortableBuffer.add(key, offset, length)
+		this._recordSingleComponentPayloadCommand(OpCodes.SET_COMPONENT_DATA_SILENT, entityId, payload, layer, 2)
 	}
 
 	/**
@@ -210,14 +141,13 @@ export class CommandBuffer {
 	}
 
 	/**
-	 * Records a command to enable or disable a component's logic for an entity.
+	 * Records a command to enable a component's logic for an entity.
 	 * The component must have `enableable: true` in its schema.
 	 * @param {bigint} entityId The entity to modify.
 	 * @param {number} componentTypeID The component's type ID.
-	 * @param {boolean} enabled The desired enabled state.
 	 * @param {number} [layer=0] Execution layer.
 	 */
-	setComponentEnabled(entityId, componentTypeID, enabled, layer = 0) {
+	enableComponent(entityId, componentTypeID, layer = 0) {
 		const offset = this.rawBuffer.offset
 		const startOffset = offset
 
@@ -225,7 +155,29 @@ export class CommandBuffer {
 		this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_ENABLED)
 		this.rawBuffer.writeU64(entityId)
 		this.rawBuffer.writeU16(componentTypeID)
-		this.rawBuffer.writeU8(enabled ? 1 : 0)
+		this.rawBuffer.writeU8(1) // enabled = true
+
+		const length = this.rawBuffer.offset - startOffset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2)
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
+	 * Records a command to disable a component's logic for an entity.
+	 * The component must have `enableable: true` in its schema.
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {number} componentTypeID The component's type ID.
+	 * @param {number} [layer=0] Execution layer.
+	 */
+	disableComponent(entityId, componentTypeID, layer = 0) {
+		const offset = this.rawBuffer.offset
+		const startOffset = offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(OpCodes.SET_COMPONENT_ENABLED)
+		this.rawBuffer.writeU64(entityId)
+		this.rawBuffer.writeU16(componentTypeID)
+		this.rawBuffer.writeU8(0) // enabled = false
 
 		const length = this.rawBuffer.offset - startOffset
 		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, 2)
@@ -303,26 +255,13 @@ export class CommandBuffer {
 	}
 
 	/**
-	 * Records a command to instantiate a batch of entities from a prefab.
-	 * @param {string} prefabName - The name of the prefab to instantiate.
-	 * @param {number} count - The number of entities to create.
-	 * @param {object[]} [overrides=[]] - An array of override objects, one for each new entity.
-	 * @param {number} [layer=0]
-	 */
-	instantiateEntities(prefabName, count, overrides = {}, layer = 0) {
-		//! batch operatiom, similar to createEntities, but based on pre-compiled prefabs and with overrides
-		//! will call createEntities after resolving all the crap on low-level
-		//! Gonna use AoS too.
-	}
-
-	/**
 	 * [PLACEHOLDER] Records a command to add a component to all entities in a specific chunk.
 	 * @param {object} chunk - A reference to the target chunk.
 	 * @param {{typeID: number, data: ArrayBuffer}} payload - The pre-compiled component payload.
 	 * @param {number} [layer=0]
 	 */
 	addComponentToChunk(chunk, payload, layer = 0) {
-		// TODO: Implement chunk-based command. This will write the chunk's unique ID
+		// TODO: Implement chunk-based command. This will add component to every entity in whole chunk.
 		// and the payload to the raw buffer.
 	}
 
@@ -379,6 +318,52 @@ export class CommandBuffer {
 	_generatePlaceholderId() {
 		// Set the MSB to 1 to mark it as a placeholder.
 		return (1n << 63n) | this.placeholderIdCounter++
+	}
+
+	/**
+	 * @private
+	 * @param {number} opCode
+	 * @param {bigint} entityId
+	 * @param {{typeID: number, data: ArrayBuffer}} payload
+	 * @param {number} layer
+	 * @param {number} secondarySortId
+	 */
+	_recordSingleComponentPayloadCommand(opCode, entityId, payload, layer, secondarySortId) {
+		const offset = this.rawBuffer.offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(opCode)
+		this.rawBuffer.writeU64(entityId)
+		this.rawBuffer.writeU16(payload.typeID)
+		this.rawBuffer.writeU16(payload.data.byteLength)
+		this.rawBuffer.writeBuffer(payload.data)
+
+		const length = this.rawBuffer.offset - offset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, secondarySortId)
+		this.sortableBuffer.add(key, offset, length)
+	}
+
+	/**
+	 * @private
+	 * @param {number} opCode
+	 * @param {bigint} entityId
+	 * @param {{archetypeId: number, data: ArrayBuffer}} payload
+	 * @param {number} layer
+	 * @param {number} secondarySortId
+	 */
+	_recordMultiComponentPayloadCommand(opCode, entityId, payload, layer, secondarySortId) {
+		const offset = this.rawBuffer.offset
+
+		const entityIndex = Number(entityId & 0xffffffffn)
+		this.rawBuffer.writeU8(opCode)
+		this.rawBuffer.writeU64(entityId)
+		this.rawBuffer.writeU16(payload.archetypeId)
+		this.rawBuffer.writeU16(payload.data.byteLength)
+		this.rawBuffer.writeBuffer(payload.data)
+
+		const length = this.rawBuffer.offset - offset
+		const key = SortableCommandBuffer.encodeKey(SortPhase.MODIFY, layer, entityIndex, secondarySortId)
+		this.sortableBuffer.add(key, offset, length)
 	}
 }
 

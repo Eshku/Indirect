@@ -513,7 +513,7 @@ export class SchemaCompiler {
 
 		componentInfo.originalSchemaKeys.push(...implicitKeys)
 
-		componentInfo.propertyKeys = [...new Set(componentInfo.propertyKeys)].sort()
+		componentInfo.propertyKeys = [...new Set(componentInfo.propertyKeys)]
 
 		// Determine the alignment for the entire component based on its largest member.
 		let maxAlignment = 0

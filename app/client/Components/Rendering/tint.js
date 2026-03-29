@@ -15,4 +15,6 @@ export const tint = {
 		type: 'f32',
 		default: 1.0,
 	},
+
+	tracked: true,
 }

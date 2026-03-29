@@ -9,6 +9,13 @@ const { velocity, speed, movementIntent, isPooled } = ecs.getTypeIDs()
  * which is then used by `ApplyVelocity` to update the entity's position.
  */
 export class MovementSystem {
+	static dependencies = {
+		update: {
+			reads: [movementIntent, speed],
+			writes: [velocity],
+		},
+	}
+
 	init() {
 		this.query = this.getQuery({
 			with: [velocity, speed, movementIntent],

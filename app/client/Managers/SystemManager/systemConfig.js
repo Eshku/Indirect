@@ -67,54 +67,61 @@ export const systemSchedule = {
 
 		{ name: 'MovementSystem', frequency: 'logic' },
 
-		{ name: `ApplyVelocity`, frequency: `logic` },
-
 		{ name: 'SpatialHashingSystem', frequency: 'logic' },
 
+		
 		{ name: 'CollisionDetectionSystem', frequency: 'logic' },
-
-		{ name: 'ProjectileResolutionSystem', frequency: 'logic' },
+		
+		{ name: `ApplyVelocity`, frequency: `logic` },
 
 		{ name: 'DamageSystem', frequency: 'logic' },
+
+		{ name: 'InvulnerabilitySystem', frequency: 'logic' },
 
 		{ name: 'HealthSystem', frequency: 'logic' },
 
 		{ name: 'PoolingSystem', frequency: 'logic' },
 
-		{ name: 'LifecycleVisualSystem', frequency: 'logic' },
-
 		{ name: 'EventEntityCleanupSystem', frequency: 'logic' },
-
-		{ name: 'SpinningSystem', frequency: 'logic' },
 	],
 
 	// Infrequent UI updates. Runs on a timer, not every frame.
 	Timed: [
-		{ name: 'SpawnDirectorSystem', frequency: 1 },
-		{ name: 'OffscreenCleanupSystem', frequency: 0.5 }, // Runs every 2 seconds
-	],
-
-	// Runs once per rendered frame for smooth visuals, interpolation, and UI.
+		{ name: 'SpawnDirectorSystem', frequency: 2 },
+		{ name: 'OffscreenCleanupSystem', frequency: 1 },
+	], // Runs once per rendered frame for smooth visuals, interpolation, and UI.
 	Visuals: [
 		{ name: 'SpriteFactorySystem', frequency: 'visuals' },
+
+		// This system places the newly created visual objects onto their correct rendering layers.
 		{ name: 'RenderLayerSystem', frequency: 'visuals' },
-		{ name: 'CameraSystem', frequency: 'visuals' },
+
+		// This system hides/shows sprites based on their lifecycle state (active, dying, pooled).
+		{ name: 'HitFlashSystem', frequency: 'visuals' },
+		
+		{ name: 'LifecycleVisualSystem', frequency: 'visuals' },
+
+		{ name: 'ShieldVisualSystem', frequency: 'visuals' },
+
 		{ name: 'SyncTransforms', frequency: 'visuals' },
+
+		{ name: 'SpinningSystem', frequency: 'visuals' },
+
+		{ name: 'CameraSystem', frequency: 'visuals' },
 	],
 
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
-
+		/* { name: 'DebugInspectionSystem', frequency: 'input' }, */
 		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
-	], 
+	],
 
 	//! Do not run benchmark \ test systems with other systems together, high query overlap potential.
 
 	Benchmark: [
-
 		/* { name: 'CPUBenchmark', frequency: 'visuals' }, */
-	/* { name: 'ParallelCPUBenchmark', frequency: 'visuals' }, */
+		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */
 		/* { name: 'RWMBenchmark', frequency: 'visuals' },  */
 		/* { name: 'MemoryBenchmark', frequency: 'visuals' }, */
 		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
@@ -129,6 +136,7 @@ export const systemSchedule = {
 		/* 				{ name: 'DependencySystemA', frequency: 'visuals' },
 		{ name: 'DependencySystemB', frequency: 'visuals' },
 		{ name: 'DependencySystemC', frequency: 'visuals' }, */
+		/* { name: 'BitmaskTestSystem', frequency: 'none' }, */
 	],
 
 	CoreTests: [

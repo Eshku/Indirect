@@ -59,8 +59,8 @@ export class PerformanceMonitor {
 		this.systemsListBody = null
 
 		// --- DOM element references ---
-		this.commandBufferElements = { container: null, name: null, avg: null, max: null, hr: null }
 		this.rendererElements = { container: null, name: null, avg: null, max: null, hr: null }
+		this.commandBufferElements = { container: null, name: null, avg: null, max: null, hr: null }
 		this.summaryElements = { container: null, name: null, avg: null, max: null, hr: null }
 		this.systemRowElements = new Map()
 		this.pinnedSeparator = null
@@ -294,16 +294,16 @@ export class PerformanceMonitor {
 	}
 
 	_processAndUpdate() {
-		const { commandBufferStats, rendererStats, otherSystemsStats, totalFrameTime, sumOfMaxes } =
+		const { rendererStats, commandBufferStats, otherSystemsStats, totalFrameTime, sumOfMaxes } =
 			this._calculateCurrentStats()
 
 		// Cache the stats needed for immediate re-rendering on UI interaction (pinning, toggling).
 		this.lastProcessedStats = otherSystemsStats
 
 		// Render all sections with the new data.
-		this._renderSpecialRow(commandBufferStats, this.commandBufferElements, 'Command Buffer')
 		this._renderSystemsList(otherSystemsStats)
 		this._renderSpecialRow(rendererStats, this.rendererElements, 'Render', false)
+		this._renderSpecialRow(commandBufferStats, this.commandBufferElements, 'Command Buffer', false)
 		this._renderSummary(totalFrameTime, sumOfMaxes)
 	}
 
@@ -383,14 +383,14 @@ export class PerformanceMonitor {
 			sumOfMaxes += stats.max // This is a sum of maxes, not a true max, but useful for a rough upper bound.
 		}
 
-		const commandBufferStats = processedStats['Command Buffer']
 		const rendererStats = processedStats['Render']
+		const commandBufferStats = processedStats['Command Buffer']
 
 		const otherSystemsStats = { ...processedStats }
-		delete otherSystemsStats['Command Buffer']
 		delete otherSystemsStats['Render']
+		delete otherSystemsStats['Command Buffer']
 
-		return { commandBufferStats, rendererStats, otherSystemsStats, totalFrameTime, sumOfMaxes }
+		return { rendererStats, commandBufferStats, otherSystemsStats, totalFrameTime, sumOfMaxes }
 	}
 
 	/**
@@ -698,20 +698,6 @@ export class PerformanceMonitor {
 			),
 		)
 
-		// Command Buffer Section
-		const cbRow = this._createRowElements('<strong>Command Buffer</strong>')
-		cbRow.container.classList.add('system-row')
-		cbRow.container.title = 'Command Buffer'
-		cbRow.container.style.display = 'none'
-
-		const cbHr = this._createStyledElement('hr', {
-			borderColor: '#444',
-			marginTop: '10px',
-			marginBottom: '5px',
-			display: 'none',
-		})
-		this.commandBufferElements = { ...cbRow, hr: cbHr }
-
 		// Renderer Section
 		const rHr = this._createStyledElement('hr', {
 			borderColor: '#444',
@@ -724,6 +710,19 @@ export class PerformanceMonitor {
 		rRow.container.title = 'Render'
 		rRow.container.style.display = 'none' // Initially hidden
 		this.rendererElements = { ...rRow, hr: rHr }
+
+		// Command Buffer Section
+		const cbHr = this._createStyledElement('hr', {
+			borderColor: '#444',
+			marginTop: '10px',
+			marginBottom: '5px',
+			display: 'none',
+		})
+		const cbRow = this._createRowElements('<strong>Command Buffer</strong>')
+		cbRow.container.classList.add('system-row')
+		cbRow.container.title = 'Command Buffer'
+		cbRow.container.style.display = 'none' // Initially hidden
+		this.commandBufferElements = { ...cbRow, hr: cbHr }
 
 		// Summary Section
 		const sHr = this._createStyledElement('hr', {
@@ -903,8 +902,8 @@ export class PerformanceMonitor {
 		this.panel = null
 
 		// Clear all state and references
-		this.commandBufferElements = null
 		this.rendererElements = null
+		this.commandBufferElements = null
 		this.summaryElements = null
 		this.systemRowElements?.clear()
 		this.systemRowElements = null // Allow for garbage collection

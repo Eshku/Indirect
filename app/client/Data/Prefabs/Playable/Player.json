@@ -18,8 +18,20 @@
 		"circleCollider": { "radius": 16 },
 		"collisionLayer": { "group": 1 },
 		"aabb": {},
-		"collisionBuffer": {},
-		"playerWeaponStats": { "count": 1, "speed": 1000, "velocityInheritance": 0.5, "range": 1000, "fireRate": 0.25, "damage": 25 },
+		"damageCollisionBuffer": {},
+		"damageable": {},
+		"lifecycleState": {},
+		"hitFlash": {},
+		"invulnerability": {},
+		"tint": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0 },
+		"playerWeaponStats": {
+			"count": 1,
+			"speed": 1000,
+			"velocityInheritance": 0,
+			"range": 2000,
+			"fireRate": 0.25,
+			"damage": 9
+		},
 		"weaponCooldown": {}
 	}
 }

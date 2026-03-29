@@ -118,7 +118,7 @@ export class Engine {
 
 	async loadAllManagers() {
 		const loadedManagers = new Map()
-		//! prep for restructure, no auto-load for now
+
 		const { ecs } = await import('@managers/EntityManager/ECS.js')
 		loadedManagers.set('ecs', ecs)
 

@@ -1,7 +1,9 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { lifecycleState, viewable } = ecs.getTypeIDs()
+const { lifecycleState, viewable, isPooled } = ecs.getTypeIDs()
+
+const { RenderLayerSystem } = ecs.getSystemIDs()
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 
@@ -13,6 +15,7 @@ const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
  * - On `DYING`: Hides the sprite and transitions the entity to the `POOLED` state.
  */
 export class LifecycleVisualSystem {
+	static runsAfter = [RenderLayerSystem] 
 	static dependencies = {
 		update: {
 			reads: [lifecycleState, viewable],
@@ -22,23 +25,22 @@ export class LifecycleVisualSystem {
 	init() {
 		this.lifecycleQuery = this.getQuery({
 			with: [lifecycleState, viewable],
-			react: [lifecycleState],
+			modified: [lifecycleState], // React to data changes in lifecycleState
+			added: [isPooled], // React to an entity being added to the pool
+			removed: [isPooled], // React to an entity being removed from the pool
 		})
-		this.scratchBuffer = new Uint32Array(4096) // Max chunk capacity
 	}
 
 	update({ currentTick, lastTick }) {
 		for (const chunk of this.lifecycleQuery.iter()) {
 			const states = chunk.componentData[lifecycleState]
 			const viewables = chunk.componentData[viewable]
-			const changedCount = chunk.getChangedIndices(lifecycleState, lastTick, this.scratchBuffer)
 
-			for (let i = 0; i < changedCount; i++) {
-				const indexInChunk = this.scratchBuffer[i]
-
+			// The query now only returns entities that have changed, so we can iterate over the whole chunk.
+			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
 				const spriteRef = viewables.spriteRef[indexInChunk]
 				const sprite = engine.assetManager.getDisplayObjectByRef(spriteRef)
-				if (!sprite) continue
+
 
 				const flags = states.flags[indexInChunk]
 

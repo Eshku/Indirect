@@ -1,6 +1,7 @@
 {
 	"components": {
-		"health": { "current": 100, "max": 100 },
+		"health": { "current": 10, "max": 10 },
+		"damage": { "value": 10 },
 		"position": { "x": 150, "y": 150 },
 		"rotation": { "angle": 0 },
 		"scale": { "x": 1, "y": 1 },
@@ -11,14 +12,17 @@
 		"spriteDescriptor": { "assetName": "spinner" },
 		"layer": { "name": "enemies" },
 		"viewable": {},
+		"hitFlash": {},
 		"tint": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0 },
 		"orientedBoxCollider": { "width": 32, "height": 32 },
 		"collisionLayer": { "group": 2 },
 		"aabb": {},
-		"collisionBuffer": {},
+		"damageCollisionBuffer": {},
+		"damageable": {},
 		"lifecycleState": {},
 		"threatCost": {},
 		"enemyTag": {},
-		"spinnerTag": {}
+		"spinnerTag": {},
+		"aiParameters": { "orbitBias": 0.8, "orbitAngleSpread": 0.5, "orbitWobbleFrequency": 2.0 }
 	}
 }

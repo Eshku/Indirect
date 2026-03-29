@@ -2,11 +2,14 @@ const { Query } = await import(`@managers/QueryManager/Query.js`)
 
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 
+const MAX_CHUNK_CAPACITY = 4096 // Should be sourced from EntityManager constants
+
 //! Query mutability going to be decided later on.
 export class QueryManager {
 	constructor() {
 		this.queryCache = new Map()
 		this.queriesById = []
+		this.scratchBufferCache = new Map()
 		this.nextQueryId = 0
 
 		// A new, simple cache to store the generated string keys themselves.
@@ -75,7 +78,9 @@ export class QueryManager {
 			with: withInput = [],
 			without: withoutInput = [],
 			any: anyInput = [],
-			react: reactInput = [],
+			modified: modifiedInput = [],
+			added: addedInput = [],
+			removed: removedInput = [],
 			constants: constantsDef = {},
 		} = options
 
@@ -85,19 +90,23 @@ export class QueryManager {
 		const withComponents = normalize(withInput)
 		const withoutComponents = normalize(withoutInput)
 		const anyComponents = normalize(anyInput)
-		const reactComponents = normalize(reactInput)
+		const modifiedComponents = normalize(modifiedInput)
+		const addedComponents = normalize(addedInput)
+		const removedComponents = normalize(removedInput)
 
 		// Sort component IDs to ensure the key is canonical.
 		const withIdsString = [...withComponents].sort((a, b) => a - b).join(',')
 		const withoutIdsString = [...withoutComponents].sort((a, b) => a - b).join(',')
 		const anyIdsString = [...anyComponents].sort((a, b) => a - b).join(',')
-		const reactIdsString = [...reactComponents].sort((a, b) => a - b).join(',')
+		const modifiedIdsString = [...modifiedComponents].sort((a, b) => a - b).join(',')
+		const addedIdsString = [...addedComponents].sort((a, b) => a - b).join(',')
+		const removedIdsString = [...removedComponents].sort((a, b) => a - b).join(',')
 
 		// Sort constant keys for canonical key generation.
 		const constantKeys = Object.keys(constantsDef).sort()
 		const constantsString = constantKeys.map(propName => `${propName}:${constantsDef[propName]}`).join(',')
 
-		return `w:${withIdsString}|wo:${withoutIdsString}|a:${anyIdsString}|r:${reactIdsString}|c:${constantsString}`
+		return `w:${withIdsString}|wo:${withoutIdsString}|a:${anyIdsString}|m:${modifiedIdsString}|add:${addedIdsString}|rem:${removedIdsString}|c:${constantsString}`
 	}
 
 	/**
@@ -106,7 +115,9 @@ export class QueryManager {
 	 * @param {number[]} [options.with=[]] - Component type IDs that must be present.
 	 * @param {number[]} [options.without=[]] - Component type IDs that must NOT be present.
 	 * @param {number[]} [options.any=[]] - Component type IDs where at least one must be present.
-	 * @param {number[]} [options.react=[]] - Component type IDs that, if changed, will make entity match query.
+	 * @param {number[]} [options.modified=[]] - Component type IDs that, if their data changes, will make the chunk match the query.
+	 * @param {number[]} [options.added=[]] - Component type IDs that, if added, will make the chunk match the query.
+	 * @param {number[]} [options.removed=[]] - Component type IDs that, if removed, will make the chunk match the query.
 	 *
 	 * ! Constants are going to be either deprecated (define your own) or redone to be thread safe.
 	 * @example
@@ -142,7 +153,9 @@ export class QueryManager {
 				options.with,
 				options.without,
 				options.any,
-				options.react,
+				options.modified,
+				options.added,
+				options.removed,
 				constantsRequest,
 			)
 
@@ -162,6 +175,24 @@ export class QueryManager {
 			console.error(`QueryManager: Error creating query:`, error)
 			return undefined
 		}
+	}
+
+	/**
+	 * Retrieves a new or cached scratch buffer for a specific component type.
+	 * This allows systems to share buffers if they operate on the same component, reducing memory allocations.
+	 * The buffer is intended for use with `getChangedIndices` or `getEnabledIndices`.
+	 * @param {number} componentTypeId The type ID of the component.
+	 * @returns {Uint32Array} A scratch buffer.
+	 */
+	getScratchBuffer(componentTypeId) {
+		if (this.scratchBufferCache.has(componentTypeId)) {
+			return this.scratchBufferCache.get(componentTypeId)
+		}
+
+		// Create a new buffer, assuming a max chunk capacity.
+		const newBuffer = new Uint32Array(MAX_CHUNK_CAPACITY)
+		this.scratchBufferCache.set(componentTypeId, newBuffer)
+		return newBuffer
 	}
 
 	getQueryById(id) {
@@ -196,7 +227,7 @@ export class QueryManager {
 		}
 
 		// Reactive components are also 'with' components for matching purposes
-		const allPositiveRequirements = [...query.with, ...query.react]
+		const allPositiveRequirements = [...query.with, ...query.modified, ...query.added, ...query.removed]
 
 		for (const typeId of allPositiveRequirements) {
 			register(this.queriesWith, typeId)
@@ -223,7 +254,7 @@ export class QueryManager {
 			}
 		}
 
-		const allPositiveRequirements = [...query.with, ...query.react]
+		const allPositiveRequirements = [...query.with, ...query.modified, ...query.added, ...query.removed]
 
 		for (const typeId of allPositiveRequirements) {
 			unregister(this.queriesWith, typeId)

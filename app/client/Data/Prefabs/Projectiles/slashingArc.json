@@ -1,19 +1,24 @@
 {
 	"components": {
 		"playerProjectile": {},
+		"piercing": {},
 		"owner": {},
 		"position": {},
 		"velocity": {},
+		"rotation": {},
 		"damage": { "value": 0 },
-		"circleCollider": { "radius": 4 },
+		"orientedBoxCollider": { "width": 128, "height": 64 },
 		"collisionLayer": { "group": 4, "mask": 2 },
 		"aabb": {},
-		"range": { "value": 0 },
-		"collisionBuffer": {},
+		"range": {},
+		"debugDrawCollider": {},
+		"damageCollisionBuffer": {},
+		"hitHistory": {},
 		"distanceTraveled": { "value": 0 },
-		"spriteDescriptor": { "assetName": "projectile" },
+		"spriteDescriptor": { "assetName": "slashing_arc" },
 		"layer": { "name": "projectiles" },
 		"viewable": {},
+		"tint":{},
 		"lifecycleState": {}
 	}
 }

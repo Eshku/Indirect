@@ -69,11 +69,11 @@ export class SystemManager {
 
 		this.updateGroups = {
 			// Runs first for low-latency user input.
-			input: { name: 'input', systems: [], lastTick: 0 },
+			input: { name: 'input', systems: [], lastTick: -1 },
 			// Runs on a fixed, deterministic timer for core gameplay logic and physics.
-			logic: { name: 'logic', systems: [], lastTick: 0 },
+			logic: { name: 'logic', systems: [], lastTick: -1 },
 			// Runs once per visual frame for rendering, interpolation, and UI.
-			visuals: { name: 'visuals', systems: [], lastTick: 0 },
+			visuals: { name: 'visuals', systems: [], lastTick: -1 },
 
 			//placeholder, last tick will be synced with GameLoop
 		}
@@ -112,7 +112,7 @@ export class SystemManager {
 			}
 		}
 
-		const { entityManager, componentManager, queryManager, prefabManager, workerManager, gameManager } = 
+		const { entityManager, componentManager, queryManager, prefabManager, workerManager, gameManager } =
 			engine.getManagers()
 
 		this.entityManager = entityManager
@@ -440,7 +440,7 @@ export class SystemManager {
 					if (typeof contextDef !== 'object' || contextDef === null || Array.isArray(contextDef)) {
 						console.error(
 							`[SystemManager] System "${systemName}" method/kernel "${methodName}" has an invalid context definition. ` +
-								`Context must be a plain object. Function and array formats are no longer supported.`,
+								`Context must be a plain object.`,
 						)
 						// Assign an empty context to prevent further errors down the line.
 						newMethodDeps.context = {}
@@ -462,21 +462,34 @@ export class SystemManager {
 	 * @private
 	 */
 	_resolveAndValidateControlFlow() {
-		// This is now much simpler as it only deals with real numeric IDs.
-		const resolveId = id => {
-			// The ID is already a real number, so we just return it.
-			// This check is for robustness in case a non-ID gets through.
+		const validateDependencyId = (id, sourceSystemName) => {
 			if (typeof id !== 'number') {
-				console.warn(`[SystemManager] Invalid value found in a 'runsAfter' or 'runsBefore' declaration:`, id)
+				console.warn(
+					`[SystemManager] System "${sourceSystemName}" has an invalid dependency value "${id}" (type: ${typeof id}). ` +
+						`Dependencies must be numeric System IDs (e.g., from ecs.getSystemIDs()).`,
+				)
+				return undefined
+			}
+			// Validate that the numeric ID is a known system.
+			if (!this.idToSystemName.has(id)) {
+				console.warn(
+					`[SystemManager] System "${sourceSystemName}" declares a dependency on an unknown numeric ID "${id}". ` +
+						`Ensure it's a valid System ID.`,
+				)
 				return undefined
 			}
 			return id
 		}
 
-		// First pass: resolve all placeholder IDs in-place within the cached metadata.
+		// First pass: Validate all dependency IDs within the cached metadata.
 		for (const metadata of this.systemMetadataCache.values()) {
-			metadata.runsAfter = (metadata.runsAfter || []).map(resolveId).filter(id => id !== undefined)
-			metadata.runsBefore = (metadata.runsBefore || []).map(resolveId).filter(id => id !== undefined)
+			const sourceSystemName = metadata.name // Get the system's name for improved error messages
+			metadata.runsAfter = (metadata.runsAfter || [])
+				.map(id => validateDependencyId(id, sourceSystemName))
+				.filter(id => id !== undefined)
+			metadata.runsBefore = (metadata.runsBefore || [])
+				.map(id => validateDependencyId(id, sourceSystemName))
+				.filter(id => id !== undefined)
 		}
 
 		// Second pass: process `runsBefore` and check for conflicts, now with real IDs.
@@ -578,6 +591,8 @@ export class SystemManager {
 			)
 			return false
 		}
+
+		//console.log(`[SystemManager] Queuing system "${systemInstance.constructor.name}" into group "${group.name}"`)
 
 		if (group.systems.includes(systemInstance)) {
 			// It's already in the group, no need to add it again.
@@ -1152,9 +1167,11 @@ export class SystemManager {
 		const JOB_TYPE_NAMES = { 0: 'update', 1: 'schedule', 2: 'process' }
 		const jobTypeName = JOB_TYPE_NAMES[jobType]
 
-		timings[jobTypeName] += duration
+		if (jobTypeName) {
+			timings[jobTypeName] += duration
+		}
 
-		// All durations contribute to the system's total time for the frame.
+		// All valid durations contribute to the system's total time for the frame.
 		timings.total += duration
 		this.systemTimings[systemIdOrName] = timings
 	}

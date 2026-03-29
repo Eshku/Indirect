@@ -1,5 +1,6 @@
 import { ChunkView } from './ChunkView.js'
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
+import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
 
 const { NULL_CHUNK_ID, MAX_COMPONENTS, MASK_PARTS } = await import(`@managers/EntityManager/EntityManager.js`)
 
@@ -34,33 +35,57 @@ export class Query {
 		return Object.freeze(typeIDs)
 	}
 
-	constructor(id, queryManager, withComponents = [], withoutComponents = [], anyComponents = [], reactComponents = []) {
+	constructor(
+		id,
+		queryManager,
+		withComponents = [],
+		withoutComponents = [],
+		anyComponents = [],
+		modifiedComponents = [],
+		addedComponents = [],
+		removedComponents = [],
+	) {
 		this.id = id
 		this.queryManager = queryManager
 		this.iterationLastTick = null
 		this.iterationCurrentTick = null
+		this._singleChunkView = null
 
 		// --- DX Improvement: Normalize single values to arrays ---
 		const normalize = comps => (comps ? (Array.isArray(comps) ? comps : [comps]) : [])
 		const normalizedWith = normalize(withComponents)
 		const normalizedWithout = normalize(withoutComponents)
 		const normalizedAny = normalize(anyComponents)
-		const normalizedReact = normalize(reactComponents)
+		const normalizedModified = normalize(modifiedComponents)
+		const normalizedAdded = normalize(addedComponents)
+		const normalizedRemoved = normalize(removedComponents)
 
 		this.with = Query._createComponentTypeIDSet(normalizedWith, 'With')
 		this.without = Query._createComponentTypeIDSet(normalizedWithout, 'Without')
 		this.any = Query._createComponentTypeIDSet(normalizedAny, 'AnyOf')
-		this.react = Query._createComponentTypeIDSet(normalizedReact, 'React')
+		this.modified = Query._createComponentTypeIDSet(normalizedModified, 'Modified')
+		this.added = Query._createComponentTypeIDSet(normalizedAdded, 'Added')
+		this.removed = Query._createComponentTypeIDSet(normalizedRemoved, 'Removed')
 
+		// The required mask only includes components that MUST be present.
 		const withMask = Query._createSimpleMask(normalizedWith, 'With')
-		const reactMask = Query._createSimpleMask(normalizedReact, 'React')
 		this._requiredMask = new BigUint64Array(MASK_PARTS)
 		for (let i = 0; i < MASK_PARTS; i++) {
-			this._requiredMask[i] = withMask[i] | reactMask[i]
+			this._requiredMask[i] = withMask[i]
 		}
+
+		// The reactive mask includes components whose modification, addition, or removal
+		// makes the query reactive.
+		this._reactiveMask = Query._createSimpleMask([...normalizedModified, ...normalizedAdded, ...normalizedRemoved], 'Reactive')
+
+		// Specific masks for each reactivity type.
+		this._modifiedMask = Query._createSimpleMask(normalizedModified, 'Modified')
+		this._addedMask = Query._createSimpleMask(normalizedAdded, 'Added')
+		this._removedMask = Query._createSimpleMask(normalizedRemoved, 'Removed')
+
+		// Excluded and AnyOf masks remain unchanged.
 		this._excludedMask = Query._createSimpleMask(withoutComponents, 'Without')
 		this._anyOfMask = Query._createSimpleMask(anyComponents, 'AnyOf')
-		this._reactiveMask = reactMask
 
 		this.isReactiveQuery = this._reactiveMask.some(part => part > 0n)
 		this._anyOfMaskIsNonZero = this._anyOfMask.some(part => part > 0n)
@@ -103,18 +128,66 @@ export class Query {
 		for (let i = 0; i < this.matchingChunkIds.length; i++) {
 			const chunkId = this.matchingChunkIds[i]
 			if (entityStore.chunkSizes[chunkId] > 0) {
-				const archetypeId = entityStore.chunkArchetypeIds[chunkId]
-				const reactiveIndices = this._reactiveIndicesByArchetype[archetypeId]
-				const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[chunkId]
-
-				if (!reactiveIndices || !archetypeDirtyTicks) continue
-
 				let isDirtyForQuery = false
 
-				for (const index of reactiveIndices) {
-					if (Atomics.load(archetypeDirtyTicks, index) > lastTick) {
-						isDirtyForQuery = true
-						break
+				// 1. Check for `modified`
+				const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[chunkId]
+				if (archetypeDirtyTicks) {
+					const archetypeId = entityStore.chunkArchetypeIds[chunkId]
+					const reactiveIndices = this._reactiveIndicesByArchetype[archetypeId]
+					if (reactiveIndices?.modified) {
+						for (const index of reactiveIndices.modified) {
+							// A component is considered modified for this query if its dirty tick
+							// is *greater than* the last tick this query ran.
+							const dirtyTick = Atomics.load(archetypeDirtyTicks, index)
+							if (dirtyTick > lastTick) {
+								isDirtyForQuery = true
+								break // Found a change, no need to check other components in this chunk.
+							}
+						}
+					}
+				}
+
+				// 2. Check for `added`
+				if (!isDirtyForQuery) {
+					const addedMasksRing = entityStore.chunkAddedComponentMasks[chunkId]
+					if (addedMasksRing) {
+						// The window of ticks to check for structural changes is (lastTick, currentTick].
+						const startTick = lastTick + 1
+						const endTick = currentTick
+
+						for (let tick = startTick; tick <= endTick; tick++) {
+							const tickSlot = tick % DIRTY_HISTORY_LENGTH
+							const maskOffset = tickSlot * MASK_PARTS
+							for (let part = 0; part < MASK_PARTS; part++) {
+								if ((Atomics.load(addedMasksRing, maskOffset + part) & this._addedMask[part]) !== 0n) {
+									isDirtyForQuery = true
+									break
+								}
+							}
+							if (isDirtyForQuery) break
+						}
+					}
+				}
+
+				// 3. Check for `removed`
+				if (!isDirtyForQuery) {
+					const removedMasksRing = entityStore.chunkRemovedComponentMasks[chunkId]
+					if (removedMasksRing) {
+						const startTick = lastTick + 1
+						const endTick = currentTick
+
+						for (let tick = startTick; tick <= endTick; tick++) {
+							const tickSlot = tick % DIRTY_HISTORY_LENGTH
+							const maskOffset = tickSlot * MASK_PARTS
+							for (let part = 0; part < MASK_PARTS; part++) {
+								if ((Atomics.load(removedMasksRing, maskOffset + part) & this._removedMask[part]) !== 0n) {
+									isDirtyForQuery = true
+									break
+								}
+							}
+							if (isDirtyForQuery) break
+						}
 					}
 				}
 
@@ -141,6 +214,33 @@ export class Query {
 	}
 
 	/**
+	 * Gets a reusable ChunkView pointing to the first non-empty chunk that matches this query.
+	 * This is a convenience method for queries that are expected to match only one entity (e.g., singletons).
+	 * The returned ChunkView is owned by the Query and its state will be overwritten on the next call to this method.
+	 * @returns {ChunkView | undefined} A ChunkView for the first chunk, or undefined if the query is empty.
+	 */
+	getSingleChunk() {
+		// The `iter()` method is an efficient generator that finds the first matching chunk.
+		const iterator = this.iter()
+		const iteratorResult = iterator.next()
+
+		if (!iteratorResult.done) {
+			// The iterator yielded a chunk. Its internal state is currently set to that chunk.
+			const firstChunkFromIterator = iteratorResult.value
+
+			// Lazily create a dedicated ChunkView instance for this method.
+			if (!this._singleChunkView) {
+				// We can't just return `firstChunkFromIterator` because it's the same instance
+				// used by the main iterator and its state would be overwritten by other loops.
+				this._singleChunkView = new ChunkView(entityStore)
+			}
+
+			// Set our dedicated view to the same chunk found by the iterator and return it.
+			this._singleChunkView.setChunk(firstChunkFromIterator.chunkId)
+			return this._singleChunkView
+		}
+	}
+	/**
 	 * Gets the total number of entities matching this query.
 	 * @returns {number}
 	 */
@@ -153,11 +253,27 @@ export class Query {
 	}
 
 	/**
-	 * Gets the array of chunk IDs matching this query.
+	 * Gets the array of all chunk IDs that could possibly match this query,
+	 * regardless of their current dirty state. For both reactive and non-reactive
+	 * queries, this returns the complete list of chunks whose archetypes match.
 	 * @returns {number[]}
 	 */
-	getChunks() {
+	getAllChunks() {
 		return this.matchingChunkIds
+	}
+
+	/**
+	 * Gets the array of chunk IDs that are actively matching the query for the current frame.
+	 * For reactive queries, this will only include chunks with relevant changes.
+	 * For non-reactive queries, this is equivalent to `getAllChunks()`.
+	 * @returns {number[]} An array of chunk IDs.
+	 */
+	getMatchingChunks() {
+		const matching = []
+		for (const chunkView of this.iter()) {
+			matching.push(chunkView.chunkId)
+		}
+		return matching
 	}
 
 	registerArchetype(archetype) {
@@ -181,9 +297,11 @@ export class Query {
 			if (this.isReactiveQuery) {
 				const componentIdArray = this.queryManager.entityManager.getComponentTypeIDsForArchetype(archetype)
 				const count = componentIdArray.length
-				const indices = []
+				const indices = {
+					modified: [],
+				}
 
-				for (const typeId of this.react) {
+				for (const typeId of this.modified) {
 					// Perform a binary search to find the index of the component in the archetype's sorted list.
 					let low = 0,
 						high = count - 1
@@ -191,7 +309,7 @@ export class Query {
 						const mid = (low + high) >>> 1
 						const midVal = componentIdArray[mid]
 						if (midVal === typeId) {
-							indices.push(mid) // The index in the dirty tick array is 0-based.
+							indices.modified.push(mid) // The index in the dirty tick array is 0-based.
 							break
 						} else if (midVal < typeId) {
 							low = mid + 1

@@ -10,6 +10,13 @@ const { position, velocity, isPooled } = ecs.getTypeIDs()
  * This ensures final position is based on fully calculated velocity for frame.
  */
 export class ApplyVelocity {
+	static dependencies = {
+		update: {
+			reads: [velocity],
+			writes: [position],
+		},
+	}
+
 	init() {
 		this.query = this.getQuery({
 			with: [position, velocity],

@@ -57,6 +57,12 @@
 			"displayName": "Toggle Player Interface"
 		},
 		{
+			"action": "Input InspectEntity",
+			"type": "combination",
+			"input": ["ControlLeft", "mouse0"],
+			"displayName": "Inspect Entity"
+		},
+		{
 			"action": "Input SecretSequence",
 			"type": "sequence",
 			"input": ["KeyS", "KeyE", "KeyC", "KeyR", "KeyE", "KeyT"],

@@ -23,6 +23,7 @@ const setupLayers = () => {
 	layerManager.addLayer('enemies', { parent: 'gameContainer' })
 	layerManager.addLayer('projectiles', { parent: 'gameContainer' })
 	layerManager.addLayer('player', { parent: 'gameContainer' })
+	layerManager.addLayer('playerEffects', { parent: 'gameContainer' })
 	layerManager.addLayer('vfx', { parent: 'gameContainer' })
 
 	// The debug layer should be a child of the gameContainer to move with the camera,
@@ -61,13 +62,15 @@ async function loadAtlas(atlasName) {
 const preload = async () => {
 	await loadAtlas('atlas')
 
-	await ecs.prefabManager.preload(['player', 'spinner', 'cursor', 'playerProjectile', 'spawnDirector'])
+	await ecs.prefabManager.preload(['player', 'spinner', 'cursor', 'slashingArc', 'spawnDirector', 'shield'])
 }
 
 const setupEntities = async () => {
 	ecs.instantiate('player')
 
 	ecs.instantiate('cursor')
+
+	ecs.instantiate('shield')
 
 	ecs.instantiate('spinner')
 

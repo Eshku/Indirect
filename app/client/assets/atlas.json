@@ -2,8 +2,8 @@
   "meta": {
     "image": "atlas.png",
     "size": {
-      "w": 128,
-      "h": 64
+      "w": 512,
+      "h": 256
     }
   },
   "frames": {
@@ -31,16 +31,28 @@
         "h": 32
       }
     },
-    "projectile": {
+    "slashing_arc": {
       "frame": {
         "x": 70,
         "y": 2,
-        "w": 8,
-        "h": 8
+        "w": 128,
+        "h": 64
       },
       "sourceSize": {
-        "w": 8,
-        "h": 8
+        "w": 128,
+        "h": 64
+      }
+    },
+    "shield": {
+      "frame": {
+        "x": 200,
+        "y": 2,
+        "w": 128,
+        "h": 128
+      },
+      "sourceSize": {
+        "w": 128,
+        "h": 128
       }
     }
   }

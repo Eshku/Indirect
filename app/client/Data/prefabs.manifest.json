@@ -11,8 +11,11 @@
 	"item_base": {
 		"path": "client/Data/Prefabs/Items/Item.json"
 	},
-	"playerProjectile": {
-		"path": "client/Data/Prefabs/Projectiles/PlayerProjectile.json"
+	"slashingArc": {
+		"path": "client/Data/Prefabs/Projectiles/slashingArc.json"
+	},
+	"shield": {
+		"path": "client/Data/Prefabs/Visuals/Shield.json"
 	},
 	"cursor": {
 		"path": "client/Data/Prefabs/UI/Cursor.json"

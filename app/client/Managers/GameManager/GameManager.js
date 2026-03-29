@@ -1,5 +1,7 @@
 const { layerManager } = await import(`@managers/LayerManager/LayerManager.js`)
 
+//! why do I even have this?...
+
 /**
  * Manages the core PIXI.Application instance and provides centralized access to it and other high-level game objects like layers.
  * @property {PIXI.Application | null} pixiApp - The main PIXI.Application instance for rendering.
@@ -22,7 +24,7 @@ export class GameManager {
 			resolution: window.devicePixelRatio || 1,
 			autoDensity: true,
 			antialias: true,
-			roundPixels: true,
+			//roundPixels: true,
 			autoStart: false,
 			resizeTo: window,
 		})
@@ -53,13 +55,6 @@ export class GameManager {
 	getLayer(name) {
 		return layerManager.getLayer(name)
 	}
-
-	// Future methods for GameManager:
-	// pauseGame() {}
-	// resumeGame() {}
-	// loadLevel(levelName) {}
-
-	//! if we are going to store game state there - keep track of "who" touched game state - which class or whatnot and track new state.
 }
 
 export const gameManager = new GameManager()

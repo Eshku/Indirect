@@ -62,7 +62,7 @@
 
 		<script>
 			// --- Configuration ---
-			const ATLAS_SIZE = 256
+			const ATLAS_SIZE = 1024
 			const PADDING = 2
 
 			// --- Asset Definitions ---
@@ -71,28 +71,182 @@
 				{
 					name: 'spinner',
 					src: '../client/assets/sprites/spinner.png',
-					size: 32,
+					width: 32,
+					height: 32,
 				},
 
 				{
 					name: 'player_ship',
 					src: '../client/assets/sprites/player_ship.png',
-					size: 32,
+					width: 32,
+					height: 32,
 				},
 
 				{
-					name: 'projectile',
-					src: '../client/assets/sprites/projectile.png',
-					size: 8,
+					name: 'slashing_arc',
+					src: '../client/assets/sprites/slashing_arc.png',
+					width: 128,
+					height: 64,
 				},
+
+				{
+					name: 'shield',
+
+					// "Crimson Shockwave" ---
+
+					draw: (graphics, width, height) => {
+						const radius = Math.min(width, height) / 2
+						const canvas = document.createElement('canvas')
+						const size = radius * 2
+						canvas.width = size
+						canvas.height = size
+						const context = canvas.getContext('2d')
+						const gradient = context.createRadialGradient(radius, radius, 0, radius, radius, radius)
+						gradient.addColorStop(0, 'rgba(255, 50, 150, 0.9)') // Aggressive crimson core
+						gradient.addColorStop(0.7, 'rgba(200, 40, 120, 0.2)') // Fades out to a darker crimson
+						gradient.addColorStop(0.9, 'rgba(255, 80, 160, 0.9)') // Sharp, bright crimson outer ring
+						gradient.addColorStop(1, 'rgba(255, 80, 160, 0.0)') // Ring fades to transparent
+						context.fillStyle = gradient
+						context.fillRect(0, 0, size, size)
+						const texture = PIXI.Texture.from(canvas)
+						graphics.circle(0, 0, radius).fill({ texture })
+					},
+
+					width: 128, // I have tried 128x128 and it looks good
+					height: 128,
+				},
+
+				{
+					name: 'aoe_pulse',
+
+					draw: (graphics, width, height) => {
+						const canvas = document.createElement('canvas')
+						canvas.width = width
+						canvas.height = height
+						const ctx = canvas.getContext('2d')
+
+						const centerX = width / 2
+						const centerY = height / 2
+						const radius = Math.min(width, height) / 2
+
+						// --- BASE RADIAL VOID ---
+						const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius)
+
+						gradient.addColorStop(0, 'rgba(255, 120, 255, 0.9)')
+						gradient.addColorStop(0.25, 'rgba(160, 50, 255, 0.6)')
+						gradient.addColorStop(0.6, 'rgba(50, 0, 80, 0.3)')
+						gradient.addColorStop(1, 'rgba(0, 0, 0, 0)')
+
+						ctx.fillStyle = gradient
+						ctx.fillRect(0, 0, width, height)
+
+						// --- SHOCK RING ---
+						ctx.beginPath()
+						ctx.arc(centerX, centerY, radius * 0.75, 0, Math.PI * 2)
+
+						ctx.strokeStyle = 'rgba(220, 120, 255, 0.8)'
+						ctx.lineWidth = 3
+						ctx.shadowColor = 'rgba(200, 80, 255, 0.8)'
+						ctx.shadowBlur = 10
+						ctx.stroke()
+
+						// --- FRACTURE LINES (corruption cracks) ---
+						for (let i = 0; i < 12; i++) {
+							const angle = (i / 12) * Math.PI * 2
+							const length = radius * (0.6 + Math.random() * 0.3)
+
+							ctx.beginPath()
+							ctx.moveTo(centerX, centerY)
+							ctx.lineTo(centerX + Math.cos(angle) * length, centerY + Math.sin(angle) * length)
+
+							ctx.strokeStyle = 'rgba(180, 80, 255, 0.4)'
+							ctx.lineWidth = 1
+							ctx.stroke()
+						}
+
+						// --- PARTICLE BURST ---
+						for (let i = 0; i < 50; i++) {
+							const angle = Math.random() * Math.PI * 2
+							const dist = Math.random() * radius
+
+							const x = centerX + Math.cos(angle) * dist
+							const y = centerY + Math.sin(angle) * dist
+
+							ctx.fillStyle = `rgba(200, 100, 255, ${Math.random() * 0.5})`
+							ctx.fillRect(x, y, 2, 2)
+						}
+
+						const texture = PIXI.Texture.from(canvas)
+						graphics.rect(-width / 2, -height / 2, width, height).fill({ texture })
+					},
+
+					width: 128,
+					height: 128,
+				},
+
+				{
+					name: 'slashing_arc_v1.1',
+
+					draw: (graphics, width, height) => {
+						const canvas = document.createElement('canvas')
+						canvas.width = width
+						canvas.height = height
+						const ctx = canvas.getContext('2d')
+
+						const cx = width / 2
+
+						// --- MULTI-LAYER CURVES ---
+						for (let layer = 0; layer < 4; layer++) {
+							const offset = layer * 2
+							const alpha = 0.25 + layer * 0.2
+
+							ctx.beginPath()
+							ctx.moveTo(0, height)
+
+							ctx.quadraticCurveTo(cx, offset, width, height)
+							ctx.quadraticCurveTo(cx, offset + 10, 0, height)
+
+							ctx.closePath()
+
+							const grad = ctx.createLinearGradient(0, 0, 0, height)
+							grad.addColorStop(0, `rgba(220,120,255,${alpha})`)
+							grad.addColorStop(1, `rgba(20,0,40,0)`)
+
+							ctx.fillStyle = grad
+							ctx.fill()
+						}
+
+						// --- EDGE CORE ---
+						ctx.beginPath()
+						ctx.moveTo(0, height)
+						ctx.quadraticCurveTo(cx, 2, width, height)
+
+						ctx.strokeStyle = 'rgba(255,180,255,0.9)'
+						ctx.lineWidth = 2
+						ctx.shadowBlur = 12
+						ctx.shadowColor = 'rgba(200,100,255,0.9)'
+						ctx.stroke()
+
+						const texture = PIXI.Texture.from(canvas)
+						graphics.rect(-width / 2, -height / 2, width, height).fill({ texture })
+					},
+
+					width: 128,
+					height: 64,
+				},
+
+				
+
+				// npx http-server . -p 8080
 
 				/* 				{
 					name: 'projectile_player',
-					draw: (graphics, size) => {
-						const s = size / 2
-						graphics.circle(0, 0, s).fill({ color: 0x7fdbff, alpha: 1 })
+					draw: (graphics, width, height) => {
+						const radius = Math.min(width, height) / 2
+						graphics.circle(0, 0, radius).fill({ color: 0x7fdbff, alpha: 1 })
 					},
-					size: 4,
+					width: 4,
+					height: 4,
 				}, */
 			]
 
@@ -124,21 +278,28 @@
 				let rowMaxHeight = 0
 				let maxContentX = 0
 
-				// Pre-check for any individual asset that is too large to ever fit.
-				for (const asset of assets) {
-					if (!asset.size) {
-						throw new Error(`Asset "${asset.name}" is missing the required 'size' property.`)
+				// Pre-process assets to ensure they have width and height, and check for size constraints.
+				// This also provides backward compatibility for assets defined with 'size'.
+				const processedAssets = assets.map(asset => {
+					const width = asset.width ?? asset.size
+					const height = asset.height ?? asset.size
+					if (!width || !height) {
+						throw new Error(`Asset "${asset.name}" is missing required 'size' or 'width'/'height' properties.`)
 					}
-					if (asset.size + padding * 2 > atlasSize) {
+					return { ...asset, width, height }
+				})
+
+				for (const asset of processedAssets) {
+					if (asset.width + padding * 2 > atlasSize || asset.height + padding * 2 > atlasSize) {
 						throw new Error(
-							`Asset "${asset.name}" (size: ${asset.size}) is too large to fit in the atlas (size: ${atlasSize}, padding: ${padding}).`,
+							`Asset "${asset.name}" (size: ${asset.width}x${asset.height}) is too large to fit in the atlas (size: ${atlasSize}, padding: ${padding}).`,
 						)
 					}
 				}
 
-				for (const asset of assets) {
+				for (const asset of processedAssets) {
 					// If the current asset doesn't fit on this row, wrap to the next one.
-					if (currentX + asset.size + padding > atlasSize) {
+					if (currentX + asset.width + padding > atlasSize) {
 						maxContentX = Math.max(maxContentX, currentX)
 						currentX = padding
 						currentY += rowMaxHeight + padding
@@ -146,25 +307,24 @@
 					}
 
 					// Check for vertical overflow before placing the asset.
-					if (currentY + asset.size + padding > atlasSize) {
+					if (currentY + asset.height + padding > atlasSize) {
 						throw new Error(
 							`Atlas overflow: Not enough vertical space to place asset "${asset.name}". Consider increasing ATLAS_SIZE.`,
 						)
 					}
 
 					frames[asset.name] = {
-						frame: { x: currentX, y: currentY, w: asset.size, h: asset.size },
-						sourceSize: { w: asset.size, h: asset.size },
+						frame: { x: currentX, y: currentY, w: asset.width, h: asset.height },
+						sourceSize: { w: asset.width, h: asset.height },
 					}
 
-					currentX += asset.size + padding
-					rowMaxHeight = Math.max(rowMaxHeight, asset.size)
+					currentX += asset.width + padding
+					rowMaxHeight = Math.max(rowMaxHeight, asset.height)
 				}
 
 				// Calculate the final content bounds.
 				const tightWidth = Math.max(maxContentX, currentX)
 				const tightHeight = currentY + rowMaxHeight + padding
-
 				// Round up to the next power of two for GPU efficiency (mipmapping, etc.).
 				const potWidth = nextPowerOfTwo(tightWidth)
 				const potHeight = nextPowerOfTwo(tightHeight)
@@ -238,16 +398,16 @@
 						if (asset.draw) {
 							// Procedural asset
 							const graphics = new PIXI.Graphics()
-							graphics.position.set(frameInfo.x + asset.size / 2, frameInfo.y + asset.size / 2)
-							asset.draw(graphics, asset.size)
+							graphics.position.set(frameInfo.x + frameInfo.w / 2, frameInfo.y + frameInfo.h / 2)
+							asset.draw(graphics, frameInfo.w, frameInfo.h)
 							displayObject = graphics
 						} else if (asset.texture) {
 							// Image-based asset
 							const sprite = new PIXI.Sprite(asset.texture)
-							const scale = Math.min(asset.size / sprite.texture.width, asset.size / sprite.texture.height)
+							const scale = Math.min(frameInfo.w / sprite.texture.width, frameInfo.h / sprite.texture.height)
 							sprite.scale.set(scale)
 							sprite.anchor.set(0.5)
-							sprite.position.set(frameInfo.x + asset.size / 2, frameInfo.y + asset.size / 2)
+							sprite.position.set(frameInfo.x + frameInfo.w / 2, frameInfo.y + frameInfo.h / 2)
 							displayObject = sprite
 						}
 						if (displayObject) app.stage.addChild(displayObject)
@@ -270,32 +430,36 @@
 			async function generateIndividualPreviews() {
 				const individualPreviewsContainer = document.getElementById('individual-previews')
 				for (const asset of assets) {
+					const assetWidth = asset.width ?? asset.size
+					const assetHeight = asset.height ?? asset.size
+					if (!assetWidth || !assetHeight) continue // Should have been caught by layout
+
 					const previewWrapper = document.createElement('div')
 					previewWrapper.className = 'preview-item'
 
 					const label = document.createElement('p')
-					label.textContent = `${asset.name} (${asset.size}x${asset.size})`
+					label.textContent = `${asset.name} (${assetWidth}x${assetHeight})`
 					previewWrapper.appendChild(label)
 
 					const previewApp = new PIXI.Application()
 					await previewApp.init({
-						width: asset.size,
-						height: asset.size,
+						width: assetWidth,
+						height: assetHeight,
 						backgroundColor: 0x1a1a1a, // Match the preview background
 					})
 
 					let displayObject
 					if (asset.draw) {
 						const graphics = new PIXI.Graphics()
-						graphics.position.set(asset.size / 2, asset.size / 2) // Center the drawing
-						asset.draw(graphics, asset.size)
+						graphics.position.set(assetWidth / 2, assetHeight / 2) // Center the drawing
+						asset.draw(graphics, assetWidth, assetHeight)
 						displayObject = graphics
 					} else if (asset.texture) {
 						const sprite = new PIXI.Sprite(asset.texture)
-						const scale = Math.min(asset.size / sprite.texture.width, asset.size / sprite.texture.height)
+						const scale = Math.min(assetWidth / sprite.texture.width, assetHeight / sprite.texture.height)
 						sprite.scale.set(scale)
 						sprite.anchor.set(0.5)
-						sprite.position.set(asset.size / 2, asset.size / 2)
+						sprite.position.set(assetWidth / 2, assetHeight / 2)
 						displayObject = sprite
 					}
 					if (displayObject) previewApp.stage.addChild(displayObject)

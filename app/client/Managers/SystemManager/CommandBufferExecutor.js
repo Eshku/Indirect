@@ -20,7 +20,41 @@ export class CommandBufferExecutor {
 		this.entityManager = entityManager
 		this.prefabManager = prefabManager
 		this.queryManager = queryManager
-		this._currentCommandBuffer = null
+
+		// --- Pre-allocated data structures to reduce GC pressure ---
+		this._creations = { identical: [], varied: [] }
+		this._modifications = {
+			add: new Map(),
+			remove: new Map(),
+			set: new Map(),
+			setSilent: new Map(),
+			setEnabled: new Map(),
+			markDirty: new Map(),
+		}
+		this._deferredModifications = {
+			add: [],
+			remove: [],
+			set: [],
+			addComponents: [],
+			setComponents: [],
+			setComponentsSilent: [],
+			setEnabled: [],
+			markDirty: [],
+		}
+		this._deferredBatching = {
+			add: new Map(),
+			remove: new Map(),
+			set: new Map(),
+			setSilent: new Map(),
+			setEnabled: new Map(),
+			markDirty: new Map(),
+		}
+		this._placeholderResolutionMap = new Map()
+		this._deletions = new Set()
+		this._chunkDeletions = new Set()
+		this._entityTransitions = new Map()
+		this._movesByChunk = new Map()
+		this._removalsByArchetype = new Map()
 	}
 
 	/**
@@ -32,42 +66,41 @@ export class CommandBufferExecutor {
 		const { sortedOffsets } = commandBuffer.getSortedCommands()
 		if (sortedOffsets.length === 0) return
 
-		this._currentCommandBuffer = commandBuffer
-
 		const reader = new CommandBufferReader(commandBuffer.rawBuffer)
 
 		// --- 1. Consolidation Pass ---
 		// Group commands by type for batch processing.
-		// --- OPTIMIZATION: Zero-Allocation Consolidation ---
-		// Instead of pushing objects `{entityId, payload}` which causes GC pressure,
-		// we use parallel TypedArrays to store command data.
-		const creations = {
-			identical: [],
-			// varied is now an array of { placeholderId, archetypeId, payload }
-			varied: [],
-		}
-		const modifications = {
-			// This now stores binary payload modification commands
-			add: new Map(), // Map<componentTypeID, { entityIds: number[], dataOffsets: number[], dataLengths: number[] }>
-			remove: new Map(), // Map<componentTypeID, bigint[]>
-			set: new Map(), // Map<componentTypeID, { entityIds: number[], soaIndices: number[] }>
-			setSilent: new Map(), // For SET_COMPONENT_DATA_SILENT
-			setEnabled: new Map(), // Map<componentTypeID, { entityIds: bigint[], states: number[] }>,
-			markDirty: new Map(), // Map<componentTypeID, { entityIds: bigint[], ticks: number[] }>
-		}
-		const deferredModifications = {
-			add: [],
-			set: [],
-			remove: [],
-			addComponents: [],
-			setComponents: [],
-			setComponentsSilent: [],
-			setEnabled: [],
-			markDirty: [],
-		}
-		const placeholderResolutionMap = new Map()
-		const deletions = new Set()
-		const chunkDeletions = new Set()
+		// We use pre-allocated class properties and clear them to avoid GC pressure.
+		const creations = this._creations
+		creations.identical.length = 0
+		creations.varied.length = 0
+
+		const modifications = this._modifications
+		modifications.add.clear()
+		modifications.remove.clear()
+		modifications.set.clear()
+		modifications.setSilent.clear()
+		modifications.setEnabled.clear()
+		modifications.markDirty.clear()
+
+		const deferredModifications = this._deferredModifications
+		deferredModifications.add.length = 0
+		deferredModifications.set.length = 0
+		deferredModifications.remove.length = 0
+		deferredModifications.addComponents.length = 0
+		deferredModifications.setComponents.length = 0
+		deferredModifications.setComponentsSilent.length = 0
+		deferredModifications.setEnabled.length = 0
+		deferredModifications.markDirty.length = 0
+
+		const placeholderResolutionMap = this._placeholderResolutionMap
+		placeholderResolutionMap.clear()
+
+		const deletions = this._deletions
+		deletions.clear()
+
+		const chunkDeletions = this._chunkDeletions
+		chunkDeletions.clear()
 
 		for (let i = 0; i < sortedOffsets.length; i++) {
 			reader.seek(sortedOffsets[i])
@@ -345,18 +378,18 @@ export class CommandBufferExecutor {
 		// Execute consolidated batches in the correct order: Destroy > Modify (real) > Create > Modify (deferred)
 
 		// --- Deletion ---
-		this.entityManager.destroyEntitiesInBatch(deletions)
+		this.entityManager.destroyEntitiesInBatch(deletions);
 
 		for (const chunkId of chunkDeletions) {
-			this.entityManager.destroyAllEntitiesInChunk(chunkId)
+			this.entityManager.destroyAllEntitiesInChunk(chunkId);
 		}
 
 		// --- Modification (on existing entities) ---
-		this._buildAndExecuteMoveBatches(modifications, reader, currentTick)
-		this._executeSetDataBatches(modifications.set, reader, currentTick, true) // Mark dirty
-		this._executeSetDataBatches(modifications.setSilent, reader, currentTick, false) // Do not mark dirty
-		this._executeSetEnabledBatches(modifications.setEnabled)
-		this._executeMarkDirtyBatches(modifications.markDirty)
+		this._buildAndExecuteMoveBatches(modifications, reader, currentTick);
+		this._executeSetDataBatches(modifications.set, reader, currentTick, true); // Mark dirty
+		this._executeSetDataBatches(modifications.setSilent, reader, currentTick, false); // Do not mark dirty
+		this._executeSetEnabledBatches(modifications.setEnabled);
+		this._executeMarkDirtyBatches(modifications.markDirty);
 
 		// --- Creation & Placeholder Resolution ---
 		for (const { placeholderId, archetypeId, payload } of creations.varied) {
@@ -383,8 +416,7 @@ export class CommandBufferExecutor {
 		}
 
 		// Cleanup
-		commandBuffer.clear()
-		this._currentCommandBuffer = null
+		commandBuffer.clear();
 	}
 
 	/**
@@ -393,26 +425,15 @@ export class CommandBufferExecutor {
 	 * @private
 	 */
 	_executeDeferredModifications(deferredCommands, resolutionMap, reader, currentTick) {
-		const modifications = {
-			add: new Map(),
-			remove: new Map(),
-			set: new Map(),
-			setSilent: new Map(),
-			// No setComponents here, they are unpacked directly into .set/.setSilent
-			addComponents: [],
-			setEnabled: new Map(),
-			markDirty: new Map(),
-		}
-		const resolve = id => resolutionMap.get(id) ?? id
+		const modifications = this._deferredBatching
+		modifications.add.clear()
+		modifications.remove.clear()
+		modifications.set.clear()
+		modifications.setSilent.clear()
+		modifications.setEnabled.clear()
+		modifications.markDirty.clear()
 
-		// In-place patch payloads in the command buffer to resolve nested placeholders.
-		// This is safe because the command buffer is cleared after execution.
-		for (const offset of deferredCommands.add) {
-			this._patchCommandPayload(offset, OpCodes.ADD_COMPONENT, resolutionMap, reader)
-		}
-		for (const offset of deferredCommands.set) {
-			this._patchCommandPayload(offset, OpCodes.SET_COMPONENT_DATA, resolutionMap, reader)
-		}
+		const resolve = id => resolutionMap.get(id) ?? id
 
 		// Unpack and consolidate deferred ADD_COMPONENTS commands
 		for (const offset of deferredCommands.addComponents) {
@@ -591,41 +612,11 @@ export class CommandBufferExecutor {
 		}
 
 		// Finally, execute the now-resolved modification batches.
-		this._buildAndExecuteMoveBatches(modifications, reader, currentTick)
-		this._executeSetDataBatches(modifications.set, reader, currentTick, true)
-		this._executeSetDataBatches(modifications.setSilent, reader, currentTick, false)
-		this._executeSetEnabledBatches(modifications.setEnabled)
-		this._executeMarkDirtyBatches(modifications.markDirty)
-	}
-
-	/**
-	 * Finds and replaces placeholder entity IDs within a command's binary payload.
-	 * This modifies the raw command buffer in-place.
-	 * @private
-	 */
-	_patchCommandPayload(offset, opCode, resolutionMap, reader) {
-		reader.seek(offset)
-		reader.readU8() // OpCode
-		reader.readU64() // EntityId
-		const componentTypeID = reader.readU16()
-		const info = Schema.componentInfo[componentTypeID]
-		if (!info) return
-
-		const view = new DataView(reader.buffer)
-		for (const propKey of info.propertyKeys) {
-			const propInfo = info.properties[propKey]
-			// Only patch properties explicitly defined as 'entity' type.
-			if (propInfo.type === 'entity') {
-				const propOffset = reader.offset + 2 + propInfo.offset // +2 for dataLength
-				const placeholderId = view.getBigUint64(propOffset, true)
-				// Check if the ID is a placeholder (MSB is 1).
-				if ((placeholderId >> 63n) === 1n) {
-					// Resolve to the real ID, or default to 0n (null entity) if the placeholder was for a destroyed entity.
-					const resolvedId = resolutionMap.get(placeholderId) ?? 0n
-					view.setBigUint64(propOffset, resolvedId, true)
-				}
-			}
-		}
+		this._buildAndExecuteMoveBatches(modifications, reader, currentTick, resolutionMap);
+		this._executeSetDataBatches(modifications.set, reader, currentTick, true, resolutionMap);
+		this._executeSetDataBatches(modifications.setSilent, reader, currentTick, false, resolutionMap);
+		this._executeSetEnabledBatches(modifications.setEnabled);
+		this._executeMarkDirtyBatches(modifications.markDirty);
 	}
 
 	/**
@@ -637,11 +628,17 @@ export class CommandBufferExecutor {
 	 * @param {number} currentTick The current game tick.
 	 * @private
 	 */
-	_buildAndExecuteMoveBatches(modifications, reader, currentTick) {
+	_buildAndExecuteMoveBatches(modifications, reader, currentTick, resolutionMap = null) {
+		// Use pre-allocated maps and clear them for this execution.
+		const entityTransitions = this._entityTransitions
+		entityTransitions.clear()
+		const movesByChunk = this._movesByChunk
+		movesByChunk.clear()
+		const removalsByArchetype = this._removalsByArchetype
+		removalsByArchetype.clear()
+
 		// --- 1. Gather & Consolidate Pass ---
 		// First, determine the net structural change for each unique entity.
-		const entityTransitions = new Map() // Map<entityId, { sourceArchetypeId: number, targetMask: BigUint64Array, componentsToAdd: Map<typeId, {dataOffset, dataLength}> }>
-
 		// Helper to ensure an entity is in the transition map before processing a modification for it.
 		const ensureTransition = entityId => {
 			if (!entityTransitions.has(entityId)) {
@@ -688,8 +685,6 @@ export class CommandBufferExecutor {
 
 		// --- 2. Build Move Batches ---
 		// Group entities by their exact move operation to form compatible batches.
-		const movesByChunk = new Map() // Map<sourceChunkId, Map<targetArchetypeId, moveBatch>>
-
 		for (const [entityId, transition] of entityTransitions.entries()) {
 			const { sourceArchetypeId, targetMask, componentsToAdd } = transition
 			const targetArchetypeId = this.entityManager.getArchetypeByMask(targetMask)
@@ -731,13 +726,27 @@ export class CommandBufferExecutor {
 		}
 
 		// --- 3. Blit Pass (Execution) ---
-		const removalsByArchetype = new Map() // Map<sourceArchetypeId, entityId[]>
-
 		// --- Pass 3a: All Additions & Copies ---
 		for (const [sourceChunkId, targets] of movesByChunk.entries()) {
 			for (const [targetArchetypeId, moveBatch] of targets.entries()) {
 				const { entityIds, sourceLocations, componentsToAssign } = moveBatch
 				const sourceArchetypeId = entityStore.chunkArchetypeIds[sourceChunkId]
+
+				// Calculate the bitmasks representing the net change between archetypes.
+				const sourceMask = entityStore.archetypeMasks.subarray(
+					sourceArchetypeId * MASK_PARTS,
+					(sourceArchetypeId + 1) * MASK_PARTS,
+				)
+				const targetMask = entityStore.archetypeMasks.subarray(
+					targetArchetypeId * MASK_PARTS,
+					(targetArchetypeId + 1) * MASK_PARTS,
+				)
+				const addedMask = new BigUint64Array(MASK_PARTS)
+				const removedMask = new BigUint64Array(MASK_PARTS)
+				for (let i = 0; i < MASK_PARTS; i++) {
+					addedMask[i] = targetMask[i] & ~sourceMask[i]
+					removedMask[i] = sourceMask[i] & ~targetMask[i]
+				}
 
 				this.entityManager._addEntitiesByCopyingBatch( // This copies data to the new location
 					targetArchetypeId,
@@ -747,6 +756,9 @@ export class CommandBufferExecutor {
 					componentsToAssign,
 					reader,
 					currentTick,
+					addedMask,
+					removedMask,
+					resolutionMap,
 				)
 
 				// Defer the removal by adding the entities to a final removal batch.
@@ -769,7 +781,8 @@ export class CommandBufferExecutor {
 		}
 	}
 
-	_executeSetDataBatches(setDataMap, reader, currentTick, shouldMarkDirty) {
+	_executeSetDataBatches(setDataMap, reader, currentTick, shouldMarkDirty, resolutionMap = null) {
+
 		for (const [componentTypeID, sets] of setDataMap.entries()) {
 			const info = Schema.componentInfo[componentTypeID]
 			if (!info) continue
@@ -805,6 +818,7 @@ export class CommandBufferExecutor {
 					reader,
 					currentTick,
 					shouldMarkDirty,
+					resolutionMap,
 				)
 			}
 		}
@@ -823,6 +837,8 @@ export class CommandBufferExecutor {
 			const { entityIds, states } = sets
 			for (let i = 0; i < entityIds.length; i++) {
 				const entityId = entityIds[i]
+				const enabledState = states[i]
+
 				const location = this.entityManager.getEntityLocation(entityId)
 				if (!location) continue
 
@@ -837,7 +853,7 @@ export class CommandBufferExecutor {
 
 				const wordIndex = indexInChunk >>> 5 // Math.floor(i / 32)
 				const bitMask = 1 << (indexInChunk & 31) // 1 << (i % 32)
-				const shouldBeEnabled = states[i] === 1
+				const shouldBeEnabled = enabledState === 1
 
 				if (shouldBeEnabled) {
 					Atomics.or(enabledMask, wordIndex, bitMask)

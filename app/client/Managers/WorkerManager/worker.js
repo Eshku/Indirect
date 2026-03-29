@@ -598,9 +598,9 @@ class WorkerEntry {
 		const saturatingTick = oldestTickToOverwrite + 1
 		const tickToClear = currentTick + 1
 
-		const oldestFrameIndex = oldestTickToOverwrite % this.DIRTY_HISTORY_LENGTH
-		const saturatingFrameIndex = saturatingTick % this.DIRTY_HISTORY_LENGTH
-		const clearFrameIndex = tickToClear % this.DIRTY_HISTORY_LENGTH
+		const oldestFrameIndex = ((oldestTickToOverwrite % this.DIRTY_HISTORY_LENGTH) + this.DIRTY_HISTORY_LENGTH) % this.DIRTY_HISTORY_LENGTH
+		const saturatingFrameIndex = ((saturatingTick % this.DIRTY_HISTORY_LENGTH) + this.DIRTY_HISTORY_LENGTH) % this.DIRTY_HISTORY_LENGTH
+		const clearFrameIndex = ((tickToClear % this.DIRTY_HISTORY_LENGTH) + this.DIRTY_HISTORY_LENGTH) % this.DIRTY_HISTORY_LENGTH
 
 		for (const componentTypeId in chunkMetadata) {
 			const componentMeta = chunkMetadata[componentTypeId]

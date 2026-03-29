@@ -1,6 +1,6 @@
 const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
 const { ParallelAPI } = await import(`@managers/WorkerManager/parallelAPI.js`)
-const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
+const { entityStore, MAX_COMPONENTS } = await import(`@managers/EntityManager/EntityManager.js`)
 import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
 import { JobWriter } from './JobWriter.js'
 const { kernelRegistry } = await import(`@managers/SystemManager/KernelRegistry.js`)
@@ -93,6 +93,9 @@ export class Scheduler {
 				dependentsHead: -1, // Index of the first node in the dependency linked list
 				dependentsTail: -1, // Index of the last node for O(1) appends
 				dependentsCount: 0,
+				system: null,
+				reads: null,
+				writes: null,
 			}
 		}
 		// A pre-allocated pool for our dependency linked-list nodes.
@@ -246,19 +249,22 @@ export class Scheduler {
 		this.perFrameContext = frameContext
 
 		// 2. Build the maintenance jobs
-		// Iterate over all active chunks. A more optimized version could use a sparse set of chunks.
-		for (let chunkId = 1; chunkId < this.systemManager.entityManager.nextChunkId; chunkId++) {
-			// Check if the chunk is active (has an archetype) and has metadata to process.
-			if (entityStore.chunkArchetypeIds[chunkId] !== undefined && entityStore.chunkMetadata[chunkId]) {
-				const jobId = this.jobCounter++
-				const job = this.jobs[jobId]
-				job.id = jobId
-				job.systemId = -1 // Sentinel for "Maintenance"
-				job.type = JOB_TYPE.MAINTENANCE
-				job.payload = chunkId
-				job.dependencyCounter = 0
-				job.affinity = JOB_AFFINITY.ANY_WORKER
-				// dependentsHead/Tail/Count are already reset in _reset()
+		// Traverse all active archetypes and their chunk linked lists. 
+		const nextArchetypeId = Atomics.load(entityStore.nextArchetypeId, 0)
+		for (let archetypeId = 0; archetypeId < nextArchetypeId; archetypeId++) {
+			let chunkId = entityStore.archetypeHeadChunkIds[archetypeId]
+			while (chunkId !== 0 /* NULL_CHUNK_ID */) {
+				if (entityStore.chunkMetadata[chunkId]) {
+					const jobId = this.jobCounter++
+					const job = this.jobs[jobId]
+					job.id = jobId
+					job.systemId = -1 // Sentinel for "Maintenance"
+					job.type = JOB_TYPE.MAINTENANCE
+					job.payload = chunkId
+					job.dependencyCounter = 0
+					job.affinity = JOB_AFFINITY.ANY_WORKER
+				}
+				chunkId = entityStore.chunkNextInArchetype[chunkId]
 			}
 		}
 
@@ -290,6 +296,9 @@ export class Scheduler {
 			this.jobs[i].dependentsHead = -1
 			this.jobs[i].dependentsTail = -1
 			this.jobs[i].dependentsCount = 0
+			this.jobs[i].system = null
+			this.jobs[i].reads = null
+			this.jobs[i].writes = null
 		}
 		this.hasParallelJobs = false
 
@@ -374,11 +383,16 @@ export class Scheduler {
 
 				job.id = jobId
 				job.systemId = systemId
+				job.system = system
 				job.type = JOB_TYPE.UPDATE
 				job.dependencyCounter = 0
 				job.affinity = JOB_AFFINITY.MAIN_THREAD
 				jobIdsForSystem.push(jobId)
 				job.kernelId = 0 // Reset/default
+
+				const deps = metadata.dependencies.get(JOB_TYPE.UPDATE) || {}
+				job.reads = deps.reads || new Set()
+				job.writes = deps.writes || new Set()
 			}
 
 			// B. Create KERNEL jobs (if schedule() exists)
@@ -412,11 +426,16 @@ export class Scheduler {
 					const job = this.jobs[jobId]
 					job.id = jobId
 					job.systemId = systemId
+					job.system = system
 					job.type = JOB_TYPE.KERNEL
 					job.kernelId = kernelId
 					job.payload = payload
 					job.dependencyCounter = 0
 					job.affinity = JOB_AFFINITY.ANY_WORKER
+
+					const deps = metadata.dependencies.get(kernelId) || {}
+					job.reads = deps.reads || new Set()
+					job.writes = deps.writes || new Set()
 
 					jobIdsForSystem.push(jobId)
 				}
@@ -437,11 +456,16 @@ export class Scheduler {
 				const job = this.jobs[jobId]
 				job.id = jobId
 				job.systemId = systemId
+				job.system = system
 				job.type = JOB_TYPE.PROCESS
 				job.dependencyCounter = 0
 				job.affinity = JOB_AFFINITY.MAIN_THREAD
 				jobIdsForSystem.push(jobId)
 				job.kernelId = 0 // Reset/default
+
+				const deps = metadata.dependencies.get(JOB_TYPE.PROCESS) || {}
+				job.reads = deps.reads || new Set()
+				job.writes = deps.writes || new Set()
 			}
 
 			if (jobIdsForSystem.length > 0) {
@@ -554,8 +578,6 @@ export class Scheduler {
 		// 2. Distribute parallel jobs in large, contiguous batches to preserve data locality.
 		const workerCount = this.workerManager.totalThreads - 1
 		if (workerCount > 0 && readyAnyWorkerJobs.length > 0) {
-			// Use a more balanced distribution algorithm to prevent some workers
-			// from becoming idle much earlier than others.
 			const numJobs = readyAnyWorkerJobs.length
 			const baseJobsPerWorker = Math.floor(numJobs / workerCount)
 			const remainder = numJobs % workerCount
@@ -787,67 +809,64 @@ export class Scheduler {
 		const systemId = jobsView[jobOffset + JOB_SYSTEM_ID_OFFSET]
 		const jobPayload = jobsView[jobOffset + JOB_PAYLOAD_OFFSET]
 
-		const system = this.systemManager.getSystemById(systemId)
-
-		if (!system) {
-			// This is a critical error, but we should only look up the name when it happens.
-			const systemName = this.systemManager.getSystemNameById(systemId)
-			console.error(`[Scheduler] Could not find system instance for "${systemName}" (ID: ${systemId}) during job execution.`)
-			return // Skip this job
-		}
-
 		const startTime = performance.now()
 		const jobType = jobPayload >> 24
 		const payload = jobPayload & 0x00ffffff
 
 		try {
-			switch (jobType) {
-				case JOB_TYPE.UPDATE:
-					await system.update(this.perFrameContext)
-					break
-				case JOB_TYPE.KERNEL: {
-					const oldFrameContext = self.frameContext
-					self.frameContext = this.perFrameContext // Make it global for the kernel
+			if (jobType === JOB_TYPE.MAINTENANCE) {
+				this._executeMaintenanceJob(payload, this.perFrameContext.currentTick)
+			} else {
+				const job = this.jobs[jobId]
+				const system = job.system
 
-					const kernelId = jobsView[jobOffset + JOB_KERNEL_ID_OFFSET]
-					const kernelFn = kernelRegistry.idToKernel.get(kernelId)
-					if (!kernelFn) {
-						console.error(`[Scheduler] Main thread could not find kernel function for ID ${kernelId}`)
-						break
+				if (!system) {
+					const systemName = this.systemManager.getSystemNameById(systemId)
+					console.error(
+						`[Scheduler] Could not find system instance for "${systemName}" (ID: ${systemId}) during job execution.`,
+					)
+				} else {
+					switch (jobType) {
+						case JOB_TYPE.UPDATE:
+							await system.update(this.perFrameContext)
+							break
+						case JOB_TYPE.KERNEL: {
+							const oldFrameContext = self.frameContext
+							self.frameContext = this.perFrameContext // Make it global for the kernel
+
+							const kernelId = jobsView[jobOffset + JOB_KERNEL_ID_OFFSET]
+							const kernelFn = kernelRegistry.idToKernel.get(kernelId)
+							if (!kernelFn) {
+								console.error(`[Scheduler] Main thread could not find kernel function for ID ${kernelId}`)
+								break
+							}
+
+							// Fast path: Look up pre-compiled context from the SystemManager's cache.
+							const systemContext = this.systemManager.allSystemContexts[systemId]?.[kernelId] || {}
+							self.parallel.resetJobState() // Reset pool for each job.
+							await kernelFn(payload, systemContext, this.mainThreadKernelContext)
+							self.frameContext = oldFrameContext // Restore global context
+							break
+						}
+						case JOB_TYPE.PROCESS:
+							await system.process(this.perFrameContext)
+							break
 					}
-
-					// Fast path: Look up pre-compiled context from the SystemManager's cache.
-					const systemContext = this.systemManager.allSystemContexts[systemId]?.[kernelId] || {}
-					self.parallel.resetJobState() // Reset pool for each job.
-					await kernelFn(payload, systemContext, this.mainThreadKernelContext)
-					self.frameContext = oldFrameContext // Restore global context
-					break
 				}
-				case JOB_TYPE.PROCESS:
-					await system.process(this.perFrameContext)
-					break
-				case JOB_TYPE.MAINTENANCE:
-					// Maintenance jobs are handled by workers, but we can provide a fallback for main thread execution.
-					this._executeMaintenanceJob(payload, this.perFrameContext.currentTick)
-					break
 			}
 		} catch (error) {
-			// Look up name only on error.
 			const systemName = this.systemManager.getSystemNameById(systemId)
 			console.error(`[Scheduler] Error executing job for system "${systemName}" (ID: ${systemId}):`, error)
 		}
 
 		const endTime = performance.now()
 		const duration = endTime - startTime
-
-		if (jobType === JOB_TYPE.KERNEL) {
-			// The 'schedule' time now measures job creation (in _buildGraph). We still need to add the
-			// execution time of any main-thread kernels to the system's total for an accurate picture.
-			// We pass a non-numeric type to only update the total.
-			this.systemManager.recordSystemTiming(systemId, 'total_only', duration)
-		} else {
-			// For UPDATE and PROCESS, record the specific phase time.
-			this.systemManager.recordSystemTiming(systemId, jobType, duration)
+		if (jobType !== JOB_TYPE.MAINTENANCE) {
+			if (jobType === JOB_TYPE.KERNEL) {
+				this.systemManager.recordSystemTiming(systemId, 'total_only', duration)
+			} else {
+				this.systemManager.recordSystemTiming(systemId, jobType, duration)
+			}
 		}
 
 		// After "execution", process the job's dependents.
@@ -931,9 +950,9 @@ export class Scheduler {
 		const saturatingTick = oldestTickToOverwrite + 1
 		const tickToClear = currentTick + 1
 
-		const oldestFrameIndex = oldestTickToOverwrite % DIRTY_HISTORY_LENGTH
-		const saturatingFrameIndex = saturatingTick % DIRTY_HISTORY_LENGTH
-		const clearFrameIndex = tickToClear % DIRTY_HISTORY_LENGTH
+		const oldestFrameIndex = ((oldestTickToOverwrite % DIRTY_HISTORY_LENGTH) + DIRTY_HISTORY_LENGTH) % DIRTY_HISTORY_LENGTH
+		const saturatingFrameIndex = ((saturatingTick % DIRTY_HISTORY_LENGTH) + DIRTY_HISTORY_LENGTH) % DIRTY_HISTORY_LENGTH
+		const clearFrameIndex = ((tickToClear % DIRTY_HISTORY_LENGTH) + DIRTY_HISTORY_LENGTH) % DIRTY_HISTORY_LENGTH
 
 		for (const componentTypeId in chunkMetadata) {
 			const componentMeta = chunkMetadata[componentTypeId]
@@ -1090,34 +1109,20 @@ export class Scheduler {
 	 * @private
 	 */
 	_resolveDataFlowDependencies() {
-		const lastWriter = new Map() // Map<componentTypeId, jobId>
-		const lastReaders = new Map() // Map<componentTypeId, jobId[]>
-
-		const getJobDependencies = job => {
-			if (!job) return { reads: new Set(), writes: new Set() }
-			const metadata = this.systemManager.systemMetadataCache.get(job.systemId)
-			if (!metadata) return { reads: new Set(), writes: new Set() }
-
-			let key
-			if (job.type === JOB_TYPE.KERNEL) {
-				key = job.kernelId
-			} else {
-				key = job.type // For UPDATE or PROCESS
-			}
-			return metadata.dependencies.get(key) || { reads: new Set(), writes: new Set() }
-		}
+		const lastWriter = new Int32Array(MAX_COMPONENTS).fill(-1)
+		const lastReaders = Array.from({ length: MAX_COMPONENTS }, () => [])
 
 		for (let i = 0; i < this.jobCounter; i++) {
 			const job = this.jobs[i]
-			const { reads, writes } = getJobDependencies(job)
+			const { reads, writes } = job
 
 			// --- 1. Resolve Write Dependencies (WAW & RAW) ---
 			// A job that writes to a component must run after any previous job that
 			// reads from or writes to that same component.
 			for (const typeId of writes) {
 				// Check for Write-After-Write (WAW) conflict.
-				if (lastWriter.has(typeId)) {
-					const prereqJob = this.jobs[lastWriter.get(typeId)]
+				if (lastWriter[typeId] !== -1) {
+					const prereqJob = this.jobs[lastWriter[typeId]]
 					// The special rule: do not create dependencies between parallel jobs of the same system.
 					if (
 						!(job.type === JOB_TYPE.KERNEL && prereqJob.type === JOB_TYPE.KERNEL && job.systemId === prereqJob.systemId)
@@ -1127,8 +1132,8 @@ export class Scheduler {
 				}
 
 				// Check for Read-After-Write (RAW) conflicts.
-				if (lastReaders.has(typeId)) {
-					for (const readerJobId of lastReaders.get(typeId)) {
+				if (lastReaders[typeId].length > 0) {
+					for (const readerJobId of lastReaders[typeId]) {
 						const prereqJob = this.jobs[readerJobId]
 						if (
 							!(
@@ -1143,8 +1148,8 @@ export class Scheduler {
 				}
 
 				// This writer is now the latest access, invalidating previous readers for this component.
-				lastReaders.delete(typeId)
-				lastWriter.set(typeId, job.id)
+				lastReaders[typeId].length = 0
+				lastWriter[typeId] = job.id
 			}
 
 			// --- 2. Resolve Read Dependencies (WAR) ---
@@ -1152,8 +1157,8 @@ export class Scheduler {
 			// that writes to that same component.
 			for (const typeId of reads) {
 				// Check for Write-After-Read (WAR) conflict.
-				if (lastWriter.has(typeId)) {
-					const prereqJob = this.jobs[lastWriter.get(typeId)]
+				if (lastWriter[typeId] !== -1) {
+					const prereqJob = this.jobs[lastWriter[typeId]]
 					if (
 						!(job.type === JOB_TYPE.KERNEL && prereqJob.type === JOB_TYPE.KERNEL && job.systemId === prereqJob.systemId)
 					) {
@@ -1161,8 +1166,7 @@ export class Scheduler {
 					}
 				}
 				// Add this job to the list of readers for this component.
-				if (!lastReaders.has(typeId)) lastReaders.set(typeId, [])
-				lastReaders.get(typeId).push(job.id)
+				lastReaders[typeId].push(job.id)
 			}
 		}
 	}

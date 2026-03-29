@@ -17,7 +17,7 @@ export class CooldownSystem {
 		this.query = this.getQuery({
 			with: [weaponCooldown],
 		})
-		this.scratchBuffer = new Uint32Array(4096) // Max chunk capacity
+		this.scratchBuffer = this.getScratchBuffer(weaponCooldown)
 	}
 
 	update({ deltaTime, currentTick }) {
@@ -37,7 +37,7 @@ export class CooldownSystem {
 					if (timers[indexInChunk] === 0) {
 						// The cooldown has finished. Disable the component so we don't
 						// process it again until it's reset.
-						this.setComponentEnabled(chunk.entities[indexInChunk], weaponCooldown, false)
+						chunk.disableComponent(indexInChunk, weaponCooldown)
 					}
 				}
 			}

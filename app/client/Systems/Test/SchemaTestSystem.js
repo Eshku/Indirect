@@ -291,8 +291,8 @@ export class SchemaTestSystem {
 					expect(enabledCount).toBe(1)
 					expect(scratchBuffer[0]).toBe(location.indexInChunk)
 
-					// 2. Disable the component
-					this.setComponentEnabled(entityId, enableableTestComponent, false)
+					// 2. Disable the component using a deferred command
+					this.disableComponent(entityId, enableableTestComponent)
 					this.flush() // Execute the command
 
 					// 3. Check disabled state
@@ -300,8 +300,8 @@ export class SchemaTestSystem {
 					enabledCount = chunkView.getEnabledIndices(enableableTestComponent, scratchBuffer)
 					expect(enabledCount).toBe(0)
 
-					// 4. Re-enable the component
-					this.setComponentEnabled(entityId, enableableTestComponent, true)
+					// 4. Re-enable the component using a deferred command
+					this.enableComponent(entityId, enableableTestComponent)
 					this.flush()
 
 					// 5. Check enabled state again

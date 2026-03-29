@@ -22,11 +22,14 @@ export function expect(actual) {
 		 * @example
 		 * expect(1).toBe(1); // Passes
 		 * expect('hello').toBe('world'); // Fails
+		 * expect(result).toBe(true, 'The operation should succeed'); // Fails with custom message
 		 */
-		toBe(expected) {
+		toBe(expected, customMessage) {
 			const passed = actual === expected
 			if (passed === inverted) {
-				throw new AssertionError(`Expected ${actual} ${inverted ? 'not ' : ''}to be ${expected}`, expected, actual)
+				const baseMessage = `Expected ${actual} ${inverted ? 'not ' : ''}to be ${expected}`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, expected, actual)
 			}
 		},
 		/**
@@ -38,7 +41,7 @@ export function expect(actual) {
 		 * expect([1, 2]).toEqual([2, 1]); // Fails (order matters for JSON.stringify)
 		 * @param {*} expected - The expected object/array.
 		 */
-		toEqual(expected) {
+		toEqual(expected, customMessage) {
 			// Add a replacer to handle BigInts, which JSON.stringify does not support by default.
 			const replacer = (key, value) => (typeof value === 'bigint' ? value.toString() : value)
 
@@ -47,11 +50,9 @@ export function expect(actual) {
 
 			const passed = actualStr === expectedStr
 			if (passed === inverted) {
-				throw new AssertionError(
-					`Expected ${actualStr} ${inverted ? 'not ' : ''}to equal ${expectedStr}`,
-					expected,
-					actual
-				)
+				const baseMessage = `Expected ${actualStr} ${inverted ? 'not ' : ''}to equal ${expectedStr}`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, expected, actual)
 			}
 		},
 		/**
@@ -62,7 +63,7 @@ export function expect(actual) {
 		 * expect({ a: 1 }).toHaveProperty('a'); // Passes
 		 * expect({ a: 1 }).not.toHaveProperty('b'); // Passes
 		 */
-		toHaveProperty(propertyKey) {
+		toHaveProperty(propertyKey, customMessage) {
 			if (typeof actual !== 'object' || actual === null) {
 				throw new AssertionError(
 					`Expected value to be an object but got ${actual === null ? 'null' : typeof actual}`,
@@ -72,11 +73,9 @@ export function expect(actual) {
 			}
 			const passed = propertyKey in actual
 			if (passed === inverted) {
-				throw new AssertionError(
-					`Expected object ${inverted ? 'not ' : ''}to have property "${propertyKey}"`,
-					`An object ${inverted ? 'without' : 'with'} property "${propertyKey}"`,
-					actual
-				)
+				const baseMessage = `Expected object ${inverted ? 'not ' : ''}to have property "${propertyKey}"`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, `An object ${inverted ? 'without' : 'with'} property "${propertyKey}"`, actual)
 			}
 		},
 		/**
@@ -86,11 +85,26 @@ export function expect(actual) {
 		 * expect({}).toBeDefined(); // Passes
 		 * expect(undefined).not.toBeDefined(); // Passes
 		 */
-		toBeDefined() {
+		toBeDefined(customMessage) {
 			const passed = actual !== undefined
 			if (passed === inverted) {
-				const message = `Expected value ${inverted ? 'not ' : ''}to be defined`
+				const message = customMessage ? `Expected value ${inverted ? 'not ' : ''}to be defined (${customMessage})` : `Expected value ${inverted ? 'not ' : ''}to be defined`
 				const expectedValue = inverted ? undefined : 'a defined value'
+				throw new AssertionError(message, expectedValue, actual)
+			}
+		},
+		/**
+		 * Checks if a value is undefined.
+		 * @throws {AssertionError} If the assertion fails.
+		 * @example
+		 * expect(undefined).toBeUndefined(); // Passes
+		 * expect({}).not.toBeUndefined(); // Passes
+		 */
+		toBeUndefined(customMessage) {
+			const passed = actual === undefined
+			if (passed === inverted) {
+				const message = customMessage ? `Expected value ${inverted ? 'not ' : ''}to be undefined (${customMessage})` : `Expected value ${inverted ? 'not ' : ''}to be undefined`
+				const expectedValue = inverted ? 'a defined value' : undefined
 				throw new AssertionError(message, expectedValue, actual)
 			}
 		},
@@ -102,7 +116,7 @@ export function expect(actual) {
 		 * expect([1, 2, 3]).toContain(2); // Passes
 		 * expect('hello world').toContain('world'); // Passes
 		 */
-		toContain(expected) {
+		toContain(expected, customMessage) {
 			if (!Array.isArray(actual) && typeof actual !== 'string') {
 				throw new AssertionError(
 					`Expected value to be an array or a string but got ${typeof actual}`,
@@ -112,11 +126,9 @@ export function expect(actual) {
 			}
 			const passed = actual.includes(expected)
 			if (passed === inverted) {
-				throw new AssertionError(
-					`Expected ${JSON.stringify(actual)} ${inverted ? 'not ' : ''}to contain ${JSON.stringify(expected)}`,
-					`An array/string ${inverted ? 'not ' : ''}containing ${JSON.stringify(expected)}`,
-					actual
-				)
+				const baseMessage = `Expected ${JSON.stringify(actual)} ${inverted ? 'not ' : ''}to contain ${JSON.stringify(expected)}`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, `An array/string ${inverted ? 'not ' : ''}containing ${JSON.stringify(expected)}`, actual)
 			}
 		},
 		/**
@@ -127,10 +139,12 @@ export function expect(actual) {
 		 * expect(11).toBeGreaterThan(10); // Passes
 		 * expect(10).toBeGreaterThan(10); // Fails
 		 */
-		toBeGreaterThan(expected) {
+		toBeGreaterThan(expected, customMessage) {
 			const passed = actual > expected
 			if (passed === inverted) {
-				throw new AssertionError(`Expected ${actual} ${inverted ? 'not ' : ''}to be greater than ${expected}`, `a value > ${expected}`, actual)
+				const baseMessage = `Expected ${actual} ${inverted ? 'not ' : ''}to be greater than ${expected}`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, `a value > ${expected}`, actual)
 			}
 		},
 		/**
@@ -138,11 +152,13 @@ export function expect(actual) {
 		 * @param {string} expected - The expected type string (e.g., 'string', 'number', 'bigint').
 		 * @throws {AssertionError} If the assertion fails.
 		 */
-		toBeTypeOf(expected) {
+		toBeTypeOf(expected, customMessage) {
 			const actualType = typeof actual
 			const passed = actualType === expected
 			if (passed === inverted) {
-				throw new AssertionError(`Expected type ${inverted ? 'not ' : ''}to be ${expected} but got ${actualType}`, expected, actualType)
+				const baseMessage = `Expected type ${inverted ? 'not ' : ''}to be ${expected} but got ${actualType}`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, expected, actualType)
 			}
 		},
 		/**
@@ -154,10 +170,12 @@ export function expect(actual) {
 		 * expect(11).toBeGreaterThanOrEqual(10); // Passes
 		 * expect(9).toBeGreaterThanOrEqual(10); // Fails
 		 */
-		toBeGreaterThanOrEqual(expected) {
+		toBeGreaterThanOrEqual(expected, customMessage) {
 			const passed = actual >= expected
 			if (passed === inverted) {
-				throw new AssertionError(`Expected ${actual} ${inverted ? 'not ' : ''}to be greater than or equal to ${expected}`, `a value >= ${expected}`, actual)
+				const baseMessage = `Expected ${actual} ${inverted ? 'not ' : ''}to be greater than or equal to ${expected}`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, `a value >= ${expected}`, actual)
 			}
 		},
 		/**
@@ -168,17 +186,15 @@ export function expect(actual) {
 		 * expect(new Date()).toBeInstanceOf(Date); // Passes
 		 * expect([]).toBeInstanceOf(Array); // Passes
 		 */
-		toBeInstanceOf(constructor) {
+		toBeInstanceOf(constructor, customMessage) {
 			const passed = actual instanceof constructor
 			if (passed === inverted) {
 				// Provide more informative names in the error message.
 				const actualName = actual?.constructor?.name || typeof actual
 				const expectedName = constructor?.name || 'Unknown Constructor'
-				throw new AssertionError(
-					`Expected value ${inverted ? 'not ' : ''}to be an instance of ${expectedName}, but was instance of ${actualName}`,
-					`instance of ${expectedName}`,
-					`instance of ${actualName}`,
-				)
+				const baseMessage = `Expected value ${inverted ? 'not ' : ''}to be an instance of ${expectedName}, but was instance of ${actualName}`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, `instance of ${expectedName}`, `instance of ${actualName}`)
 			}
 		},
 	})

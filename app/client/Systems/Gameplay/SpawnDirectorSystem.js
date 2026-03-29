@@ -11,6 +11,8 @@ const {
 	velocity,
 	spinnerTag, // Assuming a specific tag for each enemy type we want to pool
 	threatCost,
+	tint,
+	hitFlash,
 } = ecs.getTypeIDs()
 
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
@@ -44,7 +46,7 @@ export class SpawnDirectorSystem {
 
 		// A query to find pooled 'spinner' enemies that can be reused.
 		this.pooledSpinnerQuery = this.getQuery({
-			with: [spinnerTag, isPooled],
+			with: [spinnerTag, isPooled, health],
 		})
 
 		this.playerId = this.playerQuery.getSingleEntity()
@@ -74,24 +76,20 @@ export class SpawnDirectorSystem {
 		// Filter out any enemies that failed to compile.
 		this.spawnableEnemies = this.spawnableEnemies.filter(e => e.payload)
 
-		// --- Pre-compile payloads for reactivating pooled enemies ---
-		const { payload: reactivatePayload } = this.compile(lifecycleState, { flags: LIFECYCLE.ACTIVE })
-		this.reactivatePayload = reactivatePayload
-
-		// We need to reset several components when reusing an enemy.
-		const { payload: positionPayload, mutators: positionMutators } = this.compile(position)
-		this.positionPayload = positionPayload
-		this.positionMutators = positionMutators
-
-		const { payload: healthPayload, mutators: healthMutators } = this.compile(health)
-		this.healthPayload = healthPayload
-		this.healthMutators = healthMutators
-
-		const { payload: threatCostPayload, mutators: threatCostMutators } = this.compile(threatCost)
-		this.threatCostPayload = threatCostPayload
-		this.threatCostMutators = threatCostMutators
-
-		this.resetVelocityPayload = this.compile(velocity, { x: 0, y: 0 }).payload
+		// Pre-compile a single payload to reset all necessary components on a reused enemy.
+		// This is much more efficient than sending multiple `setComponentData` commands.
+		const { payload: reuseEnemyPayload, mutators: reuseEnemyMutators } = this.compile({
+			lifecycleState: { flags: LIFECYCLE.ACTIVE },
+			velocity: { x: 0, y: 0 },
+			tint: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+			hitFlash: { duration: 0.0 },
+			// These components have dynamic data that will be set by mutators.
+			position: {},
+			health: {},
+			threatCost: {},
+		})
+		this.reuseEnemyPayload = reuseEnemyPayload
+		this.reuseEnemyMutators = reuseEnemyMutators
 
 		// Get access to the spatial hash grid for finding empty spawn locations.
 		const gridSABs = physicsManager.getSpatialHashGridSABs()
@@ -148,7 +146,7 @@ export class SpawnDirectorSystem {
 
 		const spawnLocation = this._findEmptySpawnLocation()
 		if (!spawnLocation) {
-			console.warn('DirectorSystem: Could not find an empty spot to spawn wave. Skipping wave, budget not spent.')
+			//console.warn('DirectorSystem: Could not find an empty spot to spawn wave. Skipping wave, budget not spent.')
 			return 0 // Could not spawn, so no budget was spent.
 		}
 
@@ -163,9 +161,13 @@ export class SpawnDirectorSystem {
 	 * @private
 	 */
 	_findEmptySpawnLocation() {
-		const playerPosition = this.getComponent(this.playerId, position)
-
-		const { x: playerX, y: playerY } = playerPosition
+		let playerX = 0
+		let playerY = 0
+		// This is a singleton query, so it will only run once.
+		for (const chunk of this.playerQuery.iter()) {
+			playerX = chunk.componentData[position].x[0]
+			playerY = chunk.componentData[position].y[0]
+		}
 		const screen = gameManager.getApp().screen
 
 		const MAX_SPAWN_ATTEMPTS = 10
@@ -203,21 +205,33 @@ export class SpawnDirectorSystem {
 			return
 		}
 
-		// --- Hybrid Pooling: Reuse existing enemies first, then create new ones ---
+		// --- Hybrid Pooling: Gather available enemies and then spawn ---
+		const pooledSpinners = []
+		// Gather all available pooled spinners up to the number we need.
+		for (const chunk of this.pooledSpinnerQuery.iter()) {
+			const healths = chunk.componentData[health]
+			for (let i = 0; i < chunk.size; i++) {
+				if (pooledSpinners.length >= enemiesToSpawn.length) break
+				pooledSpinners.push({
+					entityId: chunk.entities[i],
+					maxHealth: healths.max[i],
+				})
+			}
+			if (pooledSpinners.length >= enemiesToSpawn.length) break
+		}
+
+		let reusedCount = 0
 		for (let i = 0; i < enemiesToSpawn.length; i++) {
 			const enemyInfo = enemiesToSpawn[i]
 			let reused = false
 
-			// Check if we can reuse an enemy from the pool for this specific type.
-			if (enemyInfo.prefabName === 'spinner') {
-				const pooledSpinner = this.pooledSpinnerQuery.getSingleEntity()
-				if (pooledSpinner) {
-					this._reuseEnemy(pooledSpinner, enemyInfo, location, i, separation, phi, currentTick)
-					reused = true
-				}
+			if (enemyInfo.prefabName === 'spinner' && reusedCount < pooledSpinners.length) {
+				const spinnerToReuse = pooledSpinners[reusedCount]
+				this._reuseEnemy(spinnerToReuse.entityId, enemyInfo, location, i, separation, phi, currentTick, spinnerToReuse.maxHealth)
+				reused = true
+				reusedCount++
 			}
 
-			// If no pooled enemy was available, create a new one.
 			if (!reused) {
 				this._createNewEnemy(enemyInfo, location, i, separation, phi, currentTick)
 			}
@@ -242,30 +256,28 @@ export class SpawnDirectorSystem {
 		this.createEntity(enemyInfo.payload)
 	}
 
-	_reuseEnemy(entityId, enemyInfo, location, index, separation, phi, currentTick) {
+	_reuseEnemy(entityId, enemyInfo, location, index, separation, phi, currentTick, maxHealth) {
 		// --- 1. Calculate new position ---
 		const radius = Math.sqrt(index + 0.5) * separation
 		const angle = 2 * Math.PI * index * phi
 		const enemyX = location.x + radius * Math.cos(angle)
 		const enemyY = location.y + radius * Math.sin(angle)
 
-		// --- 2. Prepare command payloads ---
-		this.positionMutators.position.x[0] = enemyX
-		this.positionMutators.position.y[0] = enemyY
+		// --- 2. Use mutators to set the dynamic data for the reused enemy ---
+		this.reuseEnemyMutators.position.x[0] = enemyX
+		this.reuseEnemyMutators.position.y[0] = enemyY
+		this.reuseEnemyMutators.health.current[0] = maxHealth
+		this.reuseEnemyMutators.health.max[0] = maxHealth
+		this.reuseEnemyMutators.threatCost.value[0] = enemyInfo.cost
 
-		// Reset health to max. We assume the prefab's default is the max health.
-		this.healthMutators.health.current[0] = this.healthMutators.health.max[0]
-
-		// Set the threat cost for the reused enemy.
-		this.threatCostMutators.threatCost.value[0] = enemyInfo.cost
-
-		// --- 3. Issue commands to reactivate and reset the entity ---
+		// --- 3. Issue commands to reactivate and reset the entity's state ---
+		// This is a structural change that brings the entity back into the "active" world.
 		this.removeComponent(entityId, isPooled) // Structural change: bring it back to the active world.
-		this.setComponentData(entityId, this.reactivatePayload) // Set lifecycle to ACTIVE.
-		this.setComponentData(entityId, this.positionPayload) // Set new position.
-		this.setComponentData(entityId, this.healthPayload) // Reset health.
-		this.setComponentData(entityId, this.threatCostPayload) // Set the cost.
-		this.setComponentData(entityId, this.resetVelocityPayload) // Reset velocity.
+		// This single command updates all necessary components for the enemy's new life.
+		// It sets lifecycle to ACTIVE, resets velocity and tint to defaults, and applies
+		// the new position, health, and threat cost from the mutators.
+		this.setComponentsData(entityId, this.reuseEnemyPayload)
+
 	}
 
 	/**

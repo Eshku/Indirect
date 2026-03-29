@@ -38,18 +38,16 @@ export class OffscreenCleanupSystem {
 
 		this.playerId = this.playerQuery.getSingleEntity()
 		this.directorId = this.directorQuery.getSingleEntity()
-
-		// Pre-compile payloads for commands.
-		const { payload: dyingPayload } = this.compile(lifecycleState, { flags: LIFECYCLE.DYING })
-		this.dyingPayload = dyingPayload
-
-		const { payload: directorPayload, mutators: directorMutators } = this.compile(spawnDirector)
-		this.directorPayload = directorPayload
-		this.directorMutators = directorMutators
 	}
 
 	update({ currentTick }) {
-		const playerPos = this.getComponent(this.playerId, position)
+		let playerX = 0
+		let playerY = 0
+		for (const chunk of this.playerQuery.iter()) {
+			playerX = chunk.componentData[position].x[0]
+			playerY = chunk.componentData[position].y[0]
+		}
+
 		let totalRefund = 0
 
 		for (const chunk of this.enemyQuery.iter()) {
@@ -60,27 +58,26 @@ export class OffscreenCleanupSystem {
 			for (let i = 0; i < chunk.size; i++) {
 				if ((states.flags[i] & LIFECYCLE.ACTIVE) === 0) continue
 
-				const dx = positions.x[i] - playerPos.x
-				const dy = positions.y[i] - playerPos.y
+				const dx = positions.x[i] - playerX
+				const dy = positions.y[i] - playerY
 				const distSq = dx * dx + dy * dy
 
 				if (distSq > CULLING_DISTANCE_SQ) {
 					totalRefund += costs.value[i]
-					this.setComponentData(chunk.entities[i], this.dyingPayload)
+					// Directly set lifecycleState to DYING and mark dirty for immediate reactivity.
+					// This ensures LifecycleVisualSystem (running in the same frame) sees the change.
+					states.flags[i] = LIFECYCLE.DYING
+					chunk.markEntityDirty(i, lifecycleState, currentTick)
 				}
 			}
 		}
 
 		if (totalRefund > 0) {
-			const director = this.getComponent(this.directorId, spawnDirector)
-
-			// We must provide all fields for the component when setting data.
-			this.directorMutators.spawnDirector.threatBudget[0] = director.threatBudget + totalRefund
-			this.directorMutators.spawnDirector.threatGrowthRate[0] = director.threatGrowthRate
-			this.directorMutators.spawnDirector.maxThreatBudget[0] = director.maxThreatBudget
-			this.directorMutators.spawnDirector.minSpawnBudget[0] = director.minSpawnBudget
-			this.directorMutators.spawnDirector.threatGrowthEscalationRate[0] = director.threatGrowthEscalationRate
-			this.setComponentData(this.directorId, this.directorPayload)
+			// The director is a singleton, so this loop will run once.
+			for (const chunk of this.directorQuery.iter()) {
+				const director = chunk.componentData[spawnDirector]
+				director.threatBudget[0] = director.threatBudget[0] + totalRefund
+			}
 		}
 	}
 }

@@ -157,6 +157,57 @@ export class ChunkView {
 	}
 
 	/**
+	 * Checks if an enableable component is currently enabled for a specific entity in the chunk.
+	 * @param {number} entityIndexInChunk The index of the entity within this chunk.
+	 * @param {number} componentTypeId The type ID of the component to check.
+	 * @returns {boolean} True if the component is enabled, false otherwise.
+	 */
+	isComponentEnabled(entityIndexInChunk, componentTypeId) {
+		if (!this.metadata) return true // No metadata, assume all are enabled.
+
+		const componentMetadata = this.metadata[componentTypeId]
+		const enabledMask = componentMetadata?.enabledMask
+
+		if (!enabledMask) {
+			// If the component is not enableable, it's always considered "enabled".
+			return true
+		}
+
+		const wordIndex = entityIndexInChunk >>> 5 // Math.floor(i / 32)
+		const bitInWord = 1 << (entityIndexInChunk & 31) // 1 << (i % 32)
+
+		return (Atomics.load(enabledMask, wordIndex) & bitInWord) !== 0
+	}
+
+	/**
+	 * Immediately enables an enableable component for a specific entity in the chunk.
+	 * This is a direct, immediate-mode write. For deferred changes, use the command buffer.
+	 * @param {number} entityIndexInChunk The index of the entity within this chunk.
+	 * @param {number} componentTypeId The type ID of the component to modify.
+	 */
+	enableComponent(entityIndexInChunk, componentTypeId) {
+		const enabledMask = this.metadata[componentTypeId].enabledMask
+		const wordIndex = entityIndexInChunk >>> 5
+		const bitMask = 1 << (entityIndexInChunk & 31)
+
+		Atomics.or(enabledMask, wordIndex, bitMask)
+	}
+
+	/**
+	 * Immediately disables an enableable component for a specific entity in the chunk.
+	 * This is a direct, immediate-mode write. For deferred changes, use the command buffer.
+	 * @param {number} entityIndexInChunk The index of the entity within this chunk.
+	 * @param {number} componentTypeId The type ID of the component to modify.
+	 */
+	disableComponent(entityIndexInChunk, componentTypeId) {
+		const enabledMask = this.metadata[componentTypeId].enabledMask
+
+		const wordIndex = entityIndexInChunk >>> 5
+		const bitMask = 1 << (entityIndexInChunk & 31)
+
+		Atomics.and(enabledMask, wordIndex, ~bitMask)
+	}
+	/**
 	 * Scans the dirty bitmask history for a tracked component and populates a scratch buffer
 	 * with the indices of all entities that have changed between the `lastTick` and the
 	 * current frame's tick.
@@ -167,14 +218,7 @@ export class ChunkView {
 	 * @returns {number} The number of changed entities found.
 	 */
 	getChangedIndices(componentTypeId, lastTick, scratchBuffer) {
-		const dirtyMasks = this.metadata?.[componentTypeId]?.dirtyMasks
-
-		if (!dirtyMasks) {
-			// If the component is not tracked, we cannot determine changes.
-			// Returning 0 is the safest behavior, as a reactive system should not
-			// run if its tracked component doesn't support tracking.
-			return 0
-		}
+		const dirtyMasks = this.metadata[componentTypeId].dirtyMasks
 
 		const currentTick = this._lastTick // The Query sets this via _setLastTick
 		const numWords = Math.ceil(this.entityStore.chunkCapacities[this.chunkId] / 32)
@@ -274,11 +318,12 @@ export class ChunkView {
 		const archetypeDirtyTicks = this.entityStore.chunkArchetypeDirtyTicks[this.chunkId]
 		const indexInArchetype = this._componentIndexMap.get(typeId)
 
-		// This check is important. It can be undefined if a system tries to mark a component
+		// It can be undefined if a system tries to mark a component
 		// that isn't actually in the chunk's archetype, which is a developer error.
-		if (indexInArchetype === undefined) {
+		//! handholding no more, errors = good.
+/* 		if (indexInArchetype === undefined) {
 			return
-		}
+		} */
 
 		let oldValue = Atomics.load(archetypeDirtyTicks, indexInArchetype)
 		// This is a standard lock-free pattern to "set if greater".
