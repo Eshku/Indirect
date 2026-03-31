@@ -7,7 +7,7 @@ const { entityStore } = await import('@managers/EntityManager/EntityManager.js')
 
 // Use an existing enableable component and a new tag for this test.
 // NOTE: You will need to define `bitmaskTestTag: {}` in a component schema file.
-const { enableableTestComponent, bitmaskTestTag } = ecs.getTypeIDs()
+const { enableableTestComponent, bitmaskTestTag } = ecs.getComponentIDs()
 
 /**
  * A system dedicated to testing the low-level bitmask operations for

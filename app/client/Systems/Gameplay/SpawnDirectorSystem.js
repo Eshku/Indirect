@@ -1,21 +1,20 @@
 const { engine } = await import(`@client/Engine.js`)
-const { ecs, entityManager, gameManager, physicsManager } = engine.getManagers()
+const { ecs, entityManager, gameManager, physicsManager, prefabManager } = engine.getManagers()
 
 const {
 	spawnDirector,
 	playerTag,
 	position,
+	prefab,
 	isPooled,
 	lifecycleState,
 	health,
 	velocity,
-	spinnerTag, // Assuming a specific tag for each enemy type we want to pool
 	threatCost,
 	tint,
 	hitFlash,
-} = ecs.getTypeIDs()
+} = ecs.getComponentIDs()
 
-const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
@@ -44,11 +43,6 @@ export class SpawnDirectorSystem {
 			with: [playerTag, position],
 		})
 
-		// A query to find pooled 'spinner' enemies that can be reused.
-		this.pooledSpinnerQuery = this.getQuery({
-			with: [spinnerTag, isPooled, health],
-		})
-
 		this.playerId = this.playerQuery.getSingleEntity()
 
 		if (!this.playerId) {
@@ -59,16 +53,28 @@ export class SpawnDirectorSystem {
 		// to ensure it exists on the first frame.
 		// --- Define and pre-compile all spawnable enemies ---
 		this.spawnableEnemies = [
-			{ prefabName: 'spinner', cost: 5, weight: 10 },
-			// { prefabName: 'splody', cost: 15, weight: 2 }, //! not yet implemented
+			{ prefabName: 'spinningDrone', cost: 5, weight: 10 },
+			{ prefabName: 'explosiveDrone', cost: 15, weight: 2 },
 		]
 
-		// Pre-compile payloads for all spawnable enemies for efficient spawning.
+		// --- Generic Pooling Setup ---
+		// A single query to find all pooled entities that have a prefab ID.
+		this.pooledEnemyQuery = this.getQuery({
+			with: [isPooled, prefab, health],
+		})
+
+		// Pre-compile payloads and cache prefab IDs for all spawnable enemies.
 		for (const enemy of this.spawnableEnemies) {
 			try {
 				const { payload, mutators } = this.compile(enemy.prefabName)
 				enemy.payload = payload
 				enemy.mutators = mutators
+
+				// Get the numeric prefab ID from the manager. This is the "fast path" for systems.
+				enemy.prefabId = prefabManager.getPrefabId(enemy.prefabName)
+				if (enemy.prefabId === undefined) {
+					throw new Error(`Could not find prefab ID for "${enemy.prefabName}". Is it in the manifest and preloaded?`)
+				}
 			} catch (e) {
 				console.error(`DirectorSystem: Failed to compile prefab "${enemy.prefabName}". It will not be spawned.`, e)
 			}
@@ -82,7 +88,7 @@ export class SpawnDirectorSystem {
 			lifecycleState: { flags: LIFECYCLE.ACTIVE },
 			velocity: { x: 0, y: 0 },
 			tint: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
-			hitFlash: { duration: 0.0 },
+			hitFlash: { timer: 0.0 },
 			// These components have dynamic data that will be set by mutators.
 			position: {},
 			health: {},
@@ -103,6 +109,9 @@ export class SpawnDirectorSystem {
 			chunkIds: new Uint16Array(MAX_SPAWN_QUERY_RESULTS),
 			entityIndices: new Uint16Array(MAX_SPAWN_QUERY_RESULTS),
 		}
+
+		// A reusable map to avoid allocations in the spawn loop.
+		this.availablePooledEnemies = new Map()
 	}
 
 	update({ deltaTime, currentTick }) {
@@ -205,31 +214,44 @@ export class SpawnDirectorSystem {
 			return
 		}
 
-		// --- Hybrid Pooling: Gather available enemies and then spawn ---
-		const pooledSpinners = []
-		// Gather all available pooled spinners up to the number we need.
-		for (const chunk of this.pooledSpinnerQuery.iter()) {
+		// --- Generic Pooling: Gather all available enemies by prefabId in a single pass ---
+		this.availablePooledEnemies.clear()
+
+		for (const chunk of this.pooledEnemyQuery.iter()) {
+			const prefabs = chunk.componentData[prefab]
+
 			const healths = chunk.componentData[health]
 			for (let i = 0; i < chunk.size; i++) {
-				if (pooledSpinners.length >= enemiesToSpawn.length) break
-				pooledSpinners.push({
-					entityId: chunk.entities[i],
-					maxHealth: healths.max[i],
+				const prefabId = prefabs.id[i]
+				if (!this.availablePooledEnemies.has(prefabId)) {
+					this.availablePooledEnemies.set(prefabId, [])
+				}
+				this.availablePooledEnemies.get(prefabId).push({
+						entityId: chunk.entities[i],
+						maxHealth: healths.max[i],
 				})
 			}
-			if (pooledSpinners.length >= enemiesToSpawn.length) break
 		}
 
-		let reusedCount = 0
 		for (let i = 0; i < enemiesToSpawn.length; i++) {
 			const enemyInfo = enemiesToSpawn[i]
 			let reused = false
 
-			if (enemyInfo.prefabName === 'spinner' && reusedCount < pooledSpinners.length) {
-				const spinnerToReuse = pooledSpinners[reusedCount]
-				this._reuseEnemy(spinnerToReuse.entityId, enemyInfo, location, i, separation, phi, currentTick, spinnerToReuse.maxHealth)
+			// Look up available entities using the numeric prefabId, not the string name.
+			const pooledForType = this.availablePooledEnemies.get(enemyInfo.prefabId)
+			if (pooledForType && pooledForType.length > 0) {
+				const enemyToReuse = pooledForType.pop() // Take one from the pool
+				this._reuseEnemy(
+					enemyToReuse.entityId,
+					enemyInfo,
+					location,
+					i,
+					separation,
+					phi,
+					currentTick,
+					enemyToReuse.maxHealth,
+				)
 				reused = true
-				reusedCount++
 			}
 
 			if (!reused) {
@@ -277,7 +299,6 @@ export class SpawnDirectorSystem {
 		// It sets lifecycle to ACTIVE, resets velocity and tint to defaults, and applies
 		// the new position, health, and threat cost from the mutators.
 		this.setComponentsData(entityId, this.reuseEnemyPayload)
-
 	}
 
 	/**

@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { health, lifecycleState, playerTag } = ecs.getTypeIDs()
+const { health, lifecycleState, playerTag } = ecs.getComponentIDs()
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 const { DamageSystem } = ecs.getSystemIDs()

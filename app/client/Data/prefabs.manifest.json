@@ -5,9 +5,14 @@
 	"spawnDirector": {
 		"path": "client/Data/Prefabs/Directors/SpawnDirector.json"
 	},
-	"spinner": {
-		"path": "client/Data/Prefabs/Enemies/spinner.json"
+	"spinningDrone": {
+		"path": "client/Data/Prefabs/Enemies/spinningDrone.json"
 	},
+	
+	"explosiveDrone": {
+		"path": "client/Data/Prefabs/Enemies/explosiveDrone.json"
+	},
+
 	"item_base": {
 		"path": "client/Data/Prefabs/Items/Item.json"
 	},

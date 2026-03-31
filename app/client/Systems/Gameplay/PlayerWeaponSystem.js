@@ -18,7 +18,7 @@ const {
 	range,
 	damage,
 	hitHistory,
-} = ecs.getTypeIDs()
+} = ecs.getComponentIDs()
 
 /**
  * Handles the player's firing action.

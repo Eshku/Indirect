@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { playerProjectile, velocity, range, distanceTraveled, lifecycleState, isPooled } = ecs.getTypeIDs()
+const { playerProjectile, velocity, range, distanceTraveled, lifecycleState, isPooled } = ecs.getComponentIDs()
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 

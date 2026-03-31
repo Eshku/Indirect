@@ -1,8 +1,5 @@
 import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
 
-const ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES = 4096 // 4KB page for component IDs
-const ARCHETYPE_STORE_PAGE_SIZE_IN_U16 = ARCHETYPE_STORE_PAGE_SIZE_IN_BYTES / Uint16Array.BYTES_PER_ELEMENT
-
 /**
  * A lightweight, reusable "flyweight" accessor for a chunk's data.
  * This is the JavaScript equivalent of Unity's `ArchetypeChunk` object,
@@ -46,49 +43,10 @@ export class ChunkView {
 		this.componentData = this.entityStore.chunkComponentData[chunkId]
 		this.metadata = this.entityStore.chunkMetadata[chunkId]
 		this.entities = this.componentData.entities
-		this._buildComponentIndexMap()
-	}
-
-	/**
-	 * Builds a cache mapping component type IDs to their 0-based index within the archetype's component list.
-	 * This is a small, one-time cost per chunk iteration that makes subsequent lookups O(1).
-	 * @private
-	 */
-	_buildComponentIndexMap() {
-		this._componentIndexMap.clear()
-		const componentIdArray = this._getComponentTypeIDsForArchetype(this.archetypeId)
-		// returns an empty array if the archetype is not found
-		for (let i = 0; i < componentIdArray.length; i++) {
-			this._componentIndexMap.set(componentIdArray[i], i)
-		}
-	}
-
-	/**
-	 * Worker-side implementation to read component IDs from the paged buffer.
-	 * This is a copy of the logic in EntityManager.
-	 * @param {number} archetypeId
-	 * @returns {Uint16Array}
-	 * @private
-	 */
-	_getComponentTypeIDsForArchetype(archetypeId) {
-		const count = this.entityStore.archetypeComponentCounts[archetypeId]
-		if (count === undefined || count === 0) return new Uint16Array(0)
-
-		const result = new Uint16Array(count)
-		const globalStartIndex = this.entityStore.archetypeComponentListStartIndices[archetypeId]
-
-		let written = 0
-		while (written < count) {
-			const globalReadIndex = globalStartIndex + written
-			const pageIndex = Math.floor(globalReadIndex / ARCHETYPE_STORE_PAGE_SIZE_IN_U16)
-			const indexInPage = globalReadIndex % ARCHETYPE_STORE_PAGE_SIZE_IN_U16
-			const page = this.entityStore.packedComponentIdPages[pageIndex]
-			const toRead = Math.min(count - written, ARCHETYPE_STORE_PAGE_SIZE_IN_U16 - indexInPage)
-
-			result.set(page.subarray(indexInPage, indexInPage + toRead), written)
-			written += toRead
-		}
-		return result
+		// Directly reference the pre-computed map from the entityStore.
+		// This eliminates re-creating the map on every setChunk.
+		this._componentIndexMap = this.entityStore.archetypeComponentIndexMaps[this.archetypeId]
+		// If the archetype is empty or not yet registered, this map might be undefined or empty.
 	}
 
 	_setLastTick(tick) {
@@ -163,15 +121,9 @@ export class ChunkView {
 	 * @returns {boolean} True if the component is enabled, false otherwise.
 	 */
 	isComponentEnabled(entityIndexInChunk, componentTypeId) {
-		if (!this.metadata) return true // No metadata, assume all are enabled.
-
+		//errors are good and intentional for non-enableable components.
 		const componentMetadata = this.metadata[componentTypeId]
 		const enabledMask = componentMetadata?.enabledMask
-
-		if (!enabledMask) {
-			// If the component is not enableable, it's always considered "enabled".
-			return true
-		}
 
 		const wordIndex = entityIndexInChunk >>> 5 // Math.floor(i / 32)
 		const bitInWord = 1 << (entityIndexInChunk & 31) // 1 << (i % 32)
@@ -318,12 +270,8 @@ export class ChunkView {
 		const archetypeDirtyTicks = this.entityStore.chunkArchetypeDirtyTicks[this.chunkId]
 		const indexInArchetype = this._componentIndexMap.get(typeId)
 
-		// It can be undefined if a system tries to mark a component
-		// that isn't actually in the chunk's archetype, which is a developer error.
-		//! handholding no more, errors = good.
-/* 		if (indexInArchetype === undefined) {
-			return
-		} */
+		// If indexInArchetype is undefined, it means the component is not part of this chunk's archetype.
+		if (indexInArchetype === undefined) return
 
 		let oldValue = Atomics.load(archetypeDirtyTicks, indexInArchetype)
 		// This is a standard lock-free pattern to "set if greater".

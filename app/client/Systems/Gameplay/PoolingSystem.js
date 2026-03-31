@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { lifecycleState, isPooled, tint, hitFlash, playerProjectile } = ecs.getTypeIDs()
+const { lifecycleState, isPooled, tint, hitFlash, playerProjectile } = ecs.getComponentIDs()
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 
@@ -21,7 +21,7 @@ export class PoolingSystem {
 	}
 
 	init() {
-		// Query for dying entities that have hitFlash (e.g., enemies).
+		// Query for dying entities that have hitFlash (e.g., enemies, player).
 		this.dyingWithHitFlashQuery = this.getQuery({
 			with: [lifecycleState, tint, hitFlash], // Ensure hitFlash exists
 			modified: [lifecycleState],
@@ -38,8 +38,8 @@ export class PoolingSystem {
 		this.addIsPooledPayload = this.compile(isPooled, {}).payload
 		this.pooledStatePayload = this.compile(lifecycleState, { flags: LIFECYCLE.POOLED }).payload
 
-		// Payload for resetting entities WITH hitFlash.
-		this.resetWithHitFlashPayload = this.compile({ tint: { r: 1.0, g: 1.0, b: 1.0 }, hitFlash: { duration: 0.0 } }).payload
+		// Payload for resetting entities WITH hitFlash. We only need to reset the tint.
+		this.resetWithHitFlashPayload = this.compile({ tint: { r: 1.0, g: 1.0, b: 1.0 } }).payload
 
 		// Payload for resetting entities WITHOUT hitFlash.
 		this.resetWithoutHitFlashPayload = this.compile({ tint: { r: 1.0, g: 1.0, b: 1.0 } }).payload
@@ -48,14 +48,14 @@ export class PoolingSystem {
 	}
 
 	update({ currentTick, lastTick }) {
-		// Process entities that have hitFlash (enemies)
+		// Process entities that have hitFlash (enemies, player)
 		for (const chunk of this.dyingWithHitFlashQuery.iter()) {
-			this._processDyingChunk(chunk, lastTick, true)
+			this._processDyingChunk(chunk, lastTick, true /* hasHitFlash */)
 		}
 
 		// Process entities that do NOT have hitFlash (projectiles)
 		for (const chunk of this.dyingWithoutHitFlashQuery.iter()) {
-			this._processDyingChunk(chunk, lastTick, false)
+			this._processDyingChunk(chunk, lastTick, false /* hasHitFlash */)
 		}
 	}
 
@@ -75,7 +75,7 @@ export class PoolingSystem {
 				// Specific commands based on whether it has hitFlash
 				if (hasHitFlash) {
 					this.setComponentsData(entityId, this.resetWithHitFlashPayload)
-					this.disableComponent(entityId, hitFlash) 
+					this.disableComponent(entityId, hitFlash)
 				} else {
 					this.setComponentsData(entityId, this.resetWithoutHitFlashPayload)
 				}

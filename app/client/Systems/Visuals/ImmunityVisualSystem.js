@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, assetManager } = engine.getManagers()
 
-const { invulnerability, tint, playerTag, position, shieldTag } = ecs.getTypeIDs()
+const { immunity, tint, playerTag, position, shieldTag } = ecs.getComponentIDs()
 const { SyncTransforms, SpriteFactorySystem, RenderLayerSystem } = ecs.getSystemIDs()
 
 /**
@@ -14,15 +14,13 @@ const { SyncTransforms, SpriteFactorySystem, RenderLayerSystem } = ecs.getSystem
  * The long-term solution for positioning is a proper entity hierarchy system
  * (see Hierarchies.md), but this approach is a clean, data-driven intermediate.
  */
-export class ShieldVisualSystem {
+export class ImmunityVisualSystem {
 	static runsBefore = [SyncTransforms]
 	static runsAfter = [SpriteFactorySystem, RenderLayerSystem]
 
 	static dependencies = {
-		// This system must run after the sprite is created, but before transforms and tints are synced to the renderer.
 		update: {
-			reads: [playerTag, invulnerability, position],
-			// It writes to the shield's tint and position.
+			reads: [playerTag, immunity, position],
 			writes: [tint, position],
 		},
 	}
@@ -30,7 +28,7 @@ export class ShieldVisualSystem {
 	init() {
 		// Query for the player to read their position and invulnerability state.
 		this.playerQuery = this.getQuery({
-			with: [playerTag, invulnerability, position],
+			with: [playerTag, immunity, position],
 		})
 
 		// Query for the shield entity to write to its position and tint.
@@ -49,30 +47,28 @@ export class ShieldVisualSystem {
 		const playerChunk = this.playerQuery.getSingleChunk()
 		const shieldChunk = this.shieldQuery.getSingleChunk()
 
-		const isInvulnerable = playerChunk.isComponentEnabled(0, invulnerability)
+		const isImmune = playerChunk.isComponentEnabled(0, immunity)
 
-		if (isInvulnerable) {
-			const invulns = playerChunk.componentData[invulnerability]
+		if (isImmune) {
+			const immunities = playerChunk.componentData[immunity]
 			const playerPositions = playerChunk.componentData[position]
 			const shieldPositions = shieldChunk.componentData[position]
 			const shieldTints = shieldChunk.componentData[tint]
 
-			// Sync shield position with player position.
+			// Sync shield position with player position for visual effect.
 			// This is a data-driven approach. SyncTransforms will handle the visual update.
 			shieldPositions.x[0] = playerPositions.x[0]
 			shieldPositions.y[0] = playerPositions.y[0]
 
-			// Calculate alpha based on remaining invulnerability duration.
-			const remaining = invulns.duration[0]
-			const maxDuration = invulns.maxDuration[0]
-			shieldTints.a[0] = remaining / maxDuration
+			// Calculate alpha based on remaining immunity duration.
+			const progress = immunities.timer[0] / immunities.duration[0]
+			shieldTints.a[0] = progress
 			shieldChunk.markEntityDirty(0, tint, currentTick)
 
 			this.isShieldVisible = true
 		} else if (this.isShieldVisible) {
-			// Invulnerability just ended. Set alpha to 0 to hide the shield.
-			const shieldTints = shieldChunk.componentData[tint]
-			shieldTints.a[0] = 0.0
+			// Invulnerability just ended.
+			shieldChunk.componentData[tint].a[0] = 0.0
 			shieldChunk.markEntityDirty(0, tint, currentTick)
 			this.isShieldVisible = false
 		}

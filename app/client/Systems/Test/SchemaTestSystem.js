@@ -9,7 +9,7 @@ const { ChunkView } = await import('@managers/QueryManager/ChunkView.js')
 import { DIRTY_HISTORY_LENGTH } from '@managers/ComponentManager/ComponentSchema.js'
 const { entityStore } = await import('@managers/EntityManager/EntityManager.js')
 
-const { enableableTestComponent, trackedTestComponent } = ecs.getTypeIDs()
+const { enableableTestComponent, trackedTestComponent } = ecs.getComponentIDs()
 
 /**
  * A system dedicated to testing the functionality of the SchemaParser and data layer.
@@ -32,7 +32,7 @@ export class SchemaTestSystem {
 			componentRef: true,
 			rpn: true,
 			enableable: true,
-			tracked: true,
+			isTrackable: true,
 		}
 	}
 

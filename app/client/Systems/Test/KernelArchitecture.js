@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { position, velocity } = ecs.getTypeIDs()
+const { position, velocity } = ecs.getComponentIDs()
 // Use camelCase for all ID lookups for consistency.
 // Kernels are functions, so we use camelCase. Let's get all the ones we need.
 const { testKernel, loggingKernel } = ecs.getKernelIDs()

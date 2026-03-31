@@ -2,7 +2,7 @@ const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 const { contextTest } = ecs.getKernelIDs()
 
-const { contextTestTag } = ecs.getTypeIDs()
+const { contextTestTag } = ecs.getComponentIDs()
 
 // --- Define shared resources in the module scope ---
 const sharedState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))

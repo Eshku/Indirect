@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, layerManager, gameManager } = engine.getManagers()
 
-const { playerTag, position } = ecs.getTypeIDs()
+const { playerTag, position } = ecs.getComponentIDs()
 const { SyncTransforms } = ecs.getSystemIDs()
 
 //! Going to need culling.

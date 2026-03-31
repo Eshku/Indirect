@@ -2,7 +2,7 @@
  * A component representing an entity's scale.
  */
 export const scale = {
-	tracked: true,
+	isTrackable: true,
 	/**
 	 * The scale factor on the x-axis.
 	 */

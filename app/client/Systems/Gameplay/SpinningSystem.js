@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { rotation, spinning, isPooled } = ecs.getTypeIDs()
+const { rotation, spinning, isPooled } = ecs.getComponentIDs()
 const { SyncTransforms } = ecs.getSystemIDs()
 
 /**

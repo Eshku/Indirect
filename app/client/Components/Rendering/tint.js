@@ -16,5 +16,5 @@ export const tint = {
 		default: 1.0,
 	},
 
-	tracked: true,
+	isTrackable: true,
 }

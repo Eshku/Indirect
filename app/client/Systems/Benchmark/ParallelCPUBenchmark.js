@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { position, velocity, parallelCpuTag } = ecs.getTypeIDs()
+const { position, velocity, parallelCpuTag } = ecs.getComponentIDs()
 const { parallelCpu } = ecs.getKernelIDs()
 /**
  * A purely CPU-bound parallel benchmark.

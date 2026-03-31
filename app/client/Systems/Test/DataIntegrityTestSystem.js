@@ -1,6 +1,6 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
-const { churnTag, churnData, verification, position, velocity, rotation, componentA, componentB } = ecs.getTypeIDs()
+const { churnTag, churnData, verification, position, velocity, rotation, componentA, componentB } = ecs.getComponentIDs()
 const { dataIntegrity } = ecs.getKernelIDs()
 /**
  * A critical data integrity test system designed to detect stale data and memory corruption

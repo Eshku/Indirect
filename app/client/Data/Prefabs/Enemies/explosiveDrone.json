@@ -1,19 +1,18 @@
 {
 	"components": {
-		"health": { "current": 10, "max": 10 },
+		"health": { "current": 25, "max": 25 },
+		"speed": 25,
 		"damage": { "value": 10 },
 		"position": { "x": 150, "y": 150 },
-		"rotation": { "angle": 0 },
-		"scale": { "x": 1, "y": 1 },
-		"velocity": { "x": 0, "y": 0 },
-		"speed": { "value": 150 },
+		"rotation": {},
+		"scale": {},
+		"velocity": {},
 		"movementIntent": {},
-		"spinning": { "rate": 8 },
-		"spriteDescriptor": { "assetName": "spinner" },
+		"spriteDescriptor": { "assetName": "explosiveDrone" },
 		"layer": { "name": "enemies" },
 		"viewable": {},
 		"hitFlash": {},
-		"tint": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0 },
+		"tint": {},
 		"orientedBoxCollider": { "width": 32, "height": 32 },
 		"collisionLayer": { "group": 2 },
 		"aabb": {},
@@ -22,7 +21,7 @@
 		"lifecycleState": {},
 		"threatCost": {},
 		"enemyTag": {},
-		"spinnerTag": {},
+
 		"aiParameters": { "orbitBias": 0.8, "orbitAngleSpread": 0.5, "orbitWobbleFrequency": 2.0 }
 	}
 }

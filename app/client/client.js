@@ -4,8 +4,6 @@ const { engine } = await import('@client/Engine.js')
 
 await engine.init()
 
-
-
 const { h32, h32ToString, h32Raw, create32, h64, h64ToString, h64Raw, create64 } = await xxhash() //xxhash-wasm
 
 const { gameManager, assetManager, layerManager, uiManager, inputManager, ecs } = engine.getManagers()
@@ -62,7 +60,15 @@ async function loadAtlas(atlasName) {
 const preload = async () => {
 	await loadAtlas('atlas')
 
-	await ecs.prefabManager.preload(['player', 'spinner', 'cursor', 'slashingArc', 'spawnDirector', 'shield'])
+	await ecs.prefabManager.preload([
+		'player',
+		'spinningDrone',
+		'explosiveDrone',
+		'cursor',
+		'slashingArc',
+		'spawnDirector',
+		'shield',
+	])
 }
 
 const setupEntities = async () => {
@@ -72,7 +78,8 @@ const setupEntities = async () => {
 
 	ecs.instantiate('shield')
 
-	ecs.instantiate('spinner')
+	//ecs.instantiate('spinningDrone') // created automatically
+	//ecs.instantiate('explosiveDrone') // created automatically
 
 	ecs.instantiate('spawnDirector')
 }

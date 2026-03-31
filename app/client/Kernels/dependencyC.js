@@ -7,7 +7,7 @@
 export function dependencyC(payload, systemContext, kernelContext) {
 	const { velocity } = systemContext
 
-	const chunk = parallel.getChunkView(payload)
+	const chunk = kernel.getChunkView(payload)
 	const velocities = chunk.componentData[velocity]
 	const value = velocities.x[0]
 

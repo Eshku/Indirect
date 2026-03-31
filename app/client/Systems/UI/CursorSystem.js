@@ -15,7 +15,7 @@ const CURSOR_VISUALS = {
  * - It runs in the main update loop to update the cursor entity's world position.
  */
 
-const { position, cursorTag, playerTag } = ecs.getTypeIDs()
+const { position, cursorTag, playerTag } = ecs.getComponentIDs()
 
 export class CursorSystem {
 	/**

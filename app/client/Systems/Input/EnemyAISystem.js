@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { playerTag, enemyTag, position, movementIntent, isPooled, aiParameters } = ecs.getTypeIDs()
+const { playerTag, enemyTag, position, movementIntent, isPooled, aiParameters } = ecs.getComponentIDs()
 
 /**
  * An AI system that makes enemies swarm and spiral towards the player using an "Orbiting Bias" method.

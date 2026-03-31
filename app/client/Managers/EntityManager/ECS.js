@@ -254,7 +254,7 @@ export class ECS {
 	/**
 	 * Retrieves an object mapping all registered component names to their numeric type IDs.
 	 */
-	getTypeIDs() {
+	getComponentIDs() {
 		return this.componentManager.getTypeIDs()
 	}
 

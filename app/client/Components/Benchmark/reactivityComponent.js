@@ -2,7 +2,7 @@
  * A component with a value that we can change to trigger reactivity.
  */
 export const reactivityComponent = {
-	tracked: true,
+	isTrackable: true,
 	/**
 	 * The value to change for reactivity tests.
 	 */

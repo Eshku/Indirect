@@ -9,7 +9,7 @@
 export function dataIntegrity(payload, systemContext, kernelContext) {
 	const { churnData, verification } = systemContext
 
-	const chunk = parallel.getChunkView(payload)
+	const chunk = kernel.getChunkView(payload)
 	const entities = chunk.entities
 	const churnDataArr = chunk.componentData[churnData]
 	const verifications = chunk.componentData[verification]

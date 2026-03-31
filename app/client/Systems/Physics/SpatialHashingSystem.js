@@ -5,7 +5,7 @@ const { ecs, physicsManager, queryManager } = engine.getManagers()
 const { SpatialHashGrid, SPATIAL_GRID_CONFIG } = await import(`@core/DataStructures/SpatialHashGrid.js`)
 
 const { aabb, isPooled, position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer } =
-	ecs.getTypeIDs()
+	ecs.getComponentIDs()
 
 /**
  * Manages the spatial hash grid on the main thread.
@@ -38,7 +38,7 @@ export class SpatialHashingSystem {
 			collisionLayer,
 			aabb,
 			isPooled,
-		} = ecs.getTypeIDs()
+		} = ecs.getComponentIDs()
 
 		this.playerQuery = queryManager.getQuery({
 			with: [playerTag, position],

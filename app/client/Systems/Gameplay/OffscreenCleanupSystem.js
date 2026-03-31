@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { enemyTag, playerTag, position, isPooled, lifecycleState, threatCost, spawnDirector } = ecs.getTypeIDs()
+const { enemyTag, playerTag, position, isPooled, lifecycleState, threatCost, spawnDirector } = ecs.getComponentIDs()
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 

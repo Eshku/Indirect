@@ -18,7 +18,7 @@ const {
 	enableableTestComponent,
 	trackedTestComponent,
 	damageCollisionBuffer
-} = ecs.getTypeIDs()
+} = ecs.getComponentIDs()
 
 /**
  * A system dedicated to testing the functionality of the low-level CommandBuffer.

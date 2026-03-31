@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, assetManager } = engine.getManagers()
 
-const { viewable, position, rotation, scale, tint, isPooled } = ecs.getTypeIDs()
+const { viewable, position, rotation, scale, tint, isPooled } = ecs.getComponentIDs()
 const { SpriteFactorySystem, RenderLayerSystem } = ecs.getSystemIDs()
 
 /**

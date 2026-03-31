@@ -6,7 +6,7 @@ const { entityManager, systemManager } = ecs
 const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`);
 
 // Get component type IDs. ComponentA and ComponentB are from other test files but are fine to use.
-const { queryTestTag, queryTestToggle, componentA, componentB } = ecs.getTypeIDs();
+const { queryTestTag, queryTestToggle, componentA, componentB } = ecs.getComponentIDs();
 
 /**
  * A system dedicated to testing the core functionality and reactivity of the Query system.

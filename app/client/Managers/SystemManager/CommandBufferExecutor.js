@@ -867,7 +867,7 @@ export class CommandBufferExecutor {
 	_executeMarkDirtyBatches(markDirtyMap) {
 		for (const [componentTypeID, marks] of markDirtyMap.entries()) {
 			const info = Schema.componentInfo[componentTypeID]
-			if (!info || !info.isTracked) {
+			if (!info || !info.isTrackable) {
 				console.warn(
 					`[CommandBufferExecutor] Attempted to mark dirty for non-tracked component ID ${componentTypeID}.`,
 				)

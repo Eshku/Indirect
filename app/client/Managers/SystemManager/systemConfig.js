@@ -57,6 +57,11 @@ export const systemSchedule = {
 
 	// Runs on a fixed timestep for deterministic gameplay logic and physics.
 	Logic: [
+		// This system ticks down the timer on active hit flash effects.
+		// It's separate from the visual system for clarity.
+		{ name: 'HitFlashTimerSystem', frequency: 'logic' },
+		// Ticks down the timer for active immunity effects.
+		{ name: 'ImmunityTimerSystem', frequency: 'logic' },
 		{ name: 'CooldownSystem', frequency: 'logic' },
 
 		{ name: 'EnemyAISystem', frequency: 'logic' },
@@ -69,14 +74,11 @@ export const systemSchedule = {
 
 		{ name: 'SpatialHashingSystem', frequency: 'logic' },
 
-		
 		{ name: 'CollisionDetectionSystem', frequency: 'logic' },
-		
+
 		{ name: `ApplyVelocity`, frequency: `logic` },
 
 		{ name: 'DamageSystem', frequency: 'logic' },
-
-		{ name: 'InvulnerabilitySystem', frequency: 'logic' },
 
 		{ name: 'HealthSystem', frequency: 'logic' },
 
@@ -98,10 +100,10 @@ export const systemSchedule = {
 
 		// This system hides/shows sprites based on their lifecycle state (active, dying, pooled).
 		{ name: 'HitFlashSystem', frequency: 'visuals' },
-		
+
 		{ name: 'LifecycleVisualSystem', frequency: 'visuals' },
 
-		{ name: 'ShieldVisualSystem', frequency: 'visuals' },
+		{ name: 'ImmunityVisualSystem', frequency: 'visuals' },
 
 		{ name: 'SyncTransforms', frequency: 'visuals' },
 
@@ -128,6 +130,7 @@ export const systemSchedule = {
 	],
 
 	Test: [
+		{ name: 'QueryApiTestSystem', frequency: 'logic' },
 		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */

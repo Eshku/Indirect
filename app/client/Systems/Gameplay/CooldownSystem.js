@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { weaponCooldown } = ecs.getTypeIDs()
+const { weaponCooldown } = ecs.getComponentIDs()
 
 /**
  * A generic system that decrements all cooldown timers.

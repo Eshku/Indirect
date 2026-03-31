@@ -43,7 +43,7 @@ module.exports = {
 	 * If false, they will trigger a soft reload (full page refresh).
 	 */
 
-	hmrEnabledForSystems: false, //! disabled as not ready for parallel systems.
+	hmrEnabledForSystems: false, //! disabled as not ready for parallel systems and archetechture still wobbly.
 	// Paths that trigger a full application restart.
 	// Watched by the external `dev-launcher.js`.
 	mainProcessPaths: [

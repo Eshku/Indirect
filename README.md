@@ -14,7 +14,6 @@ Experimental, constantly changing. Expect breaking changes and bugs.
 
 ## Potential future improvements:
 
-- Relational Queries
 - Thread safe everything that could \ should be thread safe.
 - Dynamic \ packed arrays.
 - Priority Queue
@@ -188,7 +187,7 @@ const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
 // Get numeric IDs for components and kernels at initialization.
-const { position, velocity } = ecs.getTypeIDs()
+const { position, velocity } = ecs.getComponentIDs()
 const { applyGravityAndMove } = ecs.getKernelIDs()
 
 export class PhysicsSystem {
@@ -256,7 +255,7 @@ _Note: The immediate-mode API is subject to change as thread-safe and console-sp
 
 ```javascript
 // Get a map of all component names to their numeric Type IDs.
-const { position, velocity } = ecs.getTypeIDs()
+const { position, velocity } = ecs.getComponentIDs()
 
 // Get a map of kernel function names to their numeric IDs.
 const { applyGravityAndMove } = ecs.getKernelIDs()

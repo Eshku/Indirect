@@ -41,6 +41,11 @@ const INITIAL_ENTITY_CAPACITY = 8192 // Initial capacity for entity-indexed arra
 
 const TARGET_CHUNK_SIZE_BYTES = 16384 // 16KB
 
+// theoretical maximum number of entities a chunk can hold.
+// This is derived from the target chunk size (16KB) and the smallest possible entity size
+// (an entity with no components, which is just its 8-byte ID): 16384 / 8 = 2048.
+export const MAX_CHUNK_CAPACITY = 2048
+
 const CACHE_LINE_SIZE = 64 // Common CPU cache line size in bytes
 const CACHE_LINE_SIZE_IN_U32 = CACHE_LINE_SIZE / Uint32Array.BYTES_PER_ELEMENT
 
@@ -869,7 +874,7 @@ export class EntityManager {
 		if (shouldMarkDirty) {
 			this._updateDirtyStateForComponent(chunkId, typeID, currentTick)
 			const info = Schema.componentInfo[typeID]
-			if (info.isTracked) {
+			if (info.isTrackable) {
 				for (const destIndex of destIndices) {
 					this._markNarrowPhaseDirty(chunkId, destIndex, typeID, currentTick)
 				}
@@ -901,7 +906,6 @@ export class EntityManager {
 			if (addedMasksRing) {
 				for (let i = 0; i < MASK_PARTS; i++) {
 					const slot = tickSlot * MASK_PARTS + i
-					if (addedMask[i] > 0n) Atomics.or(addedMasksRing, slot, addedMask[i])
 					if (addedMask[i] > 0n) Atomics.or(addedMasksRing, slot, addedMask[i])
 				}
 			}
@@ -1393,7 +1397,7 @@ export class EntityManager {
 		const physicsBufferId = this.componentManager.getTypeIDs().physicsCollisionBuffer
 		const hasExpectedTrackedComponent =
 			newComponentIds.includes(damageBufferId) || newComponentIds.includes(physicsBufferId)
-
+		// The debug assertion below checks for `isTrackable` components.
 		if (
 			hasExpectedTrackedComponent &&
 			(!entityStore.chunkMetadata[chunkId] ||
@@ -1536,7 +1540,7 @@ export class EntityManager {
 				metadata[typeID].enabledMask = mask
 			}
 
-			if (info.isTracked) {
+			if (info.isTrackable) {
 				const wordsPerFrame = Math.ceil(capacity / 32)
 				const totalWords = wordsPerFrame * Schema.DIRTY_HISTORY_LENGTH
 				const buffer = new SharedArrayBuffer(totalWords * 4)
@@ -1549,7 +1553,7 @@ export class EntityManager {
 
 	_markNarrowPhaseDirty(chunkId, indexInChunk, typeId, tick) {
 		const info = Schema.componentInfo[typeId]
-		if (!info?.isTracked) return
+		if (!info?.isTrackable) return
 
 		const componentMetadata = entityStore.chunkMetadata[chunkId]?.[typeId]
 		const dirtyMasks = componentMetadata?.dirtyMasks
@@ -1567,7 +1571,7 @@ export class EntityManager {
 
 	_markNarrowPhaseDirtyForBatch(chunkId, startIndex, count, typeId, tick) {
 		const info = Schema.componentInfo[typeId]
-		if (!info?.isTracked) return
+		if (!info?.isTrackable) return
 
 		const componentMetadata = entityStore.chunkMetadata[chunkId]?.[typeId]
 		const dirtyMasks = componentMetadata?.dirtyMasks
@@ -1613,6 +1617,24 @@ export class EntityManager {
 		}
 	}
 
+	/**
+	 * The public, immediate-mode API to mark a component within a chunk as dirty.
+	 * This updates the chunk's "high-water mark" for the component, which allows
+	 * reactive queries to efficiently detect that this chunk contains changes.
+	 *
+	 * This method does not perform any safety checks. If `componentTypeId` is not
+	 * present in the chunk's archetype, it will result in a `TypeError`, which is
+	 * the desired behavior to catch developer errors in a hot path.
+	 *
+	 * @param {number} chunkId The ID of the chunk containing the component.
+	 * @param {number} componentTypeId The type ID of the component to mark.
+	 * @param {number} tick The current game tick.
+	 */
+	markComponentDirty(chunkId, componentTypeId, tick) {
+		const archetypeId = entityStore.chunkArchetypeIds[chunkId]
+		const indexInArchetype = entityStore.archetypeComponentIndexMaps[archetypeId].get(componentTypeId)
+		this._updateArchetypeDirtyTick(chunkId, indexInArchetype, tick)
+	}
 
 	/**
 	 * Calculates the total number of bytes required to store one entity in a given archetype.

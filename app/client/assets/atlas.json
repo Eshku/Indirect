@@ -2,12 +2,12 @@
   "meta": {
     "image": "atlas.png",
     "size": {
-      "w": 512,
+      "w": 1024,
       "h": 256
     }
   },
   "frames": {
-    "spinner": {
+    "spinningDrone": {
       "frame": {
         "x": 2,
         "y": 2,
@@ -19,7 +19,7 @@
         "h": 32
       }
     },
-    "player_ship": {
+    "explosiveDrone": {
       "frame": {
         "x": 36,
         "y": 2,
@@ -31,9 +31,21 @@
         "h": 32
       }
     },
-    "slashing_arc": {
+    "player_ship": {
       "frame": {
         "x": 70,
+        "y": 2,
+        "w": 32,
+        "h": 32
+      },
+      "sourceSize": {
+        "w": 32,
+        "h": 32
+      }
+    },
+    "slashing_arc": {
+      "frame": {
+        "x": 104,
         "y": 2,
         "w": 128,
         "h": 64
@@ -45,7 +57,7 @@
     },
     "shield": {
       "frame": {
-        "x": 200,
+        "x": 234,
         "y": 2,
         "w": 128,
         "h": 128
@@ -53,6 +65,30 @@
       "sourceSize": {
         "w": 128,
         "h": 128
+      }
+    },
+    "aoe_pulse": {
+      "frame": {
+        "x": 364,
+        "y": 2,
+        "w": 128,
+        "h": 128
+      },
+      "sourceSize": {
+        "w": 128,
+        "h": 128
+      }
+    },
+    "slashing_arc_v1.1": {
+      "frame": {
+        "x": 494,
+        "y": 2,
+        "w": 128,
+        "h": 64
+      },
+      "sourceSize": {
+        "w": 128,
+        "h": 64
       }
     }
   }

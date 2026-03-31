@@ -485,7 +485,7 @@ export class SchemaCompiler {
 			sharedProperties: [],
 			perEntityProperties: [],
 			isEnableable: false,
-			isTracked: false,
+			isTrackable: false, // Renamed from 'isTracked' for consistency
 		}
 
 		if (schema === undefined || Object.keys(schema).length === 0) {
@@ -502,9 +502,9 @@ export class SchemaCompiler {
 			if (propName === 'isEnableable') {
 				if (schema.isEnableable === true) componentInfo.isEnableable = true
 				continue
-			}
-			if (propName === 'tracked') {
-				if (schema.tracked === true) componentInfo.isTracked = true
+			} else if (propName === 'isTrackable') {
+				// Renamed from 'tracked' for consistency with 'isEnableable'
+				if (schema.isTrackable === true) componentInfo.isTrackable = true
 				continue
 			}
 

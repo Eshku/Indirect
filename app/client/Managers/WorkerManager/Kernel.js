@@ -6,17 +6,17 @@
  * An instance of this class must be created for each execution context (main thread, worker)
  * and is typically made available to kernels via a global `parallel` object.
  *
- * Kernels can access this via the global `parallel` object.
- * e.g., `const chunk = parallel.getChunkView(payload);`
+ * Kernels can access this via the global `kernel` object.
+ * e.g., `const chunk = kernel.getChunkView(payload);`
  */
-export class ParallelAPI {
+export class Kernel {
 	/**
 	 * @param {object} context
 	 * @param {import('../../Managers/QueryManager/ChunkView.js').ChunkView[]} context.pool - The pool of ChunkView instances for this context.
 	 */
 	constructor(context) {
 		if (!context || !Array.isArray(context.pool)) {
-			throw new Error('[ParallelAPI] Initialization failed: context with a `pool` array of ChunkViews is required.')
+			throw new Error('[Kernel] Initialization failed: context with a `pool` array of ChunkViews is required.')
 		}
 		/** @private */
 		this.chunkViewPool = context.pool
@@ -33,7 +33,7 @@ export class ParallelAPI {
 	getChunkView(chunkId) {
 		if (this.chunkViewPoolIndex >= this.chunkViewPool.length) {
 			throw new Error(
-				`[ParallelAPI] ChunkView pool exhausted. A single kernel requested more than ${this.chunkViewPool.length} views. Increase the pool size if this is intentional.`,
+				`[Kernel] ChunkView pool exhausted. A single kernel requested more than ${this.chunkViewPool.length} views. Increase the pool size if this is intentional.`,
 			)
 		}
 

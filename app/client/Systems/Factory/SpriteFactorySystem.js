@@ -3,7 +3,7 @@ const { ecs, assetManager } = engine.getManagers()
 
 const { stringInterningTable } = await import(`@indirect/StringInterningTable.js`)
 
-const { spriteDescriptor, viewable } = ecs.getTypeIDs()
+const { spriteDescriptor, viewable } = ecs.getComponentIDs()
 
 const UNINITIALIZED_REF = 0
 

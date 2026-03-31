@@ -1,6 +1,6 @@
 const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
-const { ParallelAPI } = await import(`@managers/WorkerManager/parallelAPI.js`)
-const { entityStore, MAX_COMPONENTS } = await import(`@managers/EntityManager/EntityManager.js`)
+const { Kernel } = await import(`@managers/WorkerManager/Kernel.js`)
+const { entityStore, MAX_COMPONENTS, MAX_CHUNK_CAPACITY } = await import(`@managers/EntityManager/EntityManager.js`)
 import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
 import { JobWriter } from './JobWriter.js'
 const { kernelRegistry } = await import(`@managers/SystemManager/KernelRegistry.js`)
@@ -163,7 +163,7 @@ export class Scheduler {
 
 		// Create and initialize an instance of the parallel API for the main thread.
 		// Make the parallel API globally available for kernels running on the main thread.
-		self.parallel = new ParallelAPI({ pool: this.mainThreadChunkViewPool })
+		self.kernel = new Kernel({ pool: this.mainThreadChunkViewPool })
 		// The main thread's deque is the first one in the array.
 		this.mainThreadDeque = this.allDeques[0]
 
@@ -171,7 +171,7 @@ export class Scheduler {
 		this.mainThreadInbox = new MPSCQueue(this.sharedBuffers.mainThreadInbox)
 
 		// Initialize the scratch buffer for the main thread.
-		this.mainThreadScratchBuffer = new Uint32Array(4096)
+		this.mainThreadScratchBuffer = new Uint32Array(MAX_CHUNK_CAPACITY)
 
 		this.mainThreadKernelContext = {
 			getScratchBuffer: () => this.mainThreadScratchBuffer,
@@ -842,8 +842,8 @@ export class Scheduler {
 							}
 
 							// Fast path: Look up pre-compiled context from the SystemManager's cache.
-							const systemContext = this.systemManager.allSystemContexts[systemId]?.[kernelId] || {}
-							self.parallel.resetJobState() // Reset pool for each job.
+							const systemContext = this.systemManager.allSystemContexts[systemId]?.[kernelId] || {} // Reset pool for each job.
+							self.kernel.resetJobState()
 							await kernelFn(payload, systemContext, this.mainThreadKernelContext)
 							self.frameContext = oldFrameContext // Restore global context
 							break

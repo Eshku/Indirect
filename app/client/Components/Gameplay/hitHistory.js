@@ -4,7 +4,7 @@
  * they only damage a given enemy once during their lifetime.
  */
 export const hitHistory = {
-	tracked: true,
+	isTrackable: true,
 
 	/**
 	 * The current number of hits recorded in this buffer.

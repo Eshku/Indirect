@@ -1,6 +1,6 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
-const { position, velocity, dependencyTestTag } = ecs.getTypeIDs()
+const { position, velocity, dependencyTestTag } = ecs.getComponentIDs()
 const { DependencySystemB } = ecs.getSystemIDs()
 const { dependencyA } = ecs.getKernelIDs()
 /**

@@ -147,8 +147,7 @@ class WorkerEntry {
 			const componentSchemaModuleUrl = new URL('../../Managers/ComponentManager/ComponentSchema.js', baseUrl)
 			const archetypeHashMapModuleUrl = new URL('../../Core/DataStructures/SharedArchetypeHashMap.js', baseUrl)
 			const xxhashWasmModuleUrl = new URL('../../../../node_modules/xxhash-wasm/esm/xxhash-wasm.js', baseUrl)
-			const parallelAPIModuleUrl = new URL('./parallelAPI.js', baseUrl)
-
+			const kernelAPIModuleUrl = new URL('./Kernel.js', baseUrl)
 			const spatialHashGridModuleUrl = new URL('../../Core/DataStructures/SpatialHashGrid.js', baseUrl)
 
 			const [
@@ -162,7 +161,7 @@ class WorkerEntry {
 				componentSchemaModule,
 				archetypeHashMapModule,
 				xxhashModule,
-				parallelAPIModule,
+				kernelAPIModule,
 			] = await Promise.all([
 				import(chunkViewModuleUrl.href),
 				import(blobUtilModuleUrl.href),
@@ -174,7 +173,7 @@ class WorkerEntry {
 				import(componentSchemaModuleUrl.href),
 				import(archetypeHashMapModuleUrl.href),
 				import(xxhashWasmModuleUrl.href),
-				import(parallelAPIModuleUrl.href),
+				import(kernelAPIModuleUrl.href),
 			])
 
 			Object.assign(this, jobLayoutModule)
@@ -199,7 +198,6 @@ class WorkerEntry {
 			const { h64Raw } = await xxhashDefault()
 			this.hashFn = h64Raw
 
-			const { ParallelAPI } = parallelAPIModule
 			this.importFromString = importFromString
 
 			this.NO_JOB_AVAILABLE = NO_JOB_AVAILABLE
@@ -221,7 +219,7 @@ class WorkerEntry {
 			}
 
 			// Make the parallel API globally available to all kernels in this worker.
-			self.parallel = new ParallelAPI({ pool: this.chunkViewPool })
+			self.kernel = new kernelAPIModule.Kernel({ pool: this.chunkViewPool })
 			this.spatialHashGrid = new SpatialHashGrid(spatialHashGridSABs)
 			self.spatialHashGrid = this.spatialHashGrid // Make it available on the global worker scope so kernels can access it.
 
@@ -238,7 +236,7 @@ class WorkerEntry {
 
 			// Initialize the scratch buffer. Max chunk capacity is not fixed, but 16KB is the target.
 			// A capacity of 4096 entities should be safe.
-			this.scratchBuffer = new Uint32Array(4096)
+			this.scratchBuffer = new Uint32Array(2048) //! once store is separated can import, although whole thing most likely gonna change.
 
 			this.kernelContext = {
 				getScratchBuffer: () => this.scratchBuffer,
@@ -508,7 +506,7 @@ class WorkerEntry {
 
 				if (kernelFn) {
 					try {
-						self.parallel.resetJobState() // Reset pool for each job.
+						self.kernel.resetJobState() // Reset pool for each job.
 						await kernelFn(payload, systemContext, this.kernelContext);
 					} catch (error) {
 						// Only look up system name on error.

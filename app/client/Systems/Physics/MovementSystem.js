@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { velocity, speed, movementIntent, isPooled } = ecs.getTypeIDs()
+const { velocity, speed, movementIntent, isPooled } = ecs.getComponentIDs()
 
 /**
  * This system is responsible for character movement based on their `MovementIntent`.

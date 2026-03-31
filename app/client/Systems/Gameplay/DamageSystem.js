@@ -10,9 +10,9 @@ const {
 	lifecycleState,
 	hitFlash,
 	hitHistory,
-	invulnerability,
+	immunity,
 	playerTag,
-} = ecs.getTypeIDs()
+} = ecs.getComponentIDs()
 
 const { CollisionDetectionSystem } = ecs.getSystemIDs()
 
@@ -30,8 +30,8 @@ export class DamageSystem {
 		// Must run after CollisionSystem populates the buffers.
 		runsAfter: [CollisionDetectionSystem],
 		update: {
-			reads: [health, damageCollisionBuffer, lifecycleState, damage, hitFlash, invulnerability, playerTag], // damageCollisionBuffer is still read, but the query is now reactive
-			writes: [health, hitHistory, invulnerability, hitFlash], // This system modifies health, history, and can enable invuln/hitflash.
+			reads: [health, damageCollisionBuffer, lifecycleState, damage, hitFlash, immunity, playerTag], // damageCollisionBuffer is still read, but the query is now reactive
+			writes: [health, hitHistory, immunity, hitFlash], // This system modifies health, history, and can enable invuln/hitflash.
 		},
 	}
 
@@ -51,8 +51,8 @@ export class DamageSystem {
 			without: [isPooled],
 		})
 
-		// A single query for the player to get their ID and invulnerability state.
-		this.playerQuery = this.getQuery({ with: [playerTag, invulnerability] })
+		// A single query for the player to get their ID and immunity state.
+		this.playerQuery = this.getQuery({ with: [playerTag, immunity] })
 		this.playerId = this.playerQuery.getSingleEntity()
 		this.isPlayerInvulnerable = false // A cache for the player's state, updated each frame.
 
@@ -124,10 +124,7 @@ export class DamageSystem {
 	_cachePlayerState() {
 		this.isPlayerInvulnerable = false
 		const playerChunk = this.playerQuery.getSingleChunk()
-		if (playerChunk) {
-			// The player is the only entity in this query, so it's at index 0.
-			this.isPlayerInvulnerable = playerChunk.isComponentEnabled(0, invulnerability)
-		}
+		this.isPlayerInvulnerable = playerChunk.isComponentEnabled(0, immunity)
 	}
 
 	/**
@@ -270,14 +267,14 @@ export class DamageSystem {
 	 * @private
 	 */
 	_triggerPlayerInvulnerability(playerChunk, indexInChunk) {
-		const invulns = playerChunk.componentData[invulnerability]
+		const immunities = playerChunk.componentData[immunity]
 
-		// Direct Write: Set the duration timer directly.
-		invulns.duration[indexInChunk] = invulns.maxDuration[indexInChunk]
+		// Set the timer to its max duration and enable the component.
+		immunities.timer[indexInChunk] = immunities.duration[indexInChunk]
 
 		// Direct Write: Enable the component immediately. This avoids the one-tick delay
 		// of the command buffer, ensuring InvulnerabilitySystem sees the change in the same tick.
-		playerChunk.enableComponent(indexInChunk, invulnerability)
+		playerChunk.enableComponent(indexInChunk, immunity)
 	}
 
 	/**
@@ -287,7 +284,7 @@ export class DamageSystem {
 	_triggerHitFlash(chunk, indexInChunk) {
 		const hitFlashes = chunk.componentData[hitFlash]
 
-		hitFlashes.duration[indexInChunk] = hitFlashes.maxDuration[indexInChunk]
+		hitFlashes.timer[indexInChunk] = hitFlashes.duration[indexInChunk]
 
 		chunk.enableComponent(indexInChunk, hitFlash)
 	}

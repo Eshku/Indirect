@@ -3,7 +3,7 @@ const { eventEmitter } = await import(`@core/Classes/EventEmitter.js`)
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, uiManager } = engine.getManagers()
 
-const { playerTag, movementIntent, shootingIntent } = ecs.getTypeIDs()
+const { playerTag, movementIntent, shootingIntent } = ecs.getComponentIDs()
 
 /**
  * Handles all player inputs for continuous actions like movement and firing.

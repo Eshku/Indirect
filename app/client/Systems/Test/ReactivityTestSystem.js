@@ -5,7 +5,7 @@ const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`
 
 import { ecs as ECS } from '@managers/EntityManager/ECS.js'
 
-const { reactivityComponent, componentA, componentB, componentC } = ecs.getTypeIDs()
+const { reactivityComponent, componentA, componentB, componentC } = ecs.getComponentIDs()
 
 /**
  * A stateful test system for the engine's core reactivity features.

@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { position, velocity, rwmTag } = ecs.getTypeIDs()
+const { position, velocity, rwmTag } = ecs.getComponentIDs()
 
 export class RWMBenchmark {
 	static dependencies = {

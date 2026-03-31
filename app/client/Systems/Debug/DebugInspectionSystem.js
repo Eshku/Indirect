@@ -3,7 +3,7 @@ const { ecs, physicsManager } = engine.getManagers()
 const { eventEmitter } = await import(`@core/Classes/EventEmitter.js`)
 const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
 
-const { cursorTag, position } = ecs.getTypeIDs()
+const { cursorTag, position } = ecs.getComponentIDs()
 
 /**
  * An in-game debugging tool that allows inspecting an entity's component data

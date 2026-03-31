@@ -1,10 +1,8 @@
 const { Query } = await import(`@managers/QueryManager/Query.js`)
 
-const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
+const { entityStore, MAX_CHUNK_CAPACITY } = await import(`@managers/EntityManager/EntityManager.js`)
 
-const MAX_CHUNK_CAPACITY = 4096 // Should be sourced from EntityManager constants
 
-//! Query mutability going to be decided later on.
 export class QueryManager {
 	constructor() {
 		this.queryCache = new Map()
@@ -118,18 +116,7 @@ export class QueryManager {
 	 * @param {number[]} [options.modified=[]] - Component type IDs that, if their data changes, will make the chunk match the query.
 	 * @param {number[]} [options.added=[]] - Component type IDs that, if added, will make the chunk match the query.
 	 * @param {number[]} [options.removed=[]] - Component type IDs that, if removed, will make the chunk match the query.
-	 *
-	 * ! Constants are going to be either deprecated (define your own) or redone to be thread safe.
-	 * @example
-	 * // In a system's constructor or init method:
-	 * const { CollisionFlags } = this.ecs.getTypeIDs();
-	 *
-	 * // Best Practice: Cache constants during initialization for high performance.
-	 * this.COLLISION_CONSTANTS = this.ecs.getConstantsForProperty(CollisionFlags, 'flags');
-	 *
-	 * this.query = this.ecs.queryManager.getQuery({
-	 *     with: [CollisionFlags]
-	 * });
+
 	 * @returns {Query} A new or cached Query instance.
 	 */
 	getQuery(options) {

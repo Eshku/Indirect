@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, layerManager } = engine.getManagers()
 
-const { position, velocity, column, parallelismTestTag } = ecs.getTypeIDs()
+const { position, velocity, column, parallelismTestTag } = ecs.getComponentIDs()
 const { parallelismTest } = ecs.getKernelIDs()
 
 const WORLD_WIDTH = 800

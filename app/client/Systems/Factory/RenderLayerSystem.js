@@ -2,7 +2,7 @@ const { engine } = await import(`@client/Engine.js`)
 const { ecs, layerManager, assetManager } = engine.getManagers()
 const { stringInterningTable } = await import(`@indirect/StringInterningTable.js`)
 
-const { viewable, layer } = ecs.getTypeIDs()
+const { viewable, layer } = ecs.getComponentIDs()
 const { SpriteFactorySystem } = ecs.getSystemIDs()
 
 const UNINITIALIZED_REF = 0

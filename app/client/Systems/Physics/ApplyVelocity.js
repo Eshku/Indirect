@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { position, velocity, isPooled } = ecs.getTypeIDs()
+const { position, velocity, isPooled } = ecs.getComponentIDs()
 
 /**
  * A final-pass physics system that integrates velocity into position.

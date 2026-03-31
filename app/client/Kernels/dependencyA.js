@@ -8,7 +8,7 @@ export function dependencyA(payload, systemContext, kernelContext) {
 	const { velocity } = systemContext
 	const { currentTick } = frameContext
 
-	const chunk = parallel.getChunkView(payload)
+	const chunk = kernel.getChunkView(payload)
 	const velocities = chunk.componentData[velocity]
 	for (let i = 0; i < chunk.size; i++) {
 		// Write a specific, known value.

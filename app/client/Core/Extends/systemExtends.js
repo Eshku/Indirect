@@ -2,6 +2,8 @@ const { payloadCompiler } = await import(`@managers/SystemManager/PayloadCompile
 const { commandBuffer } = await import(`@managers/SystemManager/CommandBuffer.js`)
 const { queryManager } = await import(`@managers/QueryManager/QueryManager.js`)
 const { entityManager } = await import(`@managers/EntityManager/EntityManager.js`)
+const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
+const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 
 /**
  * A central configuration file for extending system instances.
@@ -14,42 +16,66 @@ const { entityManager } = await import(`@managers/EntityManager/EntityManager.js
  */
 export const extensions = {
 	// compiler
-	compile: payloadCompiler.compile.bind(payloadCompiler),
-	compileComponentsForEntities: payloadCompiler.compileComponentsForEntities.bind(payloadCompiler),
+	compile: (source, dataOrOverrides) => payloadCompiler.compile(source, dataOrOverrides),
+	compileComponentsForEntities: componentsObject => payloadCompiler.compileComponentsForEntities(componentsObject),
 
 	// command buffer methods
-	addComponent: commandBuffer.addComponent.bind(commandBuffer),
-	addComponents: commandBuffer.addComponents.bind(commandBuffer),
-	setComponentData: commandBuffer.setComponentData.bind(commandBuffer),
-	setComponentDataSilent: commandBuffer.setComponentDataSilent.bind(commandBuffer),
-	setComponentsData: commandBuffer.setComponentsData.bind(commandBuffer),
-	setComponentsDataSilent: commandBuffer.setComponentsDataSilent.bind(commandBuffer),
-	enableComponent: commandBuffer.enableComponent.bind(commandBuffer),
-	disableComponent: commandBuffer.disableComponent.bind(commandBuffer),
-	removeComponent: commandBuffer.removeComponent.bind(commandBuffer),
-	destroyEntity: commandBuffer.destroyEntity.bind(commandBuffer),
-	destroyEntitiesInChunk: commandBuffer.destroyEntitiesInChunk.bind(commandBuffer),
-	createEntity: commandBuffer.createEntity.bind(commandBuffer),
-	createEntities: commandBuffer.createEntities.bind(commandBuffer),
-	instantiate: commandBuffer.instantiate.bind(commandBuffer),
+	addComponent: (entityId, payload, layer) => commandBuffer.addComponent(entityId, payload, layer),
 
-	// Advanced API: Manually marks a component as dirty.
-	// Most changes are tracked automatically via `setComponentData`. This is only needed
-	// for indirect changes (e.g., a `Hierarchy` component whose child is destroyed).
-	markDirty: commandBuffer.markDirty.bind(commandBuffer),
+	addComponents: (entityId, payload, layer) => commandBuffer.addComponents(entityId, payload, layer),
 
+	setComponentData: (entityId, payload, layer) => commandBuffer.setComponentData(entityId, payload, layer),
 
+	setComponentDataSilent: (entityId, payload, layer) => commandBuffer.setComponentDataSilent(entityId, payload, layer),
+
+	setComponentsData: (entityId, payload, layer) => commandBuffer.setComponentsData(entityId, payload, layer),
+
+	setComponentsDataSilent: (entityId, payload, layer) =>
+		commandBuffer.setComponentsDataSilent(entityId, payload, layer),
+
+	enableComponent: (entityId, componentTypeId, layer) =>
+		commandBuffer.enableComponent(entityId, componentTypeId, layer),
+
+	disableComponent: (entityId, componentTypeId, layer) =>
+		commandBuffer.disableComponent(entityId, componentTypeId, layer),
+
+	removeComponent: (entityId, componentTypeId, layer) =>
+		commandBuffer.removeComponent(entityId, componentTypeId, layer),
+
+	destroyEntity: (entityId, layer) => commandBuffer.destroyEntity(entityId, layer),
+
+	destroyEntitiesInChunk: (chunk, layer) => commandBuffer.destroyEntitiesInChunk(chunk, layer),
+
+	createEntity: (payload, layer) => commandBuffer.createEntity(payload, layer),
+
+	createEntities: (payload, count, layer) => commandBuffer.createEntities(payload, count, layer),
+	
+	instantiate: (payload, layer) => commandBuffer.instantiate(payload, layer),
+
+	// Manually marks a component as dirty.
+	// Most changes are tracked automatically via `setComponentData`. 
+	// This is only needed for indirect changes
+	markDirty: (entityId, componentTypeId, tick, layer) =>
+		commandBuffer.markDirty(entityId, componentTypeId, tick, layer),
+
+	// Query-related helpers
+	getChunkView: () => new ChunkView(entityStore),
+
+	getComponentData: (chunkId, componentTypeId) => entityStore.chunkComponentData[chunkId][componentTypeId],
+	getChunkSize: chunkId => entityStore.chunkSizes[chunkId],
+	getEntities: chunkId => entityStore.chunkComponentData[chunkId].entities,
 
 	//query
-	getQuery: queryManager.getQuery.bind(queryManager),
-	getScratchBuffer: queryManager.getScratchBuffer.bind(queryManager),
+	getQuery: options => queryManager.getQuery(options),
+	getScratchBuffer: componentTypeId => queryManager.getScratchBuffer(componentTypeId),
 
 	// entity manager
-	getEntityLocation: entityManager.getEntityLocation.bind(entityManager),
-
+	getEntityLocation: entityId => entityManager.getEntityLocation(entityId),
+	// Immediate-mode dirty marking for use with the stateless API.
+	markComponentDirty: (chunkId, componentTypeId, tick) =>
+		entityManager.markComponentDirty(chunkId, componentTypeId, tick),
 
 	//! Not recommended unless absolutely nessesary
-	//! could be used as additional command buffer execution system
-	//! could be usefull for tests \ debug.
-	flush: commandBuffer.flush.bind(commandBuffer),
+
+	flush: () => commandBuffer.flush(),
 }

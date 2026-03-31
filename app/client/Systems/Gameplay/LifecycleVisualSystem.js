@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { lifecycleState, viewable, isPooled } = ecs.getTypeIDs()
+const { lifecycleState, viewable, isPooled } = ecs.getComponentIDs()
 
 const { RenderLayerSystem } = ecs.getSystemIDs()
 

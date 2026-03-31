@@ -179,15 +179,15 @@ export class SpatialHashGrid {
 	 * @param {number} minY - The minimum world Y coordinate of the query box.
 	 * @param {number} maxX - The maximum world X coordinate of the query box.
 	 * @param {number} maxY - The maximum world Y coordinate of the query box.
-	 * @param {object} queryResult - An object with typed arrays to which the results will be written.
+	 * @param {object} resultBuffer - An object with typed arrays to which the results will be written.
 	 * The object should have `count`, `capacity`, `entityIds`, `chunkIds`, `entityIndices`.
 	 * The caller is responsible for deduplication.
 	 */
-	queryBox(minX, minY, maxX, maxY, queryResult) {
+	queryBox(minX, minY, maxX, maxY, resultBuffer) {
 		const [originX, originY] = this.gridOriginView
 
 		// Reset the count for this new query.
-		queryResult.count = 0
+		resultBuffer.count = 0
 
 		// Convert world coordinates to grid cell coordinates
 		const startX = Math.floor((minX - originX) * this.invCellSize)
@@ -206,7 +206,7 @@ export class SpatialHashGrid {
 		for (let y = clampedStartY; y <= clampedEndY; y++) {
 			for (let x = clampedStartX; x <= clampedEndX; x++) {
 				const cellIndex = y * this.gridWidth + x
-				this._traverseCell(cellIndex, queryResult)
+				this._traverseCell(cellIndex, resultBuffer)
 			}
 		}
 	}
@@ -217,33 +217,33 @@ export class SpatialHashGrid {
 	 * @param {number} x - The world X coordinate of the circle's center.
 	 * @param {number} y - The world Y coordinate of the circle's center.
 	 * @param {number} radius - The radius of the circle.
-	 * @param {object} queryResult - An object with typed arrays to which the results will be written.
+	 * @param {object} resultBuffer - An object with typed arrays to which the results will be written.
 	 * The object should have `count`, `capacity`, `entityIds`, `chunkIds`, `entityIndices`.
 	 * The caller is responsible for deduplication.
 	 */
-	queryRadius(x, y, radius, queryResult) {
-		this.queryBox(x - radius, y - radius, x + radius, y + radius, queryResult)
+	queryRadius(x, y, radius, resultBuffer) {
+		this.queryBox(x - radius, y - radius, x + radius, y + radius, resultBuffer)
 	}
 
 	/**
 	 * Traverses the linked list for a given cell and adds all entity data to the result object.
 	 * @private
 	 */
-	_traverseCell(cellIndex, queryResult) {
+	_traverseCell(cellIndex, resultBuffer) {
 		let nodeIndex = this.gridCellsView[cellIndex]
-		const { entityIds, chunkIds, entityIndices, capacity } = queryResult
+		const { entityIds, chunkIds, entityIndices, capacity } = resultBuffer
 
 		while (nodeIndex !== -1) {
-			if (queryResult.count >= capacity) {
+			if (resultBuffer.count >= capacity) {
 				console.warn(`SpatialHashGrid query result limit (${capacity}) reached. Some entities may be missed.`)
 				return
 			}
 
-			const currentIndex = queryResult.count
+			const currentIndex = resultBuffer.count
 			entityIds[currentIndex] = this.nodeEntityIdView[nodeIndex * NODE_STRIDE_U64]
 			chunkIds[currentIndex] = this.nodeDataView[nodeIndex * NODE_STRIDE_U16 + 6]
 			entityIndices[currentIndex] = this.nodeDataView[nodeIndex * NODE_STRIDE_U16 + 7]
-			queryResult.count++
+			resultBuffer.count++
 
 			nodeIndex = this.nodeNextIndexView[nodeIndex * NODE_STRIDE_I32 + 2]
 		}

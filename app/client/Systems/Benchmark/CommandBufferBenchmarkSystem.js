@@ -25,7 +25,7 @@ const benchmarkConfig = {
 	},
 }
 
-const { position, velocity, componentA, componentB, commandBufferBenchmarkTag } = ecs.getTypeIDs()
+const { position, velocity, componentA, componentB, commandBufferBenchmarkTag } = ecs.getComponentIDs()
 
 /**
  * A system to benchmark the raw throughput of the CommandBuffer for various operations.

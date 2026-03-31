@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { memoryComponent, memoryTag } = ecs.getTypeIDs()
+const { memoryComponent, memoryTag } = ecs.getComponentIDs()
 
 /**
  * A single-threaded, purely memory-bound benchmark.

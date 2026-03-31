@@ -8,7 +8,7 @@ export function dependencyB(payload, systemContext, kernelContext) {
 	const { velocity } = systemContext
 	const { currentTick } = frameContext
 
-	const chunk = parallel.getChunkView(payload)
+	const chunk = kernel.getChunkView(payload)
 	const velocities = chunk.componentData[velocity]
 
 	// We only need to check the first entity in the chunk.

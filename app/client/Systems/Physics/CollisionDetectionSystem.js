@@ -15,7 +15,7 @@ const {
 	damageCollisionBuffer,
 	aabb,
 	isPooled,
-} = ecs.getTypeIDs()
+} = ecs.getComponentIDs()
 
 const { SpatialHashingSystem } = ecs.getSystemIDs()
 
@@ -69,7 +69,7 @@ export class CollisionDetectionSystem {
 
 		const MAX_QUERY_RESULTS = 1024 // A reasonable default, can be tuned.
 		// Reusable objects to reduce garbage collection pressure in the update loop.
-		this.queryResult = {
+		this.spatialQueryResult = {
 			count: 0,
 			capacity: MAX_QUERY_RESULTS,
 			entityIds: new BigUint64Array(MAX_QUERY_RESULTS),
@@ -127,11 +127,11 @@ export class CollisionDetectionSystem {
 				const entityAId = chunkA.entities[i]
 				// Broad-phase: Get potential colliders from the grid.
 				// The queryBox method now resets the count internally.
-				this.grid.queryBox(aabbsA.minX[i], aabbsA.minY[i], aabbsA.maxX[i], aabbsA.maxY[i], this.queryResult)
+				this.grid.queryBox(aabbsA.minX[i], aabbsA.minY[i], aabbsA.maxX[i], aabbsA.maxY[i], this.spatialQueryResult)
 
 				// Narrow-phase: Check each potential pair.
-				for (let j = 0; j < this.queryResult.count; j++) {
-					const entityBId = this.queryResult.entityIds[j]
+				for (let j = 0; j < this.spatialQueryResult.count; j++) {
+					const entityBId = this.spatialQueryResult.entityIds[j]
 
 					// Self-collision check. The upper-triangle check is no longer needed
 					// because our outer loop is only aggressors.
@@ -140,7 +140,7 @@ export class CollisionDetectionSystem {
 					}
 
 					// Use the reusable ChunkView to get access to the neighbor's chunk data.
-					const chunkBId = this.queryResult.chunkIds[j]
+					const chunkBId = this.spatialQueryResult.chunkIds[j]
 					this.reusableChunkView.setChunk(chunkBId)
 					const chunkB = this.reusableChunkView
 
@@ -148,13 +148,12 @@ export class CollisionDetectionSystem {
 					// We must check that the neighbor has at least one buffer before trying to process it.
 					// This check is crucial because the spatial hash grid is populated with all collidables,
 					// but our primary query is only for entities that can receive events.
-					if (
-						!chunkB.componentData[this.damageCollisionBufferId]					) {
+					if (!chunkB.componentData[this.damageCollisionBufferId]) {
 						continue
 					}
 
 					const layersB = chunkB.componentData[this.collisionLayerId]
-					const indexBInChunk = this.queryResult.entityIndices[j]
+					const indexBInChunk = this.spatialQueryResult.entityIndices[j]
 
 					// Layer mask check: see if the entities' layers allow them to interact.
 					const groupB = layersB.group[indexBInChunk]
@@ -182,7 +181,6 @@ export class CollisionDetectionSystem {
 	 * @private
 	 */
 	_checkAndRecordCollision(chunkA, indexA, chunkB, indexB, entityAId, entityBId) {
-
 		// --- Gather all necessary component data without creating objects ---
 		const posA = chunkA.componentData[this.positionId]
 		const posB = chunkB.componentData[this.positionId]
@@ -323,8 +321,8 @@ export class CollisionDetectionSystem {
 	}
 
 	// --- SAT (Separating Axis Theorem) Helper Methods (Allocation-Free) ---
-	
-    /**
+
+	/**
 	 * Calculates the world-space corners of an OBB and writes them to output buffers.
 	 * @param {Float32Array} out_cornersX - Output buffer for X coordinates.
 	 * @param {Float32Array} out_cornersY - Output buffer for Y coordinates.

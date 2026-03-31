@@ -119,7 +119,7 @@ export class CommandBuffer {
 
 	/**
 	 * Records a command to mark a component as dirty for a specific tick.
-	 * The component must have `tracked: true` in its schema.
+	 * The component must have `isTrackable: true` in its schema.
 	 * @param {bigint} entityId The entity to mark.
 	 * @param {number} componentTypeID The component's type ID.
 	 * @param {number} tick The tick to mark the component as dirty for.

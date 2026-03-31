@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { position, velocity, cpuTag } = ecs.getTypeIDs()
+const { position, velocity, cpuTag } = ecs.getComponentIDs()
 
 /**
  * A single-threaded, purely CPU-bound benchmark.

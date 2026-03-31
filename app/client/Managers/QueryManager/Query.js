@@ -51,7 +51,7 @@ export class Query {
 		this.iterationCurrentTick = null
 		this._singleChunkView = null
 
-		// --- DX Improvement: Normalize single values to arrays ---
+		// --- DX: Normalize single values to arrays ---
 		const normalize = comps => (comps ? (Array.isArray(comps) ? comps : [comps]) : [])
 		const normalizedWith = normalize(withComponents)
 		const normalizedWithout = normalize(withoutComponents)
@@ -67,16 +67,19 @@ export class Query {
 		this.added = Query._createComponentTypeIDSet(normalizedAdded, 'Added')
 		this.removed = Query._createComponentTypeIDSet(normalizedRemoved, 'Removed')
 
-		// The required mask only includes components that MUST be present.
+		// required mask only includes components that MUST be present.
 		const withMask = Query._createSimpleMask(normalizedWith, 'With')
 		this._requiredMask = new BigUint64Array(MASK_PARTS)
 		for (let i = 0; i < MASK_PARTS; i++) {
 			this._requiredMask[i] = withMask[i]
 		}
 
-		// The reactive mask includes components whose modification, addition, or removal
+		// reactive mask includes components whose modification, addition, or removal
 		// makes the query reactive.
-		this._reactiveMask = Query._createSimpleMask([...normalizedModified, ...normalizedAdded, ...normalizedRemoved], 'Reactive')
+		this._reactiveMask = Query._createSimpleMask(
+			[...normalizedModified, ...normalizedAdded, ...normalizedRemoved],
+			'Reactive',
+		)
 
 		// Specific masks for each reactivity type.
 		this._modifiedMask = Query._createSimpleMask(normalizedModified, 'Modified')
@@ -220,12 +223,11 @@ export class Query {
 	 * @returns {ChunkView | undefined} A ChunkView for the first chunk, or undefined if the query is empty.
 	 */
 	getSingleChunk() {
-		// The `iter()` method is an efficient generator that finds the first matching chunk.
 		const iterator = this.iter()
 		const iteratorResult = iterator.next()
 
 		if (!iteratorResult.done) {
-			// The iterator yielded a chunk. Its internal state is currently set to that chunk.
+			//  iterator yielded a chunk. Its internal state is currently set to that chunk.
 			const firstChunkFromIterator = iteratorResult.value
 
 			// Lazily create a dedicated ChunkView instance for this method.
@@ -253,27 +255,26 @@ export class Query {
 	}
 
 	/**
-	 * Gets the array of all chunk IDs that could possibly match this query,
-	 * regardless of their current dirty state. For both reactive and non-reactive
-	 * queries, this returns the complete list of chunks whose archetypes match.
-	 * @returns {number[]}
+	 * Gets a direct reference to the array of chunk IDs whose archetypes match this query.
+	 * This is the primary, high-performance method for accessing chunks that match a query's structural requirements.
+	 *
+	 * For reactive queries, this list includes all chunks that *could* match. The reactive iterator (`.iter()`)
+	 * is responsible for filtering this list down to only the chunks with changes for the current frame.
+	 *
+	 * @returns {number[]} A direct reference to the array of matching chunk IDs. Do not mutate this array.
 	 */
-	getAllChunks() {
+	getChunks() {
 		return this.matchingChunkIds
 	}
 
 	/**
-	 * Gets the array of chunk IDs that are actively matching the query for the current frame.
-	 * For reactive queries, this will only include chunks with relevant changes.
-	 * For non-reactive queries, this is equivalent to `getAllChunks()`.
-	 * @returns {number[]} An array of chunk IDs.
+	 * Gets a direct reference to the Set of archetype IDs that match this query.
+	 * This is a high-performance method for accessing the structural archetypes that match a query.
+	 *
+	 * @returns {Set<number>} A direct reference to the Set of matching archetype IDs. Do not mutate this set.
 	 */
-	getMatchingChunks() {
-		const matching = []
-		for (const chunkView of this.iter()) {
-			matching.push(chunkView.chunkId)
-		}
-		return matching
+	getArchetypes() {
+		return this.matchingArchetypeIds
 	}
 
 	registerArchetype(archetype) {
