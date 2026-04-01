@@ -50,7 +50,7 @@ export class QueryApiTestSystem {
 				}
 
 				// Mark the component as dirty for this chunk using the stateless helper.
-				this.markChunkComponentDirty(chunkId, position, currentTick)
+				this.markComponentDirty(chunkId, position, currentTick)
 			}
 		}
 	}

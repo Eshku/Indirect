@@ -130,7 +130,7 @@ export const systemSchedule = {
 	],
 
 	Test: [
-		{ name: 'QueryApiTestSystem', frequency: 'logic' },
+		//{ name: 'QueryApiTestSystem', frequency: 'logic' },
 		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
