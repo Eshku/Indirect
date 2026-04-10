@@ -263,11 +263,9 @@ this.markComponentDirty(chunkId, position, frameContext.currentTick)
 
 **Narrow-Phase Tracking (`isTrackable` components)**
 
-For more granular tracking, a component can be declared with `isTrackable: true` in its schema. This allocates a bitmask for each entity, allowing systems to identify exactly which entities have been marked as dirty.
+For more granular tracking, a component can be declared with `meta: { isTrackable: true },` in its schema. This allocates a bitmask for each entity, allowing systems to identify exactly which entities have been marked as dirty.
 
 **[added] and [removed] reactive queries are not fully implemented \ tested yet.**
-
-
 
 ```javascript
 // Mark a specific entity's component as dirty.
@@ -277,7 +275,7 @@ this.markEntityDirty(chunkId, entityIndex, componentTypeId, frameContext.current
 const dirtyCount = this.getDirty(chunkId, componentTypeId, lastTick, currentTick, scratchBuffer)
 ```
 
-__Until there is a proper doc - information on masking in (`/app/client/Managers/EntityMaskManager.js`)__
+**Until there is a proper doc - information on masking in (`/app/client/Managers/EntityMaskManager.js`)**
 
 ### Deferred Structural Changes
 
