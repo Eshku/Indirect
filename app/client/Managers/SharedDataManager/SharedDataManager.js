@@ -10,12 +10,15 @@ const { componentInfo } = Schema
  * Its goal was to avoid archetype fragmentation while saving memory. However, the current
  * implementation has significant drawbacks:
  * - **Performance:** Slow read/write paths due to multiple indirections.
- * - **Parallelism:** Not thread-safe. It relies on main-thread-only data structures (JS Objects, Maps)
- *   and cannot be safely used by workers.
+ * - **Parallelism:** Not thread-safe. 
  * - **Complexity:** The "variant" system for overrides adds runtime complexity and prototype fragmentation.
  *
- * This file will be removed or completely refactored in a future updates.
+ * This file will be removed or completely refactored in a future.
  */
+
+//! TODO remove from the engine at some point, it is still everywhere...
+
+
 export class SharedDataManager {
 	constructor() {
 		/**

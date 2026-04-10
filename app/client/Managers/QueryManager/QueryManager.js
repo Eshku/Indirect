@@ -2,12 +2,10 @@ const { Query } = await import(`@managers/QueryManager/Query.js`)
 
 const { entityStore, MAX_CHUNK_CAPACITY } = await import(`@managers/EntityManager/EntityManager.js`)
 
-
 export class QueryManager {
 	constructor() {
 		this.queryCache = new Map()
 		this.queriesById = []
-		this.scratchBufferCache = new Map()
 		this.nextQueryId = 0
 
 		// A new, simple cache to store the generated string keys themselves.
@@ -44,7 +42,7 @@ export class QueryManager {
 	 */
 	_getCachedQueryKey(options) {
 		// --- Fast Path ---
-		// The first level of caching uses the options object reference itself as the key. 
+		// The first level of caching uses the options object reference itself as the key.
 		if (this.keyCache.has(options)) {
 			return this.keyCache.get(options)
 		}
@@ -162,24 +160,6 @@ export class QueryManager {
 			console.error(`QueryManager: Error creating query:`, error)
 			return undefined
 		}
-	}
-
-	/**
-	 * Retrieves a new or cached scratch buffer for a specific component type.
-	 * This allows systems to share buffers if they operate on the same component, reducing memory allocations.
-	 * The buffer is intended for use with `getChangedIndices` or `getEnabledIndices`.
-	 * @param {number} componentTypeId The type ID of the component.
-	 * @returns {Uint32Array} A scratch buffer.
-	 */
-	getScratchBuffer(componentTypeId) {
-		if (this.scratchBufferCache.has(componentTypeId)) {
-			return this.scratchBufferCache.get(componentTypeId)
-		}
-
-		// Create a new buffer, assuming a max chunk capacity.
-		const newBuffer = new Uint32Array(MAX_CHUNK_CAPACITY)
-		this.scratchBufferCache.set(componentTypeId, newBuffer)
-		return newBuffer
 	}
 
 	getQueryById(id) {
@@ -346,9 +326,23 @@ export class QueryManager {
 		}
 	}
 
-	destroyQuery(queryToRelease) {
-		if (!queryToRelease) return
+	/**
+	 * Completely resets the QueryManager's state, clearing all caches and indices.
+	 * This is used for full world resets, primarily for test isolation.
+	 */
+	clear() {
+		this.queryCache.clear()
+		this.queriesById.length = 0
+		this.nextQueryId = 0
+		this.keyCache.clear()
+		this.queriesWith.clear()
+		this.queriesWithout.clear()
+		this.queriesAny.clear()
+		this.queriesWithOnlyExclusions.clear()
+		this.queriesByArchetype.clear()
+	}
 
+	destroyQuery(queryToRelease) {
 		queryToRelease.refCount--
 
 		if (queryToRelease.refCount <= 0) {

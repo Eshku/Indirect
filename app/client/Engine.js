@@ -14,8 +14,10 @@ const MANAGER_INIT_ORDER = [
 
 	'ecs',
 	'ComponentManager',
+	'PayloadCompiler',
 	'EntityManager',
 	'QueryManager',
+	'EntityMaskManager',
 	'PrefabManager',
 	'SystemManager',
 
@@ -106,6 +108,7 @@ export class Engine {
 			const instance = this.managers.get(className)
 
 			if (instance) {
+				//console.log(instance)
 				await instance?.init(this)
 				//console.log(`Instance ${instance.constructor.name} initialized`)
 			} else {
@@ -119,8 +122,13 @@ export class Engine {
 	async loadAllManagers() {
 		const loadedManagers = new Map()
 
+
 		const { ecs } = await import('@managers/EntityManager/ECS.js')
 		loadedManagers.set('ecs', ecs)
+
+		const { payloadCompiler } = await import(`@managers/SystemManager/PayloadCompiler.js`)
+		loadedManagers.set('PayloadCompiler', payloadCompiler)
+
 
 		const { componentManager } = await import('@managers/ComponentManager/ComponentManager.js')
 		loadedManagers.set('ComponentManager', componentManager)
@@ -128,12 +136,12 @@ export class Engine {
 		const { entityManager } = await import('@managers/EntityManager/EntityManager.js')
 		loadedManagers.set('EntityManager', entityManager)
 
+
 		const { queryManager } = await import('@managers/QueryManager/QueryManager.js')
 		loadedManagers.set('QueryManager', queryManager)
 
 		const { prefabManager } = await import('@managers/PrefabManager/PrefabManager.js')
 		loadedManagers.set('PrefabManager', prefabManager)
-
 		const { systemManager } = await import('@managers/SystemManager/SystemManager.js')
 		loadedManagers.set('SystemManager', systemManager)
 
@@ -165,6 +173,9 @@ export class Engine {
 
 		const { sharedDataManager } = await import('@managers/SharedDataManager/SharedDataManager.js')
 		loadedManagers.set('SharedDataManager', sharedDataManager)
+
+		const { entityMaskManager } = await import('@managers/EntityMaskManager/EntityMaskManager.js')
+		loadedManagers.set('EntityMaskManager', entityMaskManager)
 
 		return loadedManagers
 	}

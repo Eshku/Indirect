@@ -1,4 +1,3 @@
-const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
 const { Kernel } = await import(`@managers/WorkerManager/Kernel.js`)
 const { entityStore, MAX_COMPONENTS, MAX_CHUNK_CAPACITY } = await import(`@managers/EntityManager/EntityManager.js`)
 import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
@@ -74,7 +73,6 @@ export class Scheduler {
 		this.jobWriter = new JobWriter()
 		this.inboxDrainIndex = 0 // Current read position in inboxDrain.
 		this.allDeques = [] // Will hold all deque instances
-		this.mainThreadChunkViewPool = []
 		this.mainThreadScratchBuffer = null
 		this.mainThreadKernelContext = null
 
@@ -112,9 +110,10 @@ export class Scheduler {
 	}
 
 	async init(engine) {
-		const { workerManager, systemManager } = engine.getManagers()
+		const { workerManager, systemManager, entityMaskManager } = engine.getManagers()
 		this.workerManager = workerManager
 		this.systemManager = systemManager
+		this.entityMaskManager = entityMaskManager
 
 		// --- Shared Memory Allocation ---
 		// The Scheduler is the owner of all shared memory for the job system.
@@ -155,15 +154,9 @@ export class Scheduler {
 		this.frameContextI64View = new BigInt64Array(this.sharedBuffers.frameContextSAB)
 		this.frameContextF64View = new Float64Array(this.sharedBuffers.frameContextSAB)
 
-		// A pool of reusable ChunkViews for the main thread when it executes KERNEL jobs.
-		const MAIN_THREAD_CHUNK_VIEW_POOL_SIZE = 8
-		for (let i = 0; i < MAIN_THREAD_CHUNK_VIEW_POOL_SIZE; i++) {
-			this.mainThreadChunkViewPool.push(new ChunkView(entityStore))
-		}
-
 		// Create and initialize an instance of the parallel API for the main thread.
 		// Make the parallel API globally available for kernels running on the main thread.
-		self.kernel = new Kernel({ pool: this.mainThreadChunkViewPool })
+		self.kernel = new Kernel({ entityStore })
 		// The main thread's deque is the first one in the array.
 		this.mainThreadDeque = this.allDeques[0]
 
@@ -232,53 +225,6 @@ export class Scheduler {
 		return new Promise(resolve => {
 			this._mainThreadWorkLoop(resolve, frameId)
 		})
-	}
-
-	/**
-	 * Executes end-of-frame maintenance jobs, such as clearing dirty tracking buffers.
-	 * @param {number} currentTick The tick that just completed.
-	 * @returns {Promise<void>}
-	 */
-	async executeMaintenance(currentTick, frameContext) {
-		// 1. Reset per-execution state
-		this._reset()
-
-		// This execution doesn't have a full frame context, but we need the tick.
-		// To avoid allocation, we reuse the frameContext object from the game loop.
-		frameContext.currentTick = currentTick
-		this.perFrameContext = frameContext
-
-		// 2. Build the maintenance jobs
-		// Traverse all active archetypes and their chunk linked lists. 
-		const nextArchetypeId = Atomics.load(entityStore.nextArchetypeId, 0)
-		for (let archetypeId = 0; archetypeId < nextArchetypeId; archetypeId++) {
-			let chunkId = entityStore.archetypeHeadChunkIds[archetypeId]
-			while (chunkId !== 0 /* NULL_CHUNK_ID */) {
-				if (entityStore.chunkMetadata[chunkId]) {
-					const jobId = this.jobCounter++
-					const job = this.jobs[jobId]
-					job.id = jobId
-					job.systemId = -1 // Sentinel for "Maintenance"
-					job.type = JOB_TYPE.MAINTENANCE
-					job.payload = chunkId
-					job.dependencyCounter = 0
-					job.affinity = JOB_AFFINITY.ANY_WORKER
-				}
-				chunkId = entityStore.chunkNextInArchetype[chunkId]
-			}
-		}
-
-		if (this.jobCounter === 0) return
-
-		this.hasParallelJobs = true
-		this._writeGraphToSAB()
-		this._enqueueInitialJobs()
-
-		// Signal workers that a new "frame" (of maintenance jobs) is ready.
-		this._updateSharedFrameContext({ currentTick, lastTick: 0, deltaTime: 0, alpha: 0 }, -1) // Use a sentinel frameId
-		this._signalNewFrame()
-
-		return new Promise(resolve => this._mainThreadWorkLoop(resolve, -1))
 	}
 
 	/**
@@ -810,48 +756,44 @@ export class Scheduler {
 		const jobPayload = jobsView[jobOffset + JOB_PAYLOAD_OFFSET]
 
 		const startTime = performance.now()
-		const jobType = jobPayload >> 24
-		const payload = jobPayload & 0x00ffffff
+		const jobType = jobPayload >> 24;
 
 		try {
-			if (jobType === JOB_TYPE.MAINTENANCE) {
-				this._executeMaintenanceJob(payload, this.perFrameContext.currentTick)
+			const job = this.jobs[jobId]
+			const system = job.system
+
+			if (!system) {
+				const systemName = this.systemManager.getSystemNameById(systemId)
+				console.error(
+					`[Scheduler] Could not find system instance for "${systemName}" (ID: ${systemId}) during job execution.`,
+				)
 			} else {
-				const job = this.jobs[jobId]
-				const system = job.system
+				const payload = jobPayload & 0x00ffffff;
+				switch (jobType) {
+					case JOB_TYPE.UPDATE:
+						await system.update(this.perFrameContext)
+						break
+					case JOB_TYPE.KERNEL: {
+						const oldFrameContext = self.frameContext
+						self.frameContext = this.perFrameContext // Make it global for the kernel
 
-				if (!system) {
-					const systemName = this.systemManager.getSystemNameById(systemId)
-					console.error(
-						`[Scheduler] Could not find system instance for "${systemName}" (ID: ${systemId}) during job execution.`,
-					)
-				} else {
-					switch (jobType) {
-						case JOB_TYPE.UPDATE:
-							await system.update(this.perFrameContext)
-							break
-						case JOB_TYPE.KERNEL: {
-							const oldFrameContext = self.frameContext
-							self.frameContext = this.perFrameContext // Make it global for the kernel
-
-							const kernelId = jobsView[jobOffset + JOB_KERNEL_ID_OFFSET]
-							const kernelFn = kernelRegistry.idToKernel.get(kernelId)
-							if (!kernelFn) {
-								console.error(`[Scheduler] Main thread could not find kernel function for ID ${kernelId}`)
-								break
-							}
-
-							// Fast path: Look up pre-compiled context from the SystemManager's cache.
-							const systemContext = this.systemManager.allSystemContexts[systemId]?.[kernelId] || {} // Reset pool for each job.
-							self.kernel.resetJobState()
-							await kernelFn(payload, systemContext, this.mainThreadKernelContext)
-							self.frameContext = oldFrameContext // Restore global context
+						const kernelId = jobsView[jobOffset + JOB_KERNEL_ID_OFFSET]
+						const kernelFn = kernelRegistry.idToKernel.get(kernelId)
+						if (!kernelFn) {
+							console.error(`[Scheduler] Main thread could not find kernel function for ID ${kernelId}`)
 							break
 						}
-						case JOB_TYPE.PROCESS:
-							await system.process(this.perFrameContext)
-							break
+
+						// Fast path: Look up pre-compiled context from the SystemManager's cache.
+						const systemContext = this.systemManager.allSystemContexts[systemId]?.[kernelId] || {} // Reset pool for each job.
+						self.kernel.resetJobState()
+						await kernelFn(payload, systemContext, this.mainThreadKernelContext)
+						self.frameContext = oldFrameContext // Restore global context
+						break
 					}
+					case JOB_TYPE.PROCESS:
+						await system.process(this.perFrameContext)
+						break
 				}
 			}
 		} catch (error) {
@@ -861,12 +803,10 @@ export class Scheduler {
 
 		const endTime = performance.now()
 		const duration = endTime - startTime
-		if (jobType !== JOB_TYPE.MAINTENANCE) {
-			if (jobType === JOB_TYPE.KERNEL) {
-				this.systemManager.recordSystemTiming(systemId, 'total_only', duration)
-			} else {
-				this.systemManager.recordSystemTiming(systemId, jobType, duration)
-			}
+		if (jobType === JOB_TYPE.KERNEL) {
+			this.systemManager.recordSystemTiming(systemId, 'total_only', duration)
+		} else {
+			this.systemManager.recordSystemTiming(systemId, jobType, duration)
 		}
 
 		// After "execution", process the job's dependents.
@@ -936,43 +876,6 @@ export class Scheduler {
 		if (unlockedAnyJobs.length > 0) {
 			this.mainThreadDeque.pushBatch(unlockedAnyJobs)
 			this._wakeIdleThreads()
-		}
-	}
-
-	_executeMaintenanceJob(chunkId, currentTick) {
-		const chunkMetadata = entityStore.chunkMetadata[chunkId]
-		if (!chunkMetadata) return
-
-		const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
-
-		// Calculate which history slots to saturate and clear
-		const oldestTickToOverwrite = currentTick + 1 - DIRTY_HISTORY_LENGTH
-		const saturatingTick = oldestTickToOverwrite + 1
-		const tickToClear = currentTick + 1
-
-		const oldestFrameIndex = ((oldestTickToOverwrite % DIRTY_HISTORY_LENGTH) + DIRTY_HISTORY_LENGTH) % DIRTY_HISTORY_LENGTH
-		const saturatingFrameIndex = ((saturatingTick % DIRTY_HISTORY_LENGTH) + DIRTY_HISTORY_LENGTH) % DIRTY_HISTORY_LENGTH
-		const clearFrameIndex = ((tickToClear % DIRTY_HISTORY_LENGTH) + DIRTY_HISTORY_LENGTH) % DIRTY_HISTORY_LENGTH
-
-		for (const componentTypeId in chunkMetadata) {
-			const componentMeta = chunkMetadata[componentTypeId]
-			const dirtyMasks = componentMeta.dirtyMasks
-			if (!dirtyMasks) continue
-
-			const oldestSliceStart = oldestFrameIndex * wordsPerFrame
-			const saturatingSliceStart = saturatingFrameIndex * wordsPerFrame
-			const clearSliceStart = clearFrameIndex * wordsPerFrame
-
-			// Saturate: OR the oldest data into the next-oldest slot
-			for (let i = 0; i < wordsPerFrame; i++) {
-				const oldValue = Atomics.load(dirtyMasks, oldestSliceStart + i)
-				if (oldValue !== 0) {
-					Atomics.or(dirtyMasks, saturatingSliceStart + i, oldValue)
-				}
-			}
-
-			// Clear: Zero out the slot for the upcoming frame
-			dirtyMasks.fill(0, clearSliceStart, clearSliceStart + wordsPerFrame)
 		}
 	}
 
@@ -1173,7 +1076,7 @@ export class Scheduler {
 
 	/**
 	 * Detects circular dependencies in the job graph and throws an error if found.
-	 * This uses Kahn's algorithm (a topological sort approach).
+	 * This uses Kahn's algorithm (topological sort approach).
 	 * @private
 	 */
 	_detectAndThrowOnCycles() {

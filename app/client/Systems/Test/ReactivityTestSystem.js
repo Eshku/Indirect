@@ -1,11 +1,10 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, testManager } = engine.getManagers()
-
 const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`)
 
 import { ecs as ECS } from '@managers/EntityManager/ECS.js'
 
-const { reactivityComponent, componentA, componentB, componentC } = ecs.getComponentIDs()
+const { trackedTestComponent, componentA, componentB, componentC } = ecs.getComponentIDs()
 
 /**
  * A stateful test system for the engine's core reactivity features.
@@ -18,6 +17,10 @@ export class ReactivityTestSystem {
 		this.immediateTestPhase = 'INIT'
 		this.testEntityId = null
 		this.immediateTestEntityId = null
+		this.poolingTestPhase = 'INIT'
+		this.poolingTestEntityId = null
+		this.poolingTestComplete = false
+
 		this.testComplete = false
 		this.immediateTestComplete = false
 	}
@@ -25,36 +28,54 @@ export class ReactivityTestSystem {
 	init() {
 		this.ECS = ECS
 
-		// Define separate queries to test each reactive clause in isolation.
-		this.modifiedQuery = this.getQuery({ with: [reactivityComponent], modified: [reactivityComponent] })
-		this.addedQuery = this.getQuery({ with: [reactivityComponent, componentB], added: [componentB] })
-		this.removedQuery = this.getQuery({ with: [reactivityComponent], removed: [componentC] })
+		// The query used for iteration is reactive, for broad-phase filtering.
+		this.modifiedQuery = this.getQuery({ with: [trackedTestComponent], modified: [trackedTestComponent] })
+
+		// A specific query to test if `added` is triggered on creation.
+		this.creationAddedQuery = this.getQuery({ with: [trackedTestComponent], added: [trackedTestComponent] })
+
+		this.addedQuery = this.getQuery({ with: [trackedTestComponent, componentA], added: [componentA] })
+		this.removedQuery = this.getQuery({ with: [trackedTestComponent], removed: [componentC] })
 		this.combinedQuery = this.getQuery({
-			with: [reactivityComponent], // Isolate from immediate test
-			modified: [reactivityComponent],
-			added: [componentB],
+			with: [trackedTestComponent], // Isolate from immediate test
+			modified: [trackedTestComponent],
+			added: [componentA],
 			removed: [componentC],
 		})
 
 		// Payloads for our test operations
-		this.addCompBPayload = this.compile(componentB, {}).payload
+		this.addCompAPayload = this.compile(componentA, {}).payload
+		this.modificationPayload = this.compile(trackedTestComponent, { value: 1 }).payload
+		this.silentModificationPayload = this.compile(trackedTestComponent, { value: 2 }).payload
+		this.combinedModificationPayload = this.compile(trackedTestComponent, { value: 3 }).payload
 
 		// Queries for combined structural change tests
-		this.addedCQuery = this.getQuery({ with: [reactivityComponent, componentC], added: [componentC] })
-		this.removedBQuery = this.getQuery({ with: [reactivityComponent], removed: [componentB] })
+		this.addedCQuery = this.getQuery({ with: [trackedTestComponent, componentC], added: [componentC] })
+		this.removedAQuery = this.getQuery({ with: [trackedTestComponent], removed: [componentA] })
 
 		// A query to find the entity after its initial creation.
-		this.initQuery = this.getQuery({ with: [reactivityComponent, componentC] })
+		this.initQuery = this.getQuery({ with: [trackedTestComponent, componentC] })
 		this.addCompCPayload = this.compile(componentC, {}).payload
 
 		// --- Immediate Test Queries (isolated with componentA) ---
 		this.immediateAddedQuery = this.getQuery({ with: [componentA, componentB], added: [componentB] })
+		this.immediateModifiedQuery = this.getQuery({ with: [componentA], modified: [componentA] })
 		this.immediateRemovedQuery = this.getQuery({ with: [componentA], removed: [componentC] })
 		this.immediateInitQuery = this.getQuery({ with: [componentA, componentC], added: [componentA] })
 
+		// --- Pooling Test Queries & Payloads ---
+		this.poolTag = componentA // Use componentA as our "isPooled" tag.
+		// Add componentB as a permanent tag to isolate this test's entity.
+		this.poolingTestActiveQuery = this.getQuery({ with: [trackedTestComponent, componentB], without: [this.poolTag] })
+		this.poolingTestPooledQuery = this.getQuery({ with: [trackedTestComponent, componentB, this.poolTag] })
+
+		this.setTrackedValuePayload = this.compile(trackedTestComponent, { value: 999 }).payload
+		this.resetTrackedValuePayload = this.compile({ trackedTestComponent: { value: 0 } }).payload
+		this.addPoolTagPayload = this.compile(this.poolTag, {}).payload
+
 		// Run the test suite via the TestManager
 		describe('Reactivity API (Deferred)', () => {
-			it('should correctly react to component changes across multiple ticks', async () => {
+			it('should correctly react to deferred component changes across multiple ticks', async () => {
 				// This single 'it' block will be driven by the update loop.
 				// We'll await a promise that resolves when the test state machine finishes.
 				await new Promise(resolve => {
@@ -64,10 +85,78 @@ export class ReactivityTestSystem {
 		})
 
 		describe('Reactivity API (Immediate Mode)', () => {
-			it('should correctly react to immediate component changes across multiple ticks', async () => {
+			it('should correctly react to immediate-mode component changes across multiple ticks', async () => {
 				await new Promise(resolve => {
 					this.resolveImmediateTest = resolve
 				})
+			})
+		})
+
+		describe('Reactivity API (Pooling Simulation)', () => {
+			it('should correctly reset state on reactivation from pool', async () => {
+				await new Promise(resolve => {
+					this.resolvePoolingTest = resolve
+				})
+			})
+		})
+
+		describe('Reactivity API (Structural Change & Swapping)', () => {
+			it('should preserve dirty flags on swapped entities during a structural change', async () => {
+				// This test specifically targets a bug where a deferred `addComponent`
+				// causes a swap that loses the dirty flag of the swapped entity.
+
+				// A full reset is crucial for test isolation to prevent stale state from
+				// other tests (like different chunk capacities) from causing errors.
+				ecs.destroyAllEntities()
+				this.flush()
+
+
+				// Get the current tick from the running game loop to make the test realistic.
+				const lastTickBeforeAction = ecs.systemManager.currentTick
+				const tickOfAction = lastTickBeforeAction + 1
+
+				// 1. Setup: Create two entities in the same chunk.
+				const { payload } = this.compile({ trackedTestComponent: { value: 0 } })
+				this.createEntity(payload) // This will be at index 0, the one we move.
+				this.createEntity(payload) // This will be at index 1, the one we swap and test.
+				this.flush()
+
+				// Make the query specific to the archetype *before* the structural change.
+				const query = this.getQuery({ with: [trackedTestComponent], without: [componentA] })
+				const chunkIds = query.getChunks()
+				expect(chunkIds.length).toBe(1, 'Expected all test entities to be in a single chunk.')
+				const chunkId = chunkIds[0]
+
+				// Ensure we have the correct number of entities before proceeding.
+				const initialSize = this.getChunkSize(chunkId)
+				expect(initialSize).toBe(2, 'Chunk should contain exactly 2 entities before the test action.')
+
+				const entities = this.getEntities(chunkId) // Correctly get entities from the chunk
+				const entityToMove = entities[0] // Entity at index 0
+				const entityToSwapAndTest = entities[1] // Entity at index 1
+
+				// 2. Action: Mark the entity that will be swapped as dirty.
+				// Then, in the same frame, trigger a structural change on the *other* entity.
+				this.markEntityDirtyById(entityToSwapAndTest, trackedTestComponent, tickOfAction)
+				this.addComponent(entityToMove, this.addCompAPayload) // Add componentA
+				this.flush(tickOfAction)
+
+				// 3. Verification: The `addComponent` moved entityToMove. entityToSwapAndTest was
+				// swapped into its place (index 0). The dirty flag must be preserved.
+
+				// The verification must use the narrow-phase API (`getDirty`) because the test
+				// only used the narrow-phase marking API (`markEntityDirtyById`). The broad-phase
+				// `modified:` query will not find this change, which is expected behavior.
+
+				// The original chunk still exists and contains the swapped entity.
+				const finalChunkIds = query.getChunks()
+				expect(finalChunkIds.length).toBe(1, 'The original chunk should still exist and match the query.')
+				expect(finalChunkIds[0]).toBe(chunkId, 'The chunk ID should be the same.')
+
+				const scratchBuffer = this.createScratchBuffer()
+				const dirtyCount = this.getDirty(chunkId, trackedTestComponent, lastTickBeforeAction, tickOfAction, scratchBuffer)
+				expect(dirtyCount).toBe(1, 'Narrow-phase should find the dirty swapped entity in its original chunk')
+				expect(scratchBuffer[0]).toBe(0, 'The dirty entity should now be at index 0 after the swap')
 			})
 		})
 
@@ -75,24 +164,111 @@ export class ReactivityTestSystem {
 		setTimeout(() => testManager.runAllTests(), 100)
 	}
 
-	update({ currentTick }) {
+	update({ currentTick, lastTick }) {
 		// Run state machines concurrently, but only if their test has been started by the test runner.
 		if (this.resolveTest) {
-			this._runDeferredTest()
+			this._runDeferredTest(lastTick, currentTick)
 		}
 		if (this.resolveImmediateTest) {
-			this._runImmediateTest()
+			this._runImmediateTest(lastTick, currentTick)
+		}
+		if (this.resolvePoolingTest) {
+			this._runPoolingTest(lastTick, currentTick)
 		}
 	}
 
-	_runDeferredTest() {
+	_runPoolingTest(lastTick, currentTick) {
+		if (this.poolingTestComplete) return
+
+		switch (this.poolingTestPhase) {
+			case 'INIT': {
+				// Create an entity with a non-zero value to simulate a projectile that has flown some distance.
+				const { payload } = this.compile({
+					trackedTestComponent: { value: 12345 },
+					componentB: {}, // Add the permanent tag for isolation.
+				})
+				this.createEntity(payload)
+				this.poolingTestPhase = 'INIT_CHECK'
+
+				break
+			}
+
+			case 'INIT_CHECK': {
+				// Find the entity and verify its initial state.
+				const entityId = this.poolingTestActiveQuery.getSingleEntity()
+
+				this.poolingTestEntityId = entityId
+				const data = this.ECS.getComponent(this.poolingTestEntityId, 'trackedTestComponent')
+				expect(data.value).toBe(12345, '[PoolingTest] Initial value should be 12345')
+
+				this.poolingTestPhase = 'DEACTIVATE'
+				break
+			}
+
+			case 'DEACTIVATE': {
+				// "Pool" the entity by adding the tag component. This is a structural change.
+				this.addComponent(this.poolingTestEntityId, this.addPoolTagPayload)
+				this.poolingTestPhase = 'DEACTIVATE_CHECK'
+				break
+			}
+
+			case 'DEACTIVATE_CHECK': {
+				// The addComponent command was flushed at the end of the previous frame.
+				// The entity should have moved from the active query to the pooled query.
+				const pooledEntity = this.poolingTestPooledQuery.getSingleEntity()
+				expect(pooledEntity).toBe(this.poolingTestEntityId, '[PoolingTest] Entity should be in the pooled query after structural change')
+
+				// Verify the value is still the old, stale value.
+				const pooledData = this.ECS.getComponent(this.poolingTestEntityId, 'trackedTestComponent')
+				expect(pooledData.value).toBe(12345, '[PoolingTest] Pooled value should still be 12345')
+
+				this.poolingTestPhase = 'REACTIVATE'
+				break
+			}
+
+			case 'REACTIVATE': {
+				this.removeComponent(this.poolingTestEntityId, this.poolTag)
+				this.setComponents(this.poolingTestEntityId, this.resetTrackedValuePayload)
+				this.poolingTestPhase = 'REACTIVATE_CHECK'
+				break
+			}
+
+			case 'REACTIVATE_CHECK': {
+				// The removeComponent and setComponents commands were flushed at the end of the previous frame.
+				// The entity should now be back in the 'active' query.
+				const reactivatedEntity = this.poolingTestActiveQuery.getSingleEntity()
+
+				// Now that the structural change is complete, the entity is in the active query.
+				expect(reactivatedEntity).toBe(
+					this.poolingTestEntityId,
+					'[PoolingTest] Entity should be in the active query after reactivation',
+				)
+
+				// Verify the component's value was reset by the setComponents command.
+				const finalData = this.ECS.getComponent(this.poolingTestEntityId, 'trackedTestComponent')
+				expect(finalData.value).toBe(0, '[PoolingTest] Reactivated value should be reset to 0')
+
+				this.poolingTestPhase = 'COMPLETE'
+				break
+			}
+
+			case 'COMPLETE': {
+				this.poolingTestComplete = true
+				this.ECS.destroyEntity(this.poolingTestEntityId)
+				this.resolvePoolingTest()
+				break
+			}
+		}
+	}
+
+	_runDeferredTest(lastTick, currentTick) {
 		if (this.testComplete) return
 		switch (this.testPhase) {
 			case 'INIT':
 				// On the first run, create the entity to be tested.
 				// It starts with componentA and componentC.
 				const { payload: creationPayload } = this.compile({
-					reactivityComponent: { value: 0 },
+					trackedTestComponent: { value: 0 },
 					componentC: {},
 				})
 				// Queue the creation command. Don't store the placeholder, we'll find the real entity next frame.
@@ -107,62 +283,86 @@ export class ReactivityTestSystem {
 				if (!realEntityId) break
 
 				this.testEntityId = realEntityId
+
+				// Test that createEntity marks trackable components as dirty for BROAD-PHASE queries.
+				// The entity was created at the end of the 'lastTick' frame. We are now in 'currentTick'.
+				const createdChunks = this.modifiedQuery.getChunks()
+				expect(createdChunks.length).toBe(
+					1,
+					'[Deferred] createEntity should mark trackable component as dirty on the creation tick',
+				)
+				expect(this.creationAddedQuery.getChunks().length).toBe(
+					1,
+					'[Deferred] createEntity should trigger `added:` query on creation tick',
+				)
 				this.testPhase = 'QUIET_CHECK'
 				break
 
 			case 'QUIET_CHECK':
 				expect(this.testEntityId).toBeDefined('[Deferred] Entity should have been found in INIT_CHECK')
 				// On the next tick, assert that no reactive queries match.
-				// The entity exists, but no changes have occurred since the last frame.
-				expect(this.modifiedQuery.getMatchingChunks().length).toBe(0, 'modifiedQuery should be empty on quiet tick')
-				expect(this.addedQuery.getMatchingChunks().length).toBe(0, 'addedQuery should be empty on quiet tick')
-				expect(this.removedQuery.getMatchingChunks().length).toBe(0, 'removedQuery should be empty on quiet tick')
-				expect(this.combinedQuery.getMatchingChunks().length).toBe(0, 'combinedQuery should be empty on quiet tick')
+				// The entity exists, but no changes have occurred in this tick's range.
+				const modifiedChunks = this.modifiedQuery.getChunks() // Already correct
+				// The reactive query's broad-phase check is sufficient here.
+				expect(modifiedChunks.length).toBe(0, 'modifiedQuery should be empty on quiet tick')
+				expect(this.addedQuery.getChunks().length).toBe(0, 'addedQuery should be empty on quiet tick')
+				expect(this.removedQuery.getChunks().length).toBe(0, 'removedQuery should be empty on quiet tick')
+				expect(this.combinedQuery.getChunks().length).toBe(0, 'combinedQuery should be empty on quiet tick')
 
 				this.testPhase = 'PERFORM_MODIFICATION'
 				break
 
 			case 'PERFORM_MODIFICATION':
-				// Use a command to modify componentA.
-				const { payload: modificationPayload } = this.compile(reactivityComponent, { value: 1 })
-				this.setComponentData(this.testEntityId, modificationPayload)
+				// Use the default `setComponent` which now handles dirty tracking.
+				// The change will be applied at the end of this tick (`currentTick`),
+				// and we will check for it in the next tick.
+				this.setComponent(this.testEntityId, this.modificationPayload)
 				this.testPhase = 'MODIFIED_CHECK'
 				break
 
 			case 'MODIFIED_CHECK':
-				// Assert that ONLY the modified query now has results.
-				expect(this.modifiedQuery.getMatchingChunks().length).toBe(1, '[Deferred] modifiedQuery should detect change')
-				expect(this.addedQuery.getMatchingChunks().length).toBe(0, '[Deferred] addedQuery should be empty after modification')
-				expect(this.removedQuery.getMatchingChunks().length).toBe(0, '[Deferred] removedQuery should be empty after modification')
-				expect(this.combinedQuery.getMatchingChunks().length).toBe(1, '[Deferred] combinedQuery should detect modification')
+				// The change happened in `lastTick`. We are now in `currentTick`.
+				// 1. Broad-phase: Use the reactive query.
+				const changedChunks = this.modifiedQuery.getChunks()
+				expect(changedChunks.length).toBe(1, '[Deferred] Broad-phase should detect one changed chunk')
+
+				// 2. Narrow-phase: For each changed chunk, get the specific entities that were dirty in this tick's range.
+				let modifiedCountAfterChange = 0 
+				for (const chunkId of changedChunks) {
+					modifiedCountAfterChange += this.getDirty(chunkId, trackedTestComponent, lastTick, currentTick, [])
+				}
+				expect(modifiedCountAfterChange).toBe(1, '[Deferred] Narrow-phase should find one changed entity in the dirty chunk')
+
+				expect(this.addedQuery.getChunks().length).toBe(0, '[Deferred] addedQuery should be empty after modification')
+				expect(this.removedQuery.getChunks().length).toBe(0, '[Deferred] removedQuery should be empty after modification')
+				expect(this.combinedQuery.getChunks().length).toBe(1, '[Deferred] combinedQuery should also detect modification')
 				this.testPhase = 'MODIFIED_QUIET_CHECK'
 				break
 
 			case 'MODIFIED_QUIET_CHECK':
-				// On the tick after a modification was detected, the query should be quiet again.
-				expect(this.modifiedQuery.getMatchingChunks().length).toBe(0, '[Deferred] modifiedQuery should be quiet on the tick after reaction')
+				// On the tick after a modification was detected, the broad-phase query should be quiet again.
+				const modifiedChunksQuiet = this.modifiedQuery.getChunks()
+				expect(modifiedChunksQuiet.length).toBe(0, '[Deferred] modifiedQuery should be quiet on the tick after reaction')
 				this.testPhase = 'PERFORM_ADD'
 				break
 
 			case 'PERFORM_ADD':
 				// Use a command to add componentB. This causes an archetype change.
-				this.addComponent(this.testEntityId, this.addCompBPayload)
+				this.addComponent(this.testEntityId, this.addCompAPayload)
 				this.testPhase = 'ADDED_CHECK'
 				break
 
 			case 'ADDED_CHECK':
 				// The entity is in a new chunk. Assert that the addedQuery now matches.
-				// The modifiedQuery should be empty as no modification happened this tick.
-				expect(this.modifiedQuery.getMatchingChunks().length).toBe(0, '[Deferred] modifiedQuery should be empty after add')
-				expect(this.addedQuery.getMatchingChunks().length).toBe(1, '[Deferred] addedQuery should detect add')
-				expect(this.removedQuery.getMatchingChunks().length).toBe(0, '[Deferred] removedQuery should be empty after add')
-				expect(this.combinedQuery.getMatchingChunks().length).toBe(1, '[Deferred] combinedQuery should detect add')
+				expect(this.addedQuery.getChunks().length).toBe(1, '[Deferred] addedQuery should detect add')
+				expect(this.removedQuery.getChunks().length).toBe(0, '[Deferred] removedQuery should be empty after add')
+				expect(this.combinedQuery.getChunks().length).toBe(1, '[Deferred] combinedQuery should detect add')
 				this.testPhase = 'ADDED_QUIET_CHECK'
 				break
 
 			case 'ADDED_QUIET_CHECK':
 				// On the tick after an add was detected, the query should be quiet again.
-				expect(this.addedQuery.getMatchingChunks().length).toBe(0, '[Deferred] addedQuery should be quiet on the tick after reaction')
+				expect(this.addedQuery.getChunks().length).toBe(0, '[Deferred] addedQuery should be quiet on the tick after reaction')
 				this.testPhase = 'PERFORM_REMOVAL'
 				break
 
@@ -174,75 +374,83 @@ export class ReactivityTestSystem {
 
 			case 'REMOVED_CHECK':
 				// The entity is in yet another chunk. Assert that the removedQuery now matches.
-				expect(this.modifiedQuery.getMatchingChunks().length).toBe(0, '[Deferred] modifiedQuery should be empty after remove')
-				expect(this.addedQuery.getMatchingChunks().length).toBe(0, '[Deferred] addedQuery should be empty after remove')
-				expect(this.removedQuery.getMatchingChunks().length).toBe(1, '[Deferred] removedQuery should detect remove')
-				expect(this.combinedQuery.getMatchingChunks().length).toBe(1, '[Deferred] combinedQuery should detect remove')
+				expect(this.addedQuery.getChunks().length).toBe(0, '[Deferred] addedQuery should be empty after remove')
+				expect(this.removedQuery.getChunks().length).toBe(1, '[Deferred] removedQuery should detect remove')
+				expect(this.combinedQuery.getChunks().length).toBe(1, '[Deferred] combinedQuery should detect remove')
 				this.testPhase = 'REMOVED_QUIET_CHECK'
 				break
 
 			case 'REMOVED_QUIET_CHECK':
 				// On the tick after a removal was detected, the query should be quiet again.
-				expect(this.removedQuery.getMatchingChunks().length).toBe(0, '[Deferred] removedQuery should be quiet on the tick after reaction')
+				expect(this.removedQuery.getChunks().length).toBe(0, '[Deferred] removedQuery should be quiet on the tick after reaction')
 				this.testPhase = 'PERFORM_COMBINED_ADD_REMOVE'
 				break
 
 			case 'PERFORM_COMBINED_ADD_REMOVE':
-				// At this point, the entity has [reactivityComponent, componentB].
-				// We will add componentC and remove componentB in the same frame.
+				// At this point, the entity has [trackedTestComponent, componentB].
+				// We will add componentC and remove componentA in the same frame.
 				this.addComponent(this.testEntityId, this.addCompCPayload)
-				this.removeComponent(this.testEntityId, componentB)
+				this.removeComponent(this.testEntityId, componentA)
 				this.testPhase = 'COMBINED_ADD_REMOVE_CHECK'
 				break
 
 			case 'COMBINED_ADD_REMOVE_CHECK':
 				// The entity moved to a new chunk. Verify that both events were detected.
-				expect(this.addedCQuery.getMatchingChunks().length).toBe(1, '[Deferred] addedCQuery should detect add of C in combined change')
-				expect(this.removedBQuery.getMatchingChunks().length).toBe(1, '[Deferred] removedBQuery should detect remove of B in combined change')
+				expect(this.addedCQuery.getChunks().length).toBe(1, '[Deferred] addedCQuery should detect add of C')
+				expect(this.removedAQuery.getChunks().length).toBe(1, '[Deferred] removedAQuery should detect remove of A')
 				this.testPhase = 'PERFORM_MODIFY_AND_ADD'
 				break
 
 			case 'PERFORM_MODIFY_AND_ADD':
-				// At this point, entity has [reactivityComponent, componentC].
-				// We will modify reactivityComponent and add componentB in the same frame.
-				const { payload: modAndAddPayload } = this.compile(reactivityComponent, { value: 2 })
-				this.setComponentData(this.testEntityId, modAndAddPayload)
-				this.addComponent(this.testEntityId, this.addCompBPayload)
+				// At this point, entity has [trackedTestComponent, componentC].
+				// We will modify trackedTestComponent and add componentB in the same frame.
+				this.setComponent(this.testEntityId, this.combinedModificationPayload)
+				this.addComponent(this.testEntityId, this.addCompAPayload)
 				this.testPhase = 'MODIFY_AND_ADD_CHECK'
 				break
 
 			case 'MODIFY_AND_ADD_CHECK':
 				// The entity moved. Both the modification and the structural change should be detected.
-				expect(this.modifiedQuery.getMatchingChunks().length).toBe(1, '[Deferred] modifiedQuery should detect change during a structural move')
-				expect(this.addedQuery.getMatchingChunks().length).toBe(1, '[Deferred] addedQuery (for B) should detect change during a modification')
+				// Broad-phase check for modification.
+				const modChunks = this.modifiedQuery.getChunks()
+				expect(modChunks.length).toBe(1, '[Deferred] Broad-phase should detect modification during a structural move')
+
+				// Narrow-phase check for the modification.
+				let modCount = 0
+				for (const chunkId of modChunks) {
+					modCount += this.getDirty(chunkId, trackedTestComponent, lastTick, currentTick, [])
+				}
+				expect(modCount).toBe(1, '[Deferred] Narrow-phase should find one modified entity during a structural move')
+
+				// Broad-phase check for addition
+				expect(this.addedQuery.getChunks().length).toBe(1, '[Deferred] addedQuery (for B) should detect change during a modification')
 				this.testPhase = 'PERFORM_SILENT_MODIFICATION'
 				break
 
 			case 'PERFORM_SILENT_MODIFICATION':
-				// Use a silent command to modify componentA. No query should react.
-				const { payload: silentPayload } = this.compile(reactivityComponent, { value: 3 })
-				this.setComponentDataSilent(this.testEntityId, silentPayload)
+				this.setComponentSilent(this.testEntityId, this.silentModificationPayload)
 				this.testPhase = 'SILENT_CHECK'
 				break
-
 			case 'SILENT_CHECK':
 				// Assert that no queries reacted to the silent update.
-				expect(this.modifiedQuery.getMatchingChunks().length).toBe(0, '[Deferred] modifiedQuery should ignore silent update')
-				expect(this.addedQuery.getMatchingChunks().length).toBe(0, '[Deferred] addedQuery should be empty after silent update')
-				expect(this.removedQuery.getMatchingChunks().length).toBe(0, '[Deferred] removedQuery should be empty after silent update')
-				expect(this.combinedQuery.getMatchingChunks().length).toBe(0, '[Deferred] combinedQuery should ignore silent update')
+				const silentModChunks = this.modifiedQuery.getChunks()
+				expect(silentModChunks.length).toBe(0, '[Deferred] modifiedQuery should ignore silent update')
+				expect(this.addedQuery.getChunks().length).toBe(0, '[Deferred] addedQuery should be empty after silent update')
+				expect(this.removedQuery.getChunks().length).toBe(0, '[Deferred] removedQuery should be empty after silent update')
+				expect(this.combinedQuery.getChunks().length).toBe(0, '[Deferred] combinedQuery should ignore silent update')
 
 				this.testPhase = 'COMPLETE'
 				break
 
 			case 'COMPLETE':
 				this.testComplete = true
+				this.ECS.destroyEntity(this.testEntityId)
 				this.resolveTest() // Resolve the promise in the 'it' block.
 				break
 		}
 	}
 
-	_runImmediateTest() {
+	_runImmediateTest(lastTick, currentTick) {
 		if (this.immediateTestComplete) return
 
 		switch (this.immediateTestPhase) {
@@ -256,9 +464,13 @@ export class ReactivityTestSystem {
 
 			case 'IMMEDIATE_QUIET_CHECK':
 				// On the next tick, the creation should be detected.
-				expect(this.immediateInitQuery.getMatchingChunks().length).toBe(
+				expect(this.immediateInitQuery.getChunks().length).toBe(
 					1,
 					'[Immediate] immediateInitQuery should detect initial creation',
+				)
+				expect(this.immediateModifiedQuery.getChunks().length).toBe(
+					1,
+					'[Immediate] createEntity should trigger `modified:` query on creation tick',
 				)
 				// Now that we've found it, update the ID to the real one.
 				this.immediateTestEntityId = this.immediateInitQuery.getSingleEntity()
@@ -274,7 +486,7 @@ export class ReactivityTestSystem {
 
 			case 'IMMEDIATE_ADD_CHECK':
 				// On the next tick, check that the `added` query for componentB fired.
-				expect(this.immediateAddedQuery.getMatchingChunks().length).toBe(1, '[Immediate] immediateAddedQuery should detect immediate add')
+				expect(this.immediateAddedQuery.getChunks().length).toBe(1, '[Immediate] immediateAddedQuery should detect immediate add')
 				this.immediateTestPhase = 'IMMEDIATE_REMOVE'
 				break
 
@@ -286,12 +498,13 @@ export class ReactivityTestSystem {
 
 			case 'IMMEDIATE_REMOVE_CHECK':
 				// On the next tick, check that the `removed` query for componentC fired.
-				expect(this.immediateRemovedQuery.getMatchingChunks().length).toBe(1, '[Immediate] immediateRemovedQuery should detect immediate remove')
+				expect(this.immediateRemovedQuery.getChunks().length).toBe(1, '[Immediate] immediateRemovedQuery should detect immediate remove')
 				this.immediateTestPhase = 'IMMEDIATE_COMPLETE'
 				break
 
 			case 'IMMEDIATE_COMPLETE':
 				this.immediateTestComplete = true
+				this.ECS.destroyEntity(this.immediateTestEntityId)
 				this.resolveImmediateTest()
 				break
 		}
@@ -301,11 +514,14 @@ export class ReactivityTestSystem {
 		// Clean up entities created by this test system to prevent accumulation on HMR.
 		if (this.testEntityId) {
 			this.destroyEntity(this.testEntityId)
-			this.flush() // Ensure deferred destruction is executed immediately for HMR.
 		}
 		if (this.immediateTestEntityId) {
 			this.ECS.destroyEntity(this.immediateTestEntityId)
 		}
+		if (this.poolingTestEntityId) {
+			this.destroyEntity(this.poolingTestEntityId)
+		}
+		this.flush() // Ensure deferred destructions are executed immediately for HMR.
 		testManager.clear()
 	}
 }

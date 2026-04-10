@@ -42,11 +42,11 @@ Long-term vision is to build a high-performance, **data-oriented**, and **parall
 
 ## Architecture
 
-- **Entity**: A simple ID representing a game object.
-- **Component**: A schema defining a piece of data associated with an entity.
-- **Archetype**: A unique combination of components. All entities with same set of components belong to same archetype.
-- **[System](app/client/Systems)**: A class containing game logic that operates on entities.
-- **[Kernel](app/client/Kernels)**: A pure function containing logic designed to be run in parallel on worker threads.
+- **Entity**: ID representing a game object.
+- **Component**: Schema defining data layout for entities, within systems used as ID.
+- **Archetype**: All entities with same set of components belong to same archetype.
+- **[System](app/client/Systems)**: Class containing game logic that operates on entities.
+- **[Kernel](app/client/Kernels)**: Pure function containing logic designed to be run in parallel on worker threads.
 - **[Manager](app/client/Managers)**: A class that owns a resource and provides an API to interact with it.
 
 ## Key Features
@@ -57,26 +57,26 @@ Components are defined as plain JavaScript objects that act as a schema, dictati
 
 - **`playerTag` (Tag Component):**
 
-  ```javascript
-  export const playerTag = {}
-  ```
+```javascript
+export const playerTag = {}
+```
 
 - **`health` (Primitive Types):**
 
-  ```javascript
-  export const health = {
-  	value: { type: 'f32', default: 100 },
-  	max: { type: 'f32', default: 100 },
-  }
-  ```
+```javascript
+export const health = {
+	value: { type: 'f32', default: 100 },
+	max: { type: 'f32', default: 100 },
+}
+```
 
 - **`name` (String):**
 
-  ```javascript
-  export const name = {
-  	name: { type: 'string', default: 'No Name' },
-  }
-  ```
+```javascript
+export const name = {
+	name: { type: 'string', default: 'No Name' },
+}
+```
 
 **Schema Types:**
 
@@ -104,6 +104,30 @@ Systems use queries to find and iterate over groups of entities that possess a s
 - **`modified`**: Component's data has been modified.
 - **`added`**: Component was added.
 - **`removed`**:Component has been removed.
+
+**Querying for Entities**
+
+A system has access to helper methods for interacting with chunks, such as `getChunkSize`, `getEntities`, and `getComponentData`.
+
+```javascript
+const enemyChunkIds = this.enemyQuery.getChunks()
+
+for (let i = 0; i < enemyChunkIds.length; i++) {
+	const chunkId = enemyChunkIds[i]
+	const entities = this.getEntities(chunkId)
+	const positions = this.getComponentData(chunkId, position)
+	const intents = this.getComponentData(chunkId, movementIntent)
+	const chunkSize = this.getChunkSize(chunkId)
+
+	for (let j = 0; j < chunkSize; j++) {
+		// Access component data for the entity at index j
+		const entityId = entities[j]
+		const posX = positions.x[j]
+	}
+}
+```
+
+For a complete list of available methods, see `Query.js`.
 
 ### Parallelism: A Kernel-Based Job Scheduler
 
@@ -152,29 +176,23 @@ A kernel is a pure function that runs on a worker, receiving all its data via ar
  * @param {object} systemContext - Read-only data from system's static dependencies `context` block.
  * @param {object} kernelContext - Thread-local helpers, like getScratchBuffer.
  */
-export function applyGravityAndMove(payload, systemContext, kernelContext) {
-	// Frame-specific data is globally available on the worker.
-	const { deltaTime, currentTick } = self.frameContext
+export function applyGravityAndMove(chunkId, systemContext, kernelContext) {
+	// Frame-specific data is available on self.frameContext.
+	const { deltaTime } = self.frameContext
 	// System-specific static data is passed in.
 	const { gravity, position, velocity } = systemContext
 
-	// Use the global helper to get a view into the chunk's data.
-	const chunk = parallel.getChunkView(payload)
-	const positions = chunk.componentData[position]
-	const velocities = chunk.componentData[velocity]
+	// Get direct access to component data arrays for the chunk.
+	const positions = self.kernel.getComponentData(chunkId, position)
+	const velocities = self.kernel.getComponentData(chunkId, velocity)
+	const chunkSize = self.kernel.getChunkSize(chunkId)
 
-	for (let i = 0; i < chunk.size; i++) {
-		// Apply gravity to velocity
+	for (let i = 0; i < chunkSize; i++) {
+		// Apply gravity to velocity and velocity to position.
 		velocities.y[i] += gravity * deltaTime
-
-		// Apply velocity to position
 		positions.x[i] += velocities.x[i] * deltaTime
 		positions.y[i] += velocities.y[i] * deltaTime
 	}
-
-	// Mark modified components as dirty for reactive queries.
-	chunk.markDirty(position, currentTick)
-	chunk.markDirty(velocity, currentTick)
 }
 ```
 
@@ -212,7 +230,7 @@ export class PhysicsSystem {
 	}
 
 	// Runs on the main thread to schedule concurrent jobs for the frame.
-	schedule(jobWriter, frameContext) {.
+	schedule(jobWriter, frameContext) {
 		// Runs applyGravityAndMove function for every chunk on this.query in parallel.
 		jobWriter.scheduleForEachChunk(this.query, applyGravityAndMove)
 	}
@@ -230,9 +248,42 @@ Key injected methods include:
 - **`destroyEntity()`**: Queue an entity to be destroyed.
 - **`addComponent()`**: Queue component to be added.
 
+### Dirty Tracking
+
+**Broad-Phase Tracking (`modified` queries)**
+
+This is the primary method for reactive systems. A query with a `modified` clause will only match chunks where at least one entity has had that component's data changed since the system last ran.
+
+To trigger this, a system must explicitly mark a component type as dirty for a given chunk. This is typically done once per chunk, outside of the main entity loop.
+
+```javascript
+// In a system, after modifying data in a chunk:
+this.markComponentDirty(chunkId, position, frameContext.currentTick)
+```
+
+**Narrow-Phase Tracking (`isTrackable` components)**
+
+For more granular tracking, a component can be declared with `isTrackable: true` in its schema. This allocates a bitmask for each entity, allowing systems to identify exactly which entities have been marked as dirty.
+
+**[added] and [removed] reactive queries are not fully implemented \ tested yet.**
+
+
+
+```javascript
+// Mark a specific entity's component as dirty.
+this.markEntityDirty(chunkId, entityIndex, componentTypeId, frameContext.currentTick)
+
+// In another system, get a list of dirty entity indices for a chunk.
+const dirtyCount = this.getDirty(chunkId, componentTypeId, lastTick, currentTick, scratchBuffer)
+```
+
+__Until there is a proper doc - information on masking in (`/app/client/Managers/EntityMaskManager.js`)__
+
 ### Deferred Structural Changes
 
-All structural changes (creating/destroying entities, adding/removing components) are deferred. When a system calls a method like `createEntity`, it records a command in a `CommandBuffer` to be executed at the end of a frame.
+All structural changes (creating/destroying entities, adding/removing components) are deferred. When system calls a method like `createEntity`, it records a command in a `CommandBuffer` to be executed before visual group.
+
+All dirty tracking handled automatically if run through command buffer.
 
 ### Prefab Definitions
 

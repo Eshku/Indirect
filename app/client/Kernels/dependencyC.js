@@ -7,8 +7,8 @@
 export function dependencyC(payload, systemContext, kernelContext) {
 	const { velocity } = systemContext
 
-	const chunk = kernel.getChunkView(payload)
-	const velocities = chunk.componentData[velocity]
+	const chunkId = payload
+	const velocities = self.kernel.getComponentData(chunkId, velocity)
 	const value = velocities.x[0]
 
 	const expectedReadValue = 456

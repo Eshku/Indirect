@@ -30,18 +30,22 @@ export class HealthSystem {
 		this.playerQuery = this.getQuery({ with: [playerTag] })
 		this.playerId = this.playerQuery.getSingleEntity()
 
-		this.scratchBuffer = this.getScratchBuffer(health)
+		this.scratchBuffer = this.createScratchBuffer()
 	}
 
 	update({ currentTick, lastTick }) {
-		for (const chunk of this.healthQuery.iter()) {
-			const healths = chunk.componentData[health]
-			const states = chunk.componentData[lifecycleState]
-			const changedCount = chunk.getChangedIndices(health, lastTick, this.scratchBuffer)
+		const changedChunkIds = this.healthQuery.getChunks(lastTick, currentTick)
 
-			for (let i = 0; i < changedCount; i++) {
-				const indexInChunk = this.scratchBuffer[i]
-				const entityId = chunk.entities[indexInChunk]
+		for (let i = 0; i < changedChunkIds.length; i++) {
+			const chunkId = changedChunkIds[i]
+			const healths = this.getComponentData(chunkId, health)
+			const states = this.getComponentData(chunkId, lifecycleState)
+			const entities = this.getEntities(chunkId)
+			const changedCount = this.getDirty(chunkId, health, lastTick, currentTick, this.scratchBuffer)
+			let wasChunkModified = false
+
+			for (let j = 0; j < changedCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
 
 				// Check if health has dropped to or below zero.
 				if (healths.current[indexInChunk] <= 0) {
@@ -49,9 +53,16 @@ export class HealthSystem {
 					// redundant commands for entities already dying or pooled.
 					if ((states.flags[indexInChunk] & LIFECYCLE.ACTIVE) !== 0) {
 						states.flags[indexInChunk] = LIFECYCLE.DYING
-						chunk.markEntityDirty(indexInChunk, lifecycleState, currentTick)
+						this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
+						wasChunkModified = true
 					}
 				}
+			}
+
+			// If any entity in this chunk had its lifecycle state changed, we must perform a
+			// broad-phase dirty mark so that reactive systems like PoolingSystem will process this chunk.
+			if (wasChunkModified) {
+				this.markComponentDirty(chunkId, lifecycleState, currentTick)
 			}
 		}
 	}

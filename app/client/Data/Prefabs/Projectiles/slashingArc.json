@@ -11,7 +11,6 @@
 		"collisionLayer": { "group": 4, "mask": 2 },
 		"aabb": {},
 		"range": {},
-		"debugDrawCollider": {},
 		"damageCollisionBuffer": {},
 		"hitHistory": {},
 		"distanceTraveled": { "value": 0 },

@@ -28,11 +28,14 @@ export class ApplyVelocity {
 		// This is a high-volatility system. We assume most entities are moving.
 		// We do not use a reactive query and we do not mark any data as dirty.
 		// The corresponding reader system (SyncTransforms) will also be non-reactive.
-		for (const chunk of this.query.iter()) {
-			const posArrays = chunk.componentData[position]
-			const velArrays = chunk.componentData[velocity]
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const posArrays = this.getComponentData(chunkId, position)
+			const velArrays = this.getComponentData(chunkId, velocity)
+			const chunkSize = this.getChunkSize(chunkId)
 
-			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
+			for (let indexInChunk = 0; indexInChunk < chunkSize; indexInChunk++) {
 				posArrays.x[indexInChunk] += velArrays.x[indexInChunk] * deltaTime
 				posArrays.y[indexInChunk] += velArrays.y[indexInChunk] * deltaTime
 			}

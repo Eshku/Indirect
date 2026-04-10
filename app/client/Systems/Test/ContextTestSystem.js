@@ -81,8 +81,9 @@ export class ContextTestSystem {
 
 	destroy() {
 		// Clean up the test entity on HMR.
-		for (const chunk of this.query.iter()) {
-			this.destroyEntitiesInChunk(chunk)
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			this.destroyEntitiesInChunk(chunkIds[i])
 		}
 		console.log('[ContextTestSystem] Destroyed test entity.')
 	}

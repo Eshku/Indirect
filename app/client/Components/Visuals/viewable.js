@@ -5,6 +5,6 @@
  */
 
 export const viewable = {
-    isTrackable: true,
+    meta: { isTrackable: true },
     spriteRef: { type: 'u32', default: 0 },
 }

@@ -26,15 +26,17 @@ export class SpinningSystem {
 	}
 
 	update({ deltaTime, currentTick }) {
-		for (const chunk of this.query.iter()) {
-			const rotationArrays = chunk.componentData[rotation]
-			const spinningArrays = chunk.componentData[spinning]
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const rotationArrays = this.getComponentData(chunkId, rotation)
+			const spinningArrays = this.getComponentData(chunkId, spinning)
 
 			const angle = rotationArrays.angle
 			const rate = spinningArrays.rate
 
-			for (let i = 0; i < chunk.size; i++) {
-				angle[i] += rate[i] * deltaTime
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
+				angle[j] += rate[j] * deltaTime
 			}
 		}
 	}

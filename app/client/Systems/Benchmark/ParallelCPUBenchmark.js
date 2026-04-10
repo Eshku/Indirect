@@ -50,8 +50,10 @@ export class ParallelCPUBenchmark {
 	}
 
 	destroy() {
-		for (const chunk of this.query.iter()) {
-			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			if (this.getChunkSize(chunkId) > 0) this.destroyEntitiesInChunk(chunkId)
 		}
 	}
 }

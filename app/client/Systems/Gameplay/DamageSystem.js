@@ -20,29 +20,32 @@ const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 
 /**
  * Applies damage to entities based on collision events.
- * It reads the CollisionBuffer of entities that can deal damage and,
- * for each collision, reduces the health of the target entity.
- * This system iterates over entities that can *receive* damage, checks their collision
- * buffer, and accumulates damage from any colliding entities that have a `Damage` component.
+ * It has specialized, optimized paths for handling player damage (single-target,
+ * invulnerability frames) and non-player damage (multi-target, accumulation).
  */
 export class DamageSystem {
 	static dependencies = {
-		// Must run after CollisionSystem populates the buffers.
+		// Must run after collisions are detected.
 		runsAfter: [CollisionDetectionSystem],
 		update: {
-			reads: [health, damageCollisionBuffer, lifecycleState, damage, hitFlash, immunity, playerTag], // damageCollisionBuffer is still read, but the query is now reactive
-			writes: [health, hitHistory, immunity, hitFlash], // This system modifies health, history, and can enable invuln/hitflash.
+			reads: [health, damageCollisionBuffer, lifecycleState, damage, hitFlash, immunity, playerTag], 
+			writes: [health, hitHistory, immunity, hitFlash], 
 		},
 	}
 
 	init() {
-		// Query for active entities that can receive damage.
-		// Since all damageable entities (including the player) now have `hitFlash`,
-		// we can simplify the query to require it.
+		// A reactive query for the player entity.
+		this.playerQuery = this.getQuery({
+			with: [playerTag, damageable, health, damageCollisionBuffer, lifecycleState, hitFlash, immunity],
+			without: [isPooled],
+			modified: [damageCollisionBuffer],
+		})
+
+		// A reactive query for active, non-player entities that can receive damage.
 		this.receiversQuery = this.getQuery({
 			with: [damageable, health, damageCollisionBuffer, lifecycleState, hitFlash],
-			without: [isPooled],
-			modified: [damageCollisionBuffer], // Only process entities whose collision buffer has changed.
+			without: [isPooled, playerTag],
+			modified: [damageCollisionBuffer],
 		})
 
 		// Query for all entities that can deal damage.
@@ -50,11 +53,6 @@ export class DamageSystem {
 			with: [damage], // We don't need hitHistory here, we'll look it up on demand.
 			without: [isPooled],
 		})
-
-		// A single query for the player to get their ID and immunity state.
-		this.playerQuery = this.getQuery({ with: [playerTag, immunity] })
-		this.playerId = this.playerQuery.getSingleEntity()
-		this.isPlayerInvulnerable = false // A cache for the player's state, updated each frame.
 
 		// Query for piercing entities to cache their hit history data.
 		this.piercingDamagersQuery = this.getQuery({
@@ -70,25 +68,39 @@ export class DamageSystem {
 		this.hitHistoryChunkCache = new Map()
 		this.hitHistoryIndexCache = new Map()
 
+		// A set to track which chunks have had their health component modified this frame.
+		this.modifiedHealthChunks = new Set()
+
 		// --- State for allocation-free damage accumulation ---
 		// These are reused in the update loop to avoid creating new objects/sets per entity.
 		this.accumulatedDamage = 0
 		this.damagersToUpdate = new Set()
-		this.scratchBuffer = this.getScratchBuffer(damageCollisionBuffer)
+		// State for the player-specific damage path.
+		this.foundDamageValue = 0
+		this.foundDamagerId = null
+
+		this.scratchBuffer = this.createScratchBuffer()
 	}
 
 	/**
 	 * The main update loop, organized into clear phases.
 	 */
 	update({ currentTick, lastTick }) {
+		this.modifiedHealthChunks.clear()
+
 		// --- 1. Gather Phase ---
-		// Cache all relevant data from damagers and the player to avoid lookups in the main loop.
+		// Cache all relevant data from damagers to avoid lookups in the processing loops.
 		this._cacheDamagerData()
-		this._cachePlayerState()
 
 		// --- 2. Scatter Phase ---
-		// Iterate through entities that can receive damage and apply it.
+		// Process player and non-player entities in their own optimized paths.
+		this._processPlayer(currentTick, lastTick)
 		this._processReceivers(currentTick, lastTick)
+
+		// --- 3. Broad-Phase Dirty Marking ---
+		for (const chunkId of this.modifiedHealthChunks) {
+			this.markComponentDirty(chunkId, health, currentTick)
+		}
 	}
 
 	/**
@@ -98,33 +110,65 @@ export class DamageSystem {
 	 */
 	_cacheDamagerData() {
 		this.damageCache.clear()
-		for (const chunk of this.damagersQuery.iter()) {
-			const damages = chunk.componentData[damage]
-			for (let i = 0; i < chunk.size; i++) {
-				this.damageCache.set(chunk.entities[i], damages.value[i])
+		const damagerChunkIds = this.damagersQuery.getChunks()
+		for (let i = 0; i < damagerChunkIds.length; i++) {
+			const chunkId = damagerChunkIds[i]
+			const damages = this.getComponentData(chunkId, damage)
+			const entities = this.getEntities(chunkId)
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
+				this.damageCache.set(entities[j], damages.value[j])
 			}
 		}
 
 		this.hitHistoryChunkCache.clear()
 		this.hitHistoryIndexCache.clear()
-		for (const chunk of this.piercingDamagersQuery.iter()) {
-			for (let i = 0; i < chunk.size; i++) {
-				const entityId = chunk.entities[i]
-				// Cache the chunk and index for zero-allocation access later.
-				this.hitHistoryChunkCache.set(entityId, chunk)
-				this.hitHistoryIndexCache.set(entityId, i)
+		const piercingChunkIds = this.piercingDamagersQuery.getChunks()
+		for (let i = 0; i < piercingChunkIds.length; i++) {
+			const chunkId = piercingChunkIds[i]
+			const entities = this.getEntities(chunkId)
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
+				const entityId = entities[j]
+				this.hitHistoryChunkCache.set(entityId, chunkId)
+				this.hitHistoryIndexCache.set(entityId, j)
 			}
 		}
 	}
 
-	/**
-	 * Caches the player's current invulnerability state.
-	 * @private
-	 */
-	_cachePlayerState() {
-		this.isPlayerInvulnerable = false
-		const playerChunk = this.playerQuery.getSingleChunk()
-		this.isPlayerInvulnerable = playerChunk.isComponentEnabled(0, immunity)
+	_processPlayer(currentTick, lastTick) {
+		const playerChunkIds = this.playerQuery.getChunks()
+		if (playerChunkIds.length === 0) return
+
+		const playerChunkId = playerChunkIds[0]
+		const changedCount = this.getDirty(
+			playerChunkId,
+			damageCollisionBuffer,
+			lastTick,
+			currentTick,
+			this.scratchBuffer,
+		)
+
+		if (changedCount === 0) return
+
+		const states = this.getComponentData(playerChunkId, lifecycleState)
+		const isPlayerActive = (states.flags[0] & LIFECYCLE.ACTIVE) !== 0
+		const isPlayerInvulnerable = this.isComponentEnabled(playerChunkId, 0, immunity)
+
+		if (isPlayerActive && !isPlayerInvulnerable) {
+			this._applyDamageToPlayer(playerChunkId, currentTick)
+		}
+	}
+
+	_applyDamageToPlayer(playerChunkId, currentTick) {
+		this._findFirstDamager(playerChunkId)
+
+		if (this.foundDamageValue > 0) {
+			const healths = this.getComponentData(playerChunkId, health)
+			healths.current[0] -= this.foundDamageValue
+			this.markEntityDirty(playerChunkId, 0, health, currentTick)
+			this.modifiedHealthChunks.add(playerChunkId)
+			this._triggerPlayerInvulnerability(playerChunkId)
+			this._triggerHitFlash(this.getEntities(playerChunkId)[0], playerChunkId, 0)
+		}
 	}
 
 	/**
@@ -133,17 +177,25 @@ export class DamageSystem {
 	 * @private
 	 */
 	_processReceivers(currentTick, lastTick) {
-		for (const chunk of this.receiversQuery.iter()) {
-			const states = chunk.componentData[lifecycleState]
+		const receiverChunkIds = this.receiversQuery.getChunks()
+		for (let i = 0; i < receiverChunkIds.length; i++) {
+			const chunkId = receiverChunkIds[i]
+			const states = this.getComponentData(chunkId, lifecycleState)
 			// Get only the indices of entities whose collision buffer has changed.
-			const changedCount = chunk.getChangedIndices(damageCollisionBuffer, lastTick, this.scratchBuffer)
+			const changedCount = this.getDirty(
+				chunkId,
+				damageCollisionBuffer,
+				lastTick,
+				currentTick,
+				this.scratchBuffer,
+			)
 
-			for (let i = 0; i < changedCount; i++) {
-				const indexInChunk = this.scratchBuffer[i]
+			for (let j = 0; j < changedCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
 
 				// Only process entities that are currently active.
 				if ((states.flags[indexInChunk] & LIFECYCLE.ACTIVE) !== 0) {
-					this._applyDamageToReceiver(chunk, indexInChunk, currentTick)
+					this._applyDamageToReceiver(chunkId, indexInChunk, currentTick)
 				}
 			}
 		}
@@ -151,47 +203,32 @@ export class DamageSystem {
 
 	/**
 	 * Processes a single damage-receiving entity.
-	 * @param {import('@managers/QueryManager/ChunkView.js').ChunkView} chunk
+	 * @param {number} chunkId
 	 * @param {number} indexInChunk
 	 * @param {number} currentTick
 	 * @private
 	 */
-	_applyDamageToReceiver(chunk, indexInChunk, currentTick) {
-		const receiverEntityId = chunk.entities[indexInChunk]
-		const isPlayer = receiverEntityId === this.playerId
-
-		// Early exit for invulnerable player.
-		if (isPlayer && this.isPlayerInvulnerable) {
-			return
-		}
+	_applyDamageToReceiver(chunkId, indexInChunk, currentTick) {
+		const receiverEntityId = this.getEntities(chunkId)[indexInChunk]		
 
 		// This method now has a side effect: it populates `this.accumulatedDamage`
 		// and `this.damagersToUpdate` instead of returning a new object.
-		this._accumulateDamage(receiverEntityId, chunk, indexInChunk, isPlayer)
+		this._accumulateDamageForReceiver(receiverEntityId, chunkId, indexInChunk)
 
 		if (this.accumulatedDamage > 0) {
-			const healths = chunk.componentData[health]
+			const healths = this.getComponentData(chunkId, health)
 			const newHealth = healths.current[indexInChunk] - this.accumulatedDamage
 
-			// Direct Write: Update health directly in the component array. This is much faster
-			// than using the command buffer via `setComponentData`.
 			healths.current[indexInChunk] = newHealth
-			// Mark Dirty: Manually notify the engine of the change for reactive systems (like HealthSystem).
-			chunk.markEntityDirty(indexInChunk, health, currentTick)
+			this.markEntityDirty(chunkId, indexInChunk, health, currentTick)
+			this.modifiedHealthChunks.add(chunkId)
 
-			// Trigger player-specific effects.
-			if (isPlayer) {
-				this._triggerPlayerInvulnerability(chunk, indexInChunk)
-				// Instantly update the local cache to prevent further damage within this same frame.
-				this.isPlayerInvulnerable = true
-			}
-
-			//show ret tint unconditionally.
-			this._triggerHitFlash(chunk, indexInChunk)
+			//show red tint unconditionally.
+			this._triggerHitFlash(receiverEntityId, chunkId, indexInChunk)
 
 			// Update hit history for all damagers that landed a hit.
 			for (const damagerId of this.damagersToUpdate) {
-				this._addHitToHistory(damagerId, receiverEntityId, currentTick)
+				this._recordPiercingHit(damagerId, receiverEntityId, currentTick)
 			}
 		}
 	}
@@ -201,12 +238,12 @@ export class DamageSystem {
 	 * This method has a side effect: it populates `this.accumulatedDamage` and `this.damagersToUpdate`.
 	 * @private
 	 */
-	_accumulateDamage(receiverEntityId, chunk, indexInChunk, isPlayer) {
+	_accumulateDamageForReceiver(receiverEntityId, chunkId, indexInChunk) {
 		// Reset the shared state for this entity.
 		this.accumulatedDamage = 0
 		this.damagersToUpdate.clear()
 
-		const buffers = chunk.componentData[damageCollisionBuffer]
+		const buffers = this.getComponentData(chunkId, damageCollisionBuffer)
 		const collisionCount = buffers.count[indexInChunk]
 
 		if (collisionCount === 0) {
@@ -245,7 +282,7 @@ export class DamageSystem {
 
 			// Skip if we've already processed this damager for this receiver this frame,
 			// or if the damager's hit history shows it already hit this receiver.
-			if (this.damagersToUpdate.has(damagerEntityId) || this._hasAlreadyHit(damagerEntityId, receiverEntityId)) {
+			if (this.damagersToUpdate.has(damagerEntityId) || this._isPiercingHitInvalid(damagerEntityId, receiverEntityId)) {
 				continue
 			}
 
@@ -253,55 +290,70 @@ export class DamageSystem {
 			if (damageValue > 0) {
 				this.accumulatedDamage += damageValue
 				this.damagersToUpdate.add(damagerEntityId)
+			}
+		}
+	}
+	
+	_findFirstDamager(playerChunkId) {
+		this.foundDamageValue = 0
+		this.foundDamagerId = null
 
-				if (isPlayer) {
-					// For the player, only apply the first valid source of damage per frame and stop.
-					return
-				}
+		const buffers = this.getComponentData(playerChunkId, damageCollisionBuffer)
+		const collisionCount = buffers.count[0]
+
+		for (let i = 0; i < collisionCount; i++) {
+			let damagerId
+			switch (i) {
+				case 0: damagerId = buffers.event0[0]; break
+				case 1: damagerId = buffers.event1[0]; break
+				case 2: damagerId = buffers.event2[0]; break
+				case 3: damagerId = buffers.event3[0]; break
+				case 4: damagerId = buffers.event4[0]; break
+				case 5: damagerId = buffers.event5[0]; break
+				case 6: damagerId = buffers.event6[0]; break
+				case 7: damagerId = buffers.event7[0]; break
+			}
+
+			const damageValue = this.damageCache.get(damagerId)
+			if (damageValue > 0) {
+				this.foundDamageValue = damageValue
+				this.foundDamagerId = damagerId
+				return
 			}
 		}
 	}
 
-	/**
-	 * Issues commands to enable the player's invulnerability component and set its timer.
-	 * @private
-	 */
-	_triggerPlayerInvulnerability(playerChunk, indexInChunk) {
-		const immunities = playerChunk.componentData[immunity]
-
-		// Set the timer to its max duration and enable the component.
-		immunities.timer[indexInChunk] = immunities.duration[indexInChunk]
-
-		// Direct Write: Enable the component immediately. This avoids the one-tick delay
-		// of the command buffer, ensuring InvulnerabilitySystem sees the change in the same tick.
-		playerChunk.enableComponent(indexInChunk, immunity)
+	_triggerPlayerInvulnerability(playerChunkId) {
+		const immunities = this.getComponentData(playerChunkId, immunity)
+		immunities.timer[0] = immunities.duration[0]
+		this.enableComponent(playerChunkId, 0, immunity)
 	}
 
 	/**
 	 * Issues commands to enable an entity's hitFlash component and set its timer.
 	 * @private
 	 */
-	_triggerHitFlash(chunk, indexInChunk) {
-		const hitFlashes = chunk.componentData[hitFlash]
+	_triggerHitFlash(receiverEntityId, chunkId, indexInChunk) {
+		const hitFlashes = this.getComponentData(chunkId, hitFlash)
 
 		hitFlashes.timer[indexInChunk] = hitFlashes.duration[indexInChunk]
-
-		chunk.enableComponent(indexInChunk, hitFlash)
+		this.enableComponent(chunkId, indexInChunk, hitFlash)
 	}
 
 	/**
-	 * Checks if a damager has a hitHistory component and if it contains the receiver's ID.
+	 * For piercing projectiles, checks if the projectile has already hit the receiver.
+	 * For non-piercing damagers, this always returns false.
 	 * @private
 	 */
-	_hasAlreadyHit(damagerId, receiverId) {
-		const historyChunk = this.hitHistoryChunkCache.get(damagerId)
-		if (!historyChunk) {
+	_isPiercingHitInvalid(damagerId, receiverId) {
+		const historyChunkId = this.hitHistoryChunkCache.get(damagerId)
+		if (!historyChunkId) {
 			// This is not a piercing projectile, so it can't have a "hit history".
 			return false // It can hit.
 		}
 
 		const indexInChunk = this.hitHistoryIndexCache.get(damagerId)
-		const histories = historyChunk.componentData[hitHistory]
+		const histories = this.getComponentData(historyChunkId, hitHistory)
 		const count = histories.count[indexInChunk]
 
 		if (count === 0) {
@@ -350,17 +402,17 @@ export class DamageSystem {
 	}
 
 	/**
-	 * Adds a receiver's ID to a damager's hitHistory buffer via a direct write.
+	 * If a damager is a piercing projectile, this adds the receiver's ID to its hit history.
 	 * @private
 	 */
-	_addHitToHistory(damagerId, receiverId, currentTick) {
-		const historyChunk = this.hitHistoryChunkCache.get(damagerId)
-		if (!historyChunk) {
+	_recordPiercingHit(damagerId, receiverId, currentTick) {
+		const historyChunkId = this.hitHistoryChunkCache.get(damagerId)
+		if (!historyChunkId) {
 			return // Does not have the component.
 		}
 
 		const indexInChunk = this.hitHistoryIndexCache.get(damagerId)
-		const histories = historyChunk.componentData[hitHistory]
+		const histories = this.getComponentData(historyChunkId, hitHistory)
 		const count = histories.count[indexInChunk]
 		const capacity = histories.capacity[indexInChunk]
 
@@ -422,6 +474,6 @@ export class DamageSystem {
 				break
 		}
 
-		historyChunk.markEntityDirty(indexInChunk, hitHistory, currentTick)
+		this.markEntityDirty(historyChunkId, indexInChunk, hitHistory, currentTick)
 	}
 }

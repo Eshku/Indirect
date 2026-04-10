@@ -225,10 +225,6 @@ export class PrefabManager {
 
 		const mergedComponents = this._deepMerge(baseComponents, processedOwnComponents)
 
-		// Automatically add the Prefab component to the root entity's data.
-		// This ensures every instantiated entity knows its numeric prefab ID.
-		mergedComponents.Prefab = { id: id }
-
 		this.processedPrefabCache[id] = mergedComponents
 
 		return mergedComponents

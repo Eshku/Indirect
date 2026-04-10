@@ -71,13 +71,15 @@ export class SpatialHashingSystem {
 		// --- 1. Clear and Reposition Phase ---
 
 		// This is a simple query that will always find the player.
-		for (const chunk of this.playerQuery.iter()) {
-			const pos = chunk.componentData[this.positionId]
-			if (chunk.size > 0) {
+		const playerChunkIds = this.playerQuery.getChunks()
+		for (let i = 0; i < playerChunkIds.length; i++) {
+			const chunkId = playerChunkIds[i]
+			if (this.getChunkSize(chunkId) > 0) { // Check if chunk is not empty
+				const pos = this.getComponentData(chunkId, this.positionId)
 				// We found the player. Update our last known position.
 				this.lastPlayerX = pos.x[0]
 				this.lastPlayerY = pos.y[0]
-				break // Only one player.
+				break // Only one player
 			}
 		}
 
@@ -91,22 +93,26 @@ export class SpatialHashingSystem {
 		// --- 2. Populate Phase ---
 
 		// Process all collidable entities in a single, efficient loop.
-		for (const chunk of this.collidablesQuery.iter()) {
-			const positions = chunk.componentData[this.positionId]
+		const collidableChunkIds = this.collidablesQuery.getChunks()
+		for (let i = 0; i < collidableChunkIds.length; i++) {
+			const chunkId = collidableChunkIds[i]
+			const positions = this.getComponentData(chunkId, this.positionId)
+			const entities = this.getEntities(chunkId)
+			const chunkSize = this.getChunkSize(chunkId)
 
 			// These components may or may not exist on the chunk's archetype.
-			const circleColliders = chunk.componentData[this.circleColliderId]
-			const boxColliders = chunk.componentData[this.boxColliderId]
-			const orientedBoxColliders = chunk.componentData[this.orientedBoxColliderId]
-			const rotations = chunk.componentData[this.rotationId]
+			const circleColliders = this.getComponentData(chunkId, this.circleColliderId)
+			const boxColliders = this.getComponentData(chunkId, this.boxColliderId)
+			const orientedBoxColliders = this.getComponentData(chunkId, this.orientedBoxColliderId)
+			const rotations = this.getComponentData(chunkId, this.rotationId)
 
-			const aabbs = chunk.componentData[this.aabbId]
+			const aabbs = this.getComponentData(chunkId, this.aabbId)
 
 			// This loop calculates a single, unified AABB for each entity,
 			// correctly encompassing all of its potential collider shapes.
-			for (let i = 0; i < chunk.size; i++) {
-				const x = positions.x[i]
-				const y = positions.y[i]
+			for (let j = 0; j < chunkSize; j++) {
+				const x = positions.x[j]
+				const y = positions.y[j]
 
 				let minX = Infinity,
 					minY = Infinity,
@@ -116,7 +122,7 @@ export class SpatialHashingSystem {
 
 				// Accumulate bounds from circle collider if it exists
 				if (circleColliders) {
-					const radius = circleColliders.radius[i]
+					const radius = circleColliders.radius[j]
 					minX = Math.min(minX, x - radius)
 					minY = Math.min(minY, y - radius)
 					maxX = Math.max(maxX, x + radius)
@@ -126,8 +132,8 @@ export class SpatialHashingSystem {
 
 				// Accumulate bounds from box collider if it exists
 				if (boxColliders) {
-					const halfWidth = boxColliders.width[i] / 2
-					const halfHeight = boxColliders.height[i] / 2
+					const halfWidth = boxColliders.width[j] / 2
+					const halfHeight = boxColliders.height[j] / 2
 					minX = Math.min(minX, x - halfWidth)
 					minY = Math.min(minY, y - halfHeight)
 					maxX = Math.max(maxX, x + halfWidth)
@@ -137,9 +143,9 @@ export class SpatialHashingSystem {
 
 				// Accumulate bounds from oriented box collider if it exists
 				if (orientedBoxColliders) {
-					const angle = rotations.angle[i]
-					const halfWidth = orientedBoxColliders.width[i] / 2
-					const halfHeight = orientedBoxColliders.height[i] / 2
+					const angle = rotations.angle[j]
+					const halfWidth = orientedBoxColliders.width[j] / 2
+					const halfHeight = orientedBoxColliders.height[j] / 2
 
 					const c = Math.abs(Math.cos(angle))
 					const s = Math.abs(Math.sin(angle))
@@ -156,12 +162,12 @@ export class SpatialHashingSystem {
 				// Only add to grid if a collider was found and bounds are valid.
 				if (hasCollider) {
 					// Write the calculated AABB to the component for other systems to use.
-					aabbs.minX[i] = minX
-					aabbs.minY[i] = minY
-					aabbs.maxX[i] = maxX
-					aabbs.maxY[i] = maxY
+					aabbs.minX[j] = minX
+					aabbs.minY[j] = minY
+					aabbs.maxX[j] = maxX
+					aabbs.maxY[j] = maxY
 
-					this.grid.add(chunk.entities[i], chunk.chunkId, i, minX, minY, maxX, maxY)
+					this.grid.add(entities[j], chunkId, j, minX, minY, maxX, maxY)
 				}
 			}
 		}

@@ -32,7 +32,10 @@ export class DependencySystemA {
 		// This init runs once when the system is first loaded.
 		// To make the test repeatable across hot-swaps, we first destroy any entities
 		// from a previous run of this test system before creating new ones.
-		for (const chunk of this.query.iter()) this.destroyEntitiesInChunk(chunk)
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			this.destroyEntitiesInChunk(chunkIds[i])
+		}
 
 		// Create a batch of identical entities for the test.
 		this.createEntities(this.creationPayload, 1000)

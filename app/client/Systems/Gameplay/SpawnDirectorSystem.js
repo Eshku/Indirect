@@ -1,6 +1,8 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, entityManager, gameManager, physicsManager, prefabManager } = engine.getManagers()
 
+const { SpriteFactorySystem, RenderLayerSystem } = ecs.getSystemIDs()
+
 const {
 	spawnDirector,
 	playerTag,
@@ -45,10 +47,6 @@ export class SpawnDirectorSystem {
 
 		this.playerId = this.playerQuery.getSingleEntity()
 
-		if (!this.playerId) {
-			console.error('DirectorSystem: Could not find player entity during initialization.')
-		}
-
 		// The SpawnDirector entity is now created from a prefab in client.js
 		// to ensure it exists on the first frame.
 		// --- Define and pre-compile all spawnable enemies ---
@@ -82,8 +80,6 @@ export class SpawnDirectorSystem {
 		// Filter out any enemies that failed to compile.
 		this.spawnableEnemies = this.spawnableEnemies.filter(e => e.payload)
 
-		// Pre-compile a single payload to reset all necessary components on a reused enemy.
-		// This is much more efficient than sending multiple `setComponentData` commands.
 		const { payload: reuseEnemyPayload, mutators: reuseEnemyMutators } = this.compile({
 			lifecycleState: { flags: LIFECYCLE.ACTIVE },
 			velocity: { x: 0, y: 0 },
@@ -112,12 +108,20 @@ export class SpawnDirectorSystem {
 
 		// A reusable map to avoid allocations in the spawn loop.
 		this.availablePooledEnemies = new Map()
+
+		// --- Spawn Throttling ---
+		// A queue to hold spawn requests, allowing us to throttle entity creation.
+		this.spawnQueue = []
+		this.maxSpawnsPerFrame = 100 // The maximum number of entities to spawn in a single frame.
+		this.spawnIndexCounter = 0 // A counter for positioning entities within a cluster.
 	}
 
 	update({ deltaTime, currentTick }) {
 		// This system only acts if a SpawnDirector entity exists.
-		for (const chunk of this.directorQuery.iter()) {
-			const directorState = chunk.componentData[spawnDirector]
+		const directorChunkIds = this.directorQuery.getChunks()
+		for (let i = 0; i < directorChunkIds.length; i++) {
+			const chunkId = directorChunkIds[i]
+			const directorState = this.getComponentData(chunkId, spawnDirector)
 
 			const currentBudget = directorState.threatBudget[0]
 			let growthRate = directorState.threatGrowthRate[0]
@@ -139,6 +143,9 @@ export class SpawnDirectorSystem {
 				directorState.threatBudget[0] -= spentBudget
 			}
 		}
+
+		// Process a batch of spawn requests from the queue each frame.
+		this._processSpawnQueue(currentTick)
 	}
 
 	/**
@@ -159,7 +166,16 @@ export class SpawnDirectorSystem {
 			return 0 // Could not spawn, so no budget was spent.
 		}
 
-		this._spawnEnemyCluster(chosenEnemies, spawnLocation, currentTick)
+		// If the queue was empty, we are starting a new cluster, so reset the index.
+		if (this.spawnQueue.length === 0) {
+			this.spawnIndexCounter = 0
+		}
+
+		// Enqueue the spawn requests instead of spawning them directly.
+		for (const enemyInfo of chosenEnemies) {
+			this.spawnQueue.push({ enemyInfo, location: spawnLocation })
+		}
+
 		return spentBudget
 	}
 
@@ -173,10 +189,14 @@ export class SpawnDirectorSystem {
 		let playerX = 0
 		let playerY = 0
 		// This is a singleton query, so it will only run once.
-		for (const chunk of this.playerQuery.iter()) {
-			playerX = chunk.componentData[position].x[0]
-			playerY = chunk.componentData[position].y[0]
-		}
+		const playerChunkIds = this.playerQuery.getChunks()
+
+		const playerChunkId = playerChunkIds[0]
+
+		const playerPositions = this.getComponentData(playerChunkId, position)
+		playerX = playerPositions.x[0]
+		playerY = playerPositions.y[0]
+
 		const screen = gameManager.getApp().screen
 
 		const MAX_SPAWN_ATTEMPTS = 10
@@ -200,41 +220,44 @@ export class SpawnDirectorSystem {
 		return null // Failed to find a spot.
 	}
 
-	/**
-	 * Spawns a list of enemies in a spiral cluster pattern at a given location.
-	 * @param {object[]} enemiesToSpawn - An array of enemy info objects to spawn.
-	 * @param {{x: number, y: number}} location - The center of the spawn cluster.
-	 * @private
-	 */
-	_spawnEnemyCluster(enemiesToSpawn, location, currentTick) {
-		const separation = 48 // Base separation distance between enemies.
-		const phi = (1 + Math.sqrt(5)) / 2 // Golden ratio for the spiral.
-
-		if (enemiesToSpawn.length === 0) {
-			return
-		}
-
-		// --- Generic Pooling: Gather all available enemies by prefabId in a single pass ---
+	_gatherPooledEnemies() {
 		this.availablePooledEnemies.clear()
 
-		for (const chunk of this.pooledEnemyQuery.iter()) {
-			const prefabs = chunk.componentData[prefab]
+		const pooledChunkIds = this.pooledEnemyQuery.getChunks()
+		for (let i = 0; i < pooledChunkIds.length; i++) {
+			const chunkId = pooledChunkIds[i]
+			const prefabs = this.getComponentData(chunkId, prefab)
+			const healths = this.getComponentData(chunkId, health)
+			const entities = this.getEntities(chunkId)
+			const chunkSize = this.getChunkSize(chunkId)
 
-			const healths = chunk.componentData[health]
-			for (let i = 0; i < chunk.size; i++) {
-				const prefabId = prefabs.id[i]
+			for (let j = 0; j < chunkSize; j++) {
+				const prefabId = prefabs.id[j]
 				if (!this.availablePooledEnemies.has(prefabId)) {
 					this.availablePooledEnemies.set(prefabId, [])
 				}
-				this.availablePooledEnemies.get(prefabId).push({
-						entityId: chunk.entities[i],
-						maxHealth: healths.max[i],
-				})
+				this.availablePooledEnemies.get(prefabId).push({ entityId: entities[j], maxHealth: healths.max[j] })
 			}
 		}
+	}
 
-		for (let i = 0; i < enemiesToSpawn.length; i++) {
-			const enemyInfo = enemiesToSpawn[i]
+	_processSpawnQueue(currentTick) {
+		const processCount = Math.min(this.spawnQueue.length, this.maxSpawnsPerFrame)
+		if (processCount === 0) {
+			return
+		}
+
+		this._gatherPooledEnemies()
+
+		//! base separation on entity size? Prolly not worth it, just move up in
+		//! config, so can be hardcoded manually.
+		const separation = 48 // Base separation distance between enemies.
+		const phi = (1 + Math.sqrt(5)) / 2 // Golden ratio for the spiral.
+
+		for (let i = 0; i < processCount; i++) {
+			const request = this.spawnQueue.shift()
+			const { enemyInfo, location } = request
+			const index = this.spawnIndexCounter++
 			let reused = false
 
 			// Look up available entities using the numeric prefabId, not the string name.
@@ -245,7 +268,7 @@ export class SpawnDirectorSystem {
 					enemyToReuse.entityId,
 					enemyInfo,
 					location,
-					i,
+					index,
 					separation,
 					phi,
 					currentTick,
@@ -255,11 +278,10 @@ export class SpawnDirectorSystem {
 			}
 
 			if (!reused) {
-				this._createNewEnemy(enemyInfo, location, i, separation, phi, currentTick)
+				this._createNewEnemy(enemyInfo, location, index, separation, phi, currentTick)
 			}
 		}
 	}
-
 	_createNewEnemy(enemyInfo, location, index, separation, phi, currentTick) {
 		// Use a Fibonacci spiral (sunflower) pattern for natural-looking distribution.
 		const radius = Math.sqrt(index + 0.5) * separation
@@ -295,10 +317,11 @@ export class SpawnDirectorSystem {
 		// --- 3. Issue commands to reactivate and reset the entity's state ---
 		// This is a structural change that brings the entity back into the "active" world.
 		this.removeComponent(entityId, isPooled) // Structural change: bring it back to the active world.
+
 		// This single command updates all necessary components for the enemy's new life.
 		// It sets lifecycle to ACTIVE, resets velocity and tint to defaults, and applies
 		// the new position, health, and threat cost from the mutators.
-		this.setComponentsData(entityId, this.reuseEnemyPayload)
+		this.setComponents(entityId, this.reuseEnemyPayload)
 	}
 
 	/**

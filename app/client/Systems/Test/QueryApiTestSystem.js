@@ -1,13 +1,25 @@
 const { engine } = await import(`@client/Engine.js`)
-const { ecs } = engine.getManagers()
+const { ecs, componentManager } = engine.getManagers()
 
 const { position, queryTestTag } = ecs.getComponentIDs()
+const { queryApiTestKernel } = ecs.getKernelIDs()
 
 /**
  * A test system to validate the new Query API patterns, starting with
  * direct, non-generator-based chunk access.
  */
 export class QueryApiTestSystem {
+	static dependencies = {
+		queryApiTestKernel: {
+			// This kernel reads and writes position data.
+			reads: [position],
+			writes: [position],
+			context: {
+				position, // Pass the component ID to the kernel.
+			},
+		},
+	}
+
 	init() {
 		this.query = this.getQuery({
 			with: [position, queryTestTag],
@@ -28,30 +40,12 @@ export class QueryApiTestSystem {
 	}
 
 	update({ currentTick }) {
-		const matchingArchetypeIds = this.query.getArchetypes()
+		// The logic from the update loop is now being moved to the parallel kernel.
+		// We can leave this empty or use it for main-thread-only logic if needed.
+		// For this test, we will rely on the `schedule` method.
+	}
 
-		// --- Tier 1 "Stateless" API Example ---
-		// This is the fastest path for simple loops, avoiding the ChunkView overhead.
-		{
-			const matchingChunkIds = this.query.getChunks()
-
-			for (let i = 0; i < matchingChunkIds.length; i++) {
-				const chunkId = matchingChunkIds[i]
-
-				// It's good practice to check if the chunk is not empty.
-				const chunkSize = this.getChunkSize(chunkId)
-
-				// Get component data directly using the stateless helper.
-				const positions = this.getComponentData(chunkId, position)
-
-				// Perform work on the entities in this chunk.
-				for (let j = 0; j < chunkSize; j++) {
-					positions.x[j] += 0.1 // Pretend to read and write data.
-				}
-
-				// Mark the component as dirty for this chunk using the stateless helper.
-				this.markComponentDirty(chunkId, position, currentTick)
-			}
-		}
+	schedule(jobWriter) {
+		jobWriter.scheduleForEachChunk(this.query, queryApiTestKernel)
 	}
 }

@@ -8,11 +8,12 @@ export function parallelCpu(payload, systemContext, kernelContext) {
 	const { position, velocity } = systemContext
 	const { currentTick } = frameContext
 
-	const chunk = kernel.getChunkView(payload)
-	const positions = chunk.componentData[position]
-	const velocities = chunk.componentData[velocity]
+	const chunkId = payload
+	const positions = self.kernel.getComponentData(chunkId, position)
+	const velocities = self.kernel.getComponentData(chunkId, velocity)
+	const chunkSize = self.kernel.getChunkSize(chunkId)
 
-	for (let i = 0; i < chunk.size; i++) {
+	for (let i = 0; i < chunkSize; i++) {
 		// Read initial state once
 		let x = positions.x[i]
 		let y = velocities.y[i]
@@ -28,5 +29,5 @@ export function parallelCpu(payload, systemContext, kernelContext) {
 		// Write the final result once
 		positions.x[i] = x
 	}
-	chunk.markDirty(position, currentTick)
+	// Marking dirty from kernels is currently disabled.
 }

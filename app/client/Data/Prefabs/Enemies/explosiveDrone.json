@@ -10,6 +10,7 @@
 		"movementIntent": {},
 		"spriteDescriptor": { "assetName": "explosiveDrone" },
 		"layer": { "name": "enemies" },
+		"visibility": {},
 		"viewable": {},
 		"hitFlash": {},
 		"tint": {},

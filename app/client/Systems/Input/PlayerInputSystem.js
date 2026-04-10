@@ -31,14 +31,7 @@ export class PlayerInputSystem {
 			mainAttack: false,
 		}
 
-		this.playerId = null
-
-		findPlayer: for (const chunk of this.playerQuery.iter()) {
-			for (let i = 0; i < chunk.size; i++) {
-				this.playerId = chunk.entities[i]
-				break findPlayer
-			}
-		}
+		this.playerId = this.playerQuery.getSingleEntity()
 
 		if (!this.playerId) console.error('PlayerInputSystem: Could not find player entity during initialization.')
 		this.setupEventListeners()
@@ -98,20 +91,22 @@ export class PlayerInputSystem {
 
 		const mainAttackIntent = mainAttack ? 1 : 0
 
-		for (const chunk of this.playerQuery.iter()) {
-			const movementIntents = chunk.componentData[movementIntent]
-			const shootingIntents = chunk.componentData[shootingIntent]
+		const playerChunkIds = this.playerQuery.getChunks()
+		for (let i = 0; i < playerChunkIds.length; i++) {
+			const chunkId = playerChunkIds[i]
+			const movementIntents = this.getComponentData(chunkId, movementIntent)
+			const shootingIntents = this.getComponentData(chunkId, shootingIntent)
 
 			const intentsX = movementIntents.desiredX
 			const intentsY = movementIntents.desiredY
 			const actionsIntent = shootingIntents.shootingIntent
 
-			for (let i = 0; i < chunk.size; i++) {
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
 				// Since this is a high-volatility system for a singleton, we can
 				// perform an unconditional write to keep the loop branchless and simple.
-				intentsX[i] = intentX
-				intentsY[i] = intentY
-				actionsIntent[i] = mainAttackIntent
+				intentsX[j] = intentX
+				intentsY[j] = intentY
+				actionsIntent[j] = mainAttackIntent
 			}
 		}
 	}

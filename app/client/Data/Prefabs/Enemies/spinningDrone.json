@@ -11,6 +11,7 @@
 		"spinning": { "rate": 8 },
 		"spriteDescriptor": { "assetName": "spinningDrone" },
 		"layer": { "name": "enemies" },
+		"visibility": {},
 		"viewable": {},
 		"hitFlash": {},
 		"tint": {},

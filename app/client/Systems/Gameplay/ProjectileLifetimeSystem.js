@@ -25,21 +25,31 @@ export class ProjectileLifetimeSystem {
 	}
 
 	update({ deltaTime, currentTick }) {
-		for (const chunk of this.query.iter()) {
-			const velocities = chunk.componentData[velocity]
-			const ranges = chunk.componentData[range]
-			const distances = chunk.componentData[distanceTraveled]
-			const states = chunk.componentData[lifecycleState]
 
-			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
+		const chunkIds = this.query.getChunks()
+		
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const velocities = this.getComponentData(chunkId, velocity)
+			const ranges = this.getComponentData(chunkId, range)
+			const distances = this.getComponentData(chunkId, distanceTraveled)
+			const states = this.getComponentData(chunkId, lifecycleState)
+			const chunkSize = this.getChunkSize(chunkId)
+
+			for (let indexInChunk = 0; indexInChunk < chunkSize; indexInChunk++) {
+				
+				let chunkModified = false
 				const speed = Math.sqrt(velocities.x[indexInChunk] ** 2 + velocities.y[indexInChunk] ** 2)
 				distances.value[indexInChunk] += speed * deltaTime
 
 				if (distances.value[indexInChunk] >= ranges.value[indexInChunk]) {
-					// We must use setComponentData (not silent) here. This ensures that reactive
-					// systems like PoolingSystem are correctly notified of the state change to DYING.
 					states.flags[indexInChunk] = LIFECYCLE.DYING
-					chunk.markEntityDirty(indexInChunk, lifecycleState, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
+					chunkModified = true
+				}
+
+				if (chunkModified) {
+					this.markComponentDirty(chunkId, lifecycleState, currentTick)
 				}
 			}
 		}

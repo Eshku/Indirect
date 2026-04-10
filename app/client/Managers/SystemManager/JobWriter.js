@@ -11,6 +11,8 @@ import {
 	MAX_JOBS,
 } from './JobLayout.js'
 
+//! throw it into extends too?
+
 /**
  * A low-level, zero-allocation API for systems to schedule parallel jobs.
  * An instance of this class is passed to a system's `schedule()` method.
@@ -47,7 +49,9 @@ export class JobWriter {
 	 * @param {number} kernelId The numeric ID of the kernel to execute for each chunk.
 	 */
 	scheduleForEachChunk(query, kernelId) {
-		for (const chunkView of query.iter()) {
+		const chunkIds = query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
 			// Check capacity on each job creation to prevent buffer overflow.
 			if (this.jobCounter >= MAX_JOBS) {
 				throw new Error(
@@ -55,11 +59,9 @@ export class JobWriter {
 				)
 			}
 
-			// Inline the job creation logic to avoid per-job function call and check overhead.
-			const chunkId = chunkView.chunkId
 			const jobId = this.jobCounter
 			const jobOffset = jobId * JOB_STRIDE_IN_U32
-			const jobPayload = (JOB_TYPE.KERNEL << 24) | (chunkId || 0)
+			const jobPayload = (JOB_TYPE.KERNEL << 24) | chunkId
 
 			this.jobsView[jobOffset + JOB_AFFINITY_OFFSET] = JOB_AFFINITY.ANY_WORKER
 			this.jobsView[jobOffset + JOB_PAYLOAD_OFFSET] = jobPayload

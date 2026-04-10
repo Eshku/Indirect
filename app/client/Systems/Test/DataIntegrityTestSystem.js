@@ -111,10 +111,13 @@ export class DataIntegrityTestSystem {
 		} else {
 			// Destroy a large portion of existing entities.
 			const entitiesToDestroy = []
-			for (const chunk of this.churnQuery.iter()) {
-				for (let i = 0; i < chunk.size; i++) {
+			const churnChunkIds = this.churnQuery.getChunks()
+			for (let i = 0; i < churnChunkIds.length; i++) {
+				const chunkId = churnChunkIds[i]
+				const entities = this.getEntities(chunkId)
+				for (let j = 0; j < this.getChunkSize(chunkId); j++) {
 					if (Math.random() < this.destructionPercentage) {
-						entitiesToDestroy.push(chunk.entities[i])
+						entitiesToDestroy.push(entities[j])
 					}
 				}
 			}
@@ -138,17 +141,19 @@ export class DataIntegrityTestSystem {
 		// Only run the check periodically to avoid log spam.
 		if (currentTick % 60 !== 0) return
 
-		for (const chunk of this.query.iter()) {
-			const verifications = chunk.componentData[verification]
-			const churnDataComponent = chunk.componentData[churnData]
-			const entities = chunk.entities
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const verifications = this.getComponentData(chunkId, verification)
+			const churnDataComponent = this.getComponentData(chunkId, churnData)
+			const entities = this.getEntities(chunkId)
 
-			for (let i = 0; i < chunk.size; i++) {
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
 				// Check for failure status (-1) that hasn't been logged yet.
-				if (verifications.status[i] === -1) {
-					const entityId = entities[i]
-					const storedEntityId = churnDataComponent.entityId[i]
-					const storedTick = churnDataComponent.creationTick[i]
+				if (verifications.status[j] === -1) {
+					const entityId = entities[j]
+					const storedEntityId = churnDataComponent.entityId[j]
+					const storedTick = churnDataComponent.creationTick[j]
 
 					console.error(`[ChurnTest] DATA CORRUPTION DETECTED!`, {
 						entityId: entityId.toString(),
@@ -168,8 +173,9 @@ export class DataIntegrityTestSystem {
 
 	destroy() {
 		// HMR Cleanup: Destroy all entities created by this system.
-		for (const chunk of this.churnQuery.iter()) {
-			this.destroyEntitiesInChunk(chunk)
+		const chunkIds = this.churnQuery.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			this.destroyEntitiesInChunk(chunkIds[i])
 		}
 	}
 }

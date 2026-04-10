@@ -38,8 +38,6 @@ class WorkerEntry {
 		this.archetypeMap = null
 		this.spatialHashGrid = null
 
-		this.chunkViewPool = []
-
 		// --- Reusable Arrays to Reduce GC Pressure ---
 		// These are used in hot paths to avoid allocating new arrays on every job.
 		this.reusableUnlockedMTOJobs = []
@@ -140,7 +138,6 @@ class WorkerEntry {
 		const frameStateLayoutModuleUrl = new URL('../../Managers/SystemManager/FrameStateLayout.js', baseUrl)
 
 		try {
-			const chunkViewModuleUrl = new URL('../../Managers/QueryManager/ChunkView.js', baseUrl)
 			const blobUtilModuleUrl = new URL('../../Core/utils/blob.js', baseUrl)
 			const mpscQueueModuleUrl = new URL('../../Core/Algorithms/MPSCQueue.js', baseUrl)
 			const dequeModuleUrl = new URL('../../Core/Algorithms/WorkStealingDeque.js', baseUrl)
@@ -151,7 +148,6 @@ class WorkerEntry {
 			const spatialHashGridModuleUrl = new URL('../../Core/DataStructures/SpatialHashGrid.js', baseUrl)
 
 			const [
-				chunkViewModule,
 				blobUtilModule,
 				mpscQueueModule,
 				dequeModule,
@@ -163,7 +159,6 @@ class WorkerEntry {
 				xxhashModule,
 				kernelAPIModule,
 			] = await Promise.all([
-				import(chunkViewModuleUrl.href),
 				import(blobUtilModuleUrl.href),
 				import(mpscQueueModuleUrl.href),
 				import(dequeModuleUrl.href),
@@ -188,7 +183,6 @@ class WorkerEntry {
 				throw new Error('Failed to load FrameStateLayout constants.')
 			}
 
-			const { ChunkView } = chunkViewModule
 			const { importFromString } = blobUtilModule
 			const { MPSCQueue } = mpscQueueModule
 			const { WorkStealingDeque, NO_JOB_AVAILABLE } = dequeModule
@@ -213,13 +207,8 @@ class WorkerEntry {
 				this.logicRegistry[moduleName] = kernelModule
 			}
 
-			const CHUNK_VIEW_POOL_SIZE = 8 // A reasonable pool size for complex kernels.
-			for (let i = 0; i < CHUNK_VIEW_POOL_SIZE; i++) {
-				this.chunkViewPool.push(new ChunkView(entityStore))
-			}
-
 			// Make the parallel API globally available to all kernels in this worker.
-			self.kernel = new kernelAPIModule.Kernel({ pool: this.chunkViewPool })
+			self.kernel = new kernelAPIModule.Kernel({ entityStore })
 			this.spatialHashGrid = new SpatialHashGrid(spatialHashGridSABs)
 			self.spatialHashGrid = this.spatialHashGrid // Make it available on the global worker scope so kernels can access it.
 
@@ -517,12 +506,8 @@ class WorkerEntry {
 					const systemName = this.idToSystemName[systemId]
 					console.error(`[Worker ${self.id}] Could not find kernel function "${kernelName}" in module "${moduleName}" for system "${systemName}".`)
 				}
-			}
-		} else if (jobType === this.JOB_TYPE.MAINTENANCE) {
-			// payload is the chunkId
-			this.executeMaintenanceJob(payload, this.currentTick)
 		}
-
+	}
 		this.processDependents(jobId, threadId, frameId)
 
 		const newCompletedJobs = Atomics.add(this.frameState, this.FRAME_STATE_COMPLETED_JOBS_OFFSET, 1n) + 1n
@@ -582,43 +567,6 @@ class WorkerEntry {
 		// This is crucial to wake the main thread if it's sleeping and we just gave it an MTO job.
 		if (unlockedMTOJobs.length > 0 || unlockedAnyJobs.length > 0) {
 			this.wakeIdleThreads()
-		}
-	}
-
-	executeMaintenanceJob(chunkId, currentTick) {
-		const chunkMetadata = entityStore.chunkMetadata[chunkId]
-		if (!chunkMetadata) return
-
-		const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
-
-		// Calculate which history slots to saturate and clear
-		const oldestTickToOverwrite = currentTick + 1 - this.DIRTY_HISTORY_LENGTH
-		const saturatingTick = oldestTickToOverwrite + 1
-		const tickToClear = currentTick + 1
-
-		const oldestFrameIndex = ((oldestTickToOverwrite % this.DIRTY_HISTORY_LENGTH) + this.DIRTY_HISTORY_LENGTH) % this.DIRTY_HISTORY_LENGTH
-		const saturatingFrameIndex = ((saturatingTick % this.DIRTY_HISTORY_LENGTH) + this.DIRTY_HISTORY_LENGTH) % this.DIRTY_HISTORY_LENGTH
-		const clearFrameIndex = ((tickToClear % this.DIRTY_HISTORY_LENGTH) + this.DIRTY_HISTORY_LENGTH) % this.DIRTY_HISTORY_LENGTH
-
-		for (const componentTypeId in chunkMetadata) {
-			const componentMeta = chunkMetadata[componentTypeId]
-			const dirtyMasks = componentMeta.dirtyMasks
-			if (!dirtyMasks) continue
-
-			const oldestSliceStart = oldestFrameIndex * wordsPerFrame
-			const saturatingSliceStart = saturatingFrameIndex * wordsPerFrame
-			const clearSliceStart = clearFrameIndex * wordsPerFrame
-
-			// Saturate: OR the oldest data into the next-oldest slot
-			for (let i = 0; i < wordsPerFrame; i++) {
-				const oldValue = Atomics.load(dirtyMasks, oldestSliceStart + i)
-				if (oldValue !== 0) {
-					Atomics.or(dirtyMasks, saturatingSliceStart + i, oldValue)
-				}
-			}
-
-			// Clear: Zero out the slot for the upcoming frame
-			dirtyMasks.fill(0, clearSliceStart, clearSliceStart + wordsPerFrame)
 		}
 	}
 

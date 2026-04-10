@@ -2,8 +2,6 @@ const { engine } = await import(`@client/Engine.js`)
 const { ecs, physicsManager } = engine.getManagers()
 const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
 const { PhysicsLayers } = await import(`@managers/PhysicsManager/PhysicsManager.js`)
-const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
-const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
 
 const {
 	position,
@@ -76,7 +74,6 @@ export class CollisionDetectionSystem {
 			chunkIds: new Uint16Array(MAX_QUERY_RESULTS),
 			entityIndices: new Uint16Array(MAX_QUERY_RESULTS),
 		}
-		this.reusableChunkView = new ChunkView(entityStore)
 
 		// --- New reusable buffers for SAT calculations ---
 		const MAX_CORNERS = 4
@@ -95,42 +92,50 @@ export class CollisionDetectionSystem {
 		// Buffers for projection results [min, max]
 		this.projectionA = new Float32Array(2)
 		this.projectionB = new Float32Array(2)
+
+		// A set to track which chunks have had their collision buffers modified this frame.
+		// This is used for broad-phase dirty marking for reactive systems.
+		this.modifiedChunks = new Set()
 	}
 
 	update({ currentTick }) {
-		// this.processedPairs.clear() // No longer needed
+		this.modifiedChunks.clear()
 
 		// --- Pass 1: Clear Buffers ---
 		// Reset the collision count for all entities from the previous frame.
-		for (const chunk of this.damageableQuery.iter()) {
-			const damageBuffers = chunk.componentData[damageCollisionBuffer]
+		const damageableChunkIds = this.damageableQuery.getChunks()
+		for (const chunkId of damageableChunkIds) {
+			const damageBuffers = this.getComponentData(chunkId, this.damageCollisionBufferId)
 			if (damageBuffers) {
-				damageBuffers.count.fill(0, 0, chunk.size)
+				damageBuffers.count.fill(0, 0, this.getChunkSize(chunkId))
 			}
-			// We will only mark a chunk's buffer as dirty if a collision is actually written to it.
 		}
 		this.currentTick = currentTick
 
 		// --- Pass 2: Detect and Record Collisions ---
 		// This is the aggressor-driven loop. We only iterate over players and projectiles.
-		for (const chunkA of this.aggressorQuery.iter()) {
-			const aabbsA = chunkA.componentData[this.aabbId]
-			const layersA = chunkA.componentData[this.collisionLayerId]
+		const aggressorChunkIds = this.aggressorQuery.getChunks()
+		for (const chunkIdA of aggressorChunkIds) {
+			const aabbsA = this.getComponentData(chunkIdA, this.aabbId)
+			const layersA = this.getComponentData(chunkIdA, this.collisionLayerId)
+			const entitiesA = this.getEntities(chunkIdA)
+			const sizeA = this.getChunkSize(chunkIdA)
 
-			for (let i = 0; i < chunkA.size; i++) {
+			for (let i = 0; i < sizeA; i++) {
 				// If this entity is an enemy, skip it. Enemies don't initiate checks in this model.
 				const groupA = layersA.group[i]
 				if (groupA === PhysicsLayers.ENEMY) {
 					continue
 				}
 
-				const entityAId = chunkA.entities[i]
+				const entityAId = entitiesA[i]
 				// Broad-phase: Get potential colliders from the grid.
 				// The queryBox method now resets the count internally.
 				this.grid.queryBox(aabbsA.minX[i], aabbsA.minY[i], aabbsA.maxX[i], aabbsA.maxY[i], this.spatialQueryResult)
 
 				// Narrow-phase: Check each potential pair.
 				for (let j = 0; j < this.spatialQueryResult.count; j++) {
+					const chunkIdB = this.spatialQueryResult.chunkIds[j]
 					const entityBId = this.spatialQueryResult.entityIds[j]
 
 					// Self-collision check. The upper-triangle check is no longer needed
@@ -139,20 +144,15 @@ export class CollisionDetectionSystem {
 						continue
 					}
 
-					// Use the reusable ChunkView to get access to the neighbor's chunk data.
-					const chunkBId = this.spatialQueryResult.chunkIds[j]
-					this.reusableChunkView.setChunk(chunkBId)
-					const chunkB = this.reusableChunkView
-
 					// The grid can contain entities that don't have a collision buffer.
 					// We must check that the neighbor has at least one buffer before trying to process it.
 					// This check is crucial because the spatial hash grid is populated with all collidables,
 					// but our primary query is only for entities that can receive events.
-					if (!chunkB.componentData[this.damageCollisionBufferId]) {
+					if (!this.getComponentData(chunkIdB, this.damageCollisionBufferId)) {
 						continue
 					}
 
-					const layersB = chunkB.componentData[this.collisionLayerId]
+					const layersB = this.getComponentData(chunkIdB, this.collisionLayerId)
 					const indexBInChunk = this.spatialQueryResult.entityIndices[j]
 
 					// Layer mask check: see if the entities' layers allow them to interact.
@@ -163,10 +163,16 @@ export class CollisionDetectionSystem {
 					const canBCollideA = (this.collisionMatrix[groupB] & groupA) !== 0
 
 					if (canACollideB && canBCollideA) {
-						this._checkAndRecordCollision(chunkA, i, chunkB, indexBInChunk, entityAId, entityBId)
+						this._checkAndRecordCollision(chunkIdA, i, chunkIdB, indexBInChunk, entityAId, entityBId)
 					}
 				}
 			}
+		}
+
+		// --- Pass 3: Broad-Phase Dirty Marking ---
+		// Mark all chunks that had collisions written to them as dirty for reactive systems.
+		for (const chunkId of this.modifiedChunks) {
+			this.markComponentDirty(chunkId, this.damageCollisionBufferId, currentTick)
 		}
 	}
 
@@ -174,25 +180,25 @@ export class CollisionDetectionSystem {
 	 * Performs the narrow-phase collision check between two entities and records the result.
 	 * This is the new data-oriented heart of the collision system. It works directly on
 	 * chunk data, avoiding all intermediate object allocations for the common path.
-	 * @param {ChunkView} chunkA
+	 * @param {number} chunkIdA
 	 * @param {number} indexA
-	 * @param {ChunkView} chunkB
+	 * @param {number} chunkIdB
 	 * @param {number} indexB
 	 * @private
 	 */
-	_checkAndRecordCollision(chunkA, indexA, chunkB, indexB, entityAId, entityBId) {
+	_checkAndRecordCollision(chunkIdA, indexA, chunkIdB, indexB, entityAId, entityBId) {
 		// --- Gather all necessary component data without creating objects ---
-		const posA = chunkA.componentData[this.positionId]
-		const posB = chunkB.componentData[this.positionId]
+		const posA = this.getComponentData(chunkIdA, this.positionId)
+		const posB = this.getComponentData(chunkIdB, this.positionId)
 
-		const circleA = chunkA.componentData[this.circleColliderId]
-		const circleB = chunkB.componentData[this.circleColliderId]
-		const boxA = chunkA.componentData[this.boxColliderId]
-		const boxB = chunkB.componentData[this.boxColliderId]
-		const aabbA = chunkA.componentData[this.aabbId]
-		const aabbB = chunkB.componentData[this.aabbId]
-		const obbA = chunkA.componentData[this.orientedBoxColliderId]
-		const obbB = chunkB.componentData[this.orientedBoxColliderId]
+		const circleA = this.getComponentData(chunkIdA, this.circleColliderId)
+		const circleB = this.getComponentData(chunkIdB, this.circleColliderId)
+		const boxA = this.getComponentData(chunkIdA, this.boxColliderId)
+		const boxB = this.getComponentData(chunkIdB, this.boxColliderId)
+		const aabbA = this.getComponentData(chunkIdA, this.aabbId)
+		const aabbB = this.getComponentData(chunkIdB, this.aabbId)
+		const obbA = this.getComponentData(chunkIdA, this.orientedBoxColliderId)
+		const obbB = this.getComponentData(chunkIdB, this.orientedBoxColliderId)
 
 		// This is the data-oriented narrow-phase. We add optimized checks for common pairs.
 		// The order of checks matters; we start with the most common pairs.
@@ -209,8 +215,8 @@ export class CollisionDetectionSystem {
 
 			if (distSq <= radiiSum * radiiSum) {
 				// Collision detected! Record it for both entities.
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
@@ -223,8 +229,8 @@ export class CollisionDetectionSystem {
 				aabbA.minY[indexA] < aabbB.maxY[indexB] &&
 				aabbA.maxY[indexA] > aabbB.minY[indexB]
 			) {
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
@@ -247,8 +253,8 @@ export class CollisionDetectionSystem {
 			const distanceSq = dx * dx + dy * dy
 
 			if (distanceSq < circleRadius * circleRadius) {
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
@@ -271,50 +277,50 @@ export class CollisionDetectionSystem {
 			const distanceSq = dx * dx + dy * dy
 
 			if (distanceSq < circleRadius * circleRadius) {
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
 		// Case 5: OBB vs OBB
 		else if (obbA && obbB) {
-			if (this._checkOBBvsOBB(chunkA, indexA, chunkB, indexB)) {
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+			if (this._checkOBBvsOBB(chunkIdA, indexA, chunkIdB, indexB)) {
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
 		// Case 6: OBB vs Circle
 		else if (obbA && circleB) {
-			if (this._checkOBBvsCircle(chunkA, indexA, chunkB, indexB)) {
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+			if (this._checkOBBvsCircle(chunkIdA, indexA, chunkIdB, indexB)) {
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
 		// Case 7: Circle vs OBB
 		else if (circleA && obbB) {
 			// Just swap the arguments for the check
-			if (this._checkOBBvsCircle(chunkB, indexB, chunkA, indexA)) {
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+			if (this._checkOBBvsCircle(chunkIdB, indexB, chunkIdA, indexA)) {
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
 		// Case 8: OBB vs Box (AABB) - Note: fixed from boxA to boxB
 		else if (obbA && boxB) {
-			if (this._checkOBBvsAABB(chunkA, indexA, chunkB, indexB)) {
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+			if (this._checkOBBvsAABB(chunkIdA, indexA, chunkIdB, indexB)) {
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
 		// Case 9: Box (AABB) vs OBB
 		else if (boxA && obbB) {
 			// Just swap the arguments for the check
-			if (this._checkOBBvsAABB(chunkB, indexB, chunkA, indexA)) {
-				this._addCollision(chunkA, indexA, entityBId)
-				this._addCollision(chunkB, indexB, entityAId)
+			if (this._checkOBBvsAABB(chunkIdB, indexB, chunkIdA, indexA)) {
+				this._addCollision(chunkIdA, indexA, entityBId)
+				this._addCollision(chunkIdB, indexB, entityAId)
 			}
 			return // Handled
 		}
@@ -374,13 +380,13 @@ export class CollisionDetectionSystem {
 		out_projection[1] = centerProjection + radius
 	}
 
-	_checkOBBvsOBB(chunkA, indexA, chunkB, indexB) {
-		const posA = chunkA.componentData[this.positionId]
-		const obbA = chunkA.componentData[this.orientedBoxColliderId]
-		const rotA = chunkA.componentData[this.rotationId]
-		const posB = chunkB.componentData[this.positionId]
-		const obbB = chunkB.componentData[this.orientedBoxColliderId]
-		const rotB = chunkB.componentData[this.rotationId]
+	_checkOBBvsOBB(chunkIdA, indexA, chunkIdB, indexB) {
+		const posA = this.getComponentData(chunkIdA, this.positionId)
+		const obbA = this.getComponentData(chunkIdA, this.orientedBoxColliderId)
+		const rotA = this.getComponentData(chunkIdA, this.rotationId)
+		const posB = this.getComponentData(chunkIdB, this.positionId)
+		const obbB = this.getComponentData(chunkIdB, this.orientedBoxColliderId)
+		const rotB = this.getComponentData(chunkIdB, this.rotationId)
 
 		// Get corners for both OBBs into reusable buffers
 		this._getOBBCorners(
@@ -436,12 +442,12 @@ export class CollisionDetectionSystem {
 		return true // No separating axis found
 	}
 
-	_checkOBBvsCircle(obbChunk, obbIndex, circleChunk, circleIndex) {
-		const posO = obbChunk.componentData[this.positionId]
-		const obb = obbChunk.componentData[this.orientedBoxColliderId]
-		const rotO = obbChunk.componentData[this.rotationId]
-		const posC = circleChunk.componentData[this.positionId]
-		const circle = circleChunk.componentData[this.circleColliderId]
+	_checkOBBvsCircle(obbChunkId, obbIndex, circleChunkId, circleIndex) {
+		const posO = this.getComponentData(obbChunkId, this.positionId)
+		const obb = this.getComponentData(obbChunkId, this.orientedBoxColliderId)
+		const rotO = this.getComponentData(obbChunkId, this.rotationId)
+		const posC = this.getComponentData(circleChunkId, this.positionId)
+		const circle = this.getComponentData(circleChunkId, this.circleColliderId)
 
 		const obbAngle = rotO.angle[obbIndex]
 		const circleX = posC.x[circleIndex]
@@ -522,13 +528,13 @@ export class CollisionDetectionSystem {
 		return true
 	}
 
-	_checkOBBvsAABB(obbChunk, obbIndex, aabbChunk, aabbIndex) {
+	_checkOBBvsAABB(obbChunkId, obbIndex, aabbChunkId, aabbIndex) {
 		// This is a simplified OBB vs OBB check where the second OBB has an angle of 0.
-		const posO = obbChunk.componentData[this.positionId]
-		const obb = obbChunk.componentData[this.orientedBoxColliderId]
-		const rotO = obbChunk.componentData[this.rotationId]
-		const posA = aabbChunk.componentData[this.positionId]
-		const box = aabbChunk.componentData[this.boxColliderId] // Note: using boxCollider for AABB
+		const posO = this.getComponentData(obbChunkId, this.positionId)
+		const obb = this.getComponentData(obbChunkId, this.orientedBoxColliderId)
+		const rotO = this.getComponentData(obbChunkId, this.rotationId)
+		const posA = this.getComponentData(aabbChunkId, this.positionId)
+		const box = this.getComponentData(aabbChunkId, this.boxColliderId) // Note: using boxCollider for AABB
 
 		// Get corners for OBB
 		this._getOBBCorners(
@@ -590,8 +596,8 @@ export class CollisionDetectionSystem {
 	}
 
 	/** Adds a collision event to an entity's buffer. */
-	_addCollision(chunk, indexInChunk, otherEntityId) {
-		const buffer = chunk.componentData[this.damageCollisionBufferId]
+	_addCollision(chunkId, indexInChunk, otherEntityId) {
+		const buffer = this.getComponentData(chunkId, this.damageCollisionBufferId)
 		// If the entity doesn't have the required buffer type, do nothing.
 		if (!buffer) return
 
@@ -627,7 +633,11 @@ export class CollisionDetectionSystem {
 			}
 			buffer.count[indexInChunk]++
 
-			chunk.markEntityDirty(indexInChunk, this.damageCollisionBufferId, this.currentTick)
+			this.modifiedChunks.add(chunkId)
+
+
+			
+			this.markEntityDirty(chunkId, indexInChunk, this.damageCollisionBufferId, this.currentTick)
 		}
 	}
 }

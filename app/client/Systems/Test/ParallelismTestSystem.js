@@ -152,10 +152,12 @@ export class ParallelismTestSystem {
 	_initializeSprites() {
 		// This runs once on the first update, after entities have been created by `init`.
 		// It populates our sprite map, so the `update` loop can be a simple, hot loop.
-		for (const chunk of this.query.iter()) {
-			const entities = chunk.entities
-			for (let i = 0; i < chunk.size; i++) {
-				const entityId = entities[i]
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const entities = this.getEntities(chunkId)
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
+				const entityId = entities[j]
 				const sprite = new PIXI.Sprite(this.particleTexture)
 				sprite.anchor.set(0.5)
 				this.entitySprites.set(entityId, sprite)
@@ -189,26 +191,28 @@ export class ParallelismTestSystem {
 		const columnInfo = new Map() // Map<columnIndex, {x: number, chunkIds: Set}>
 
 		// Update sprite positions and gather debug info in a single, streamlined loop.
-		for (const chunk of this.query.iter()) {
-			const entities = chunk.entities
-			const positions = chunk.componentData[position]
-			const columns = chunk.componentData[column]
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const entities = this.getEntities(chunkId)
+			const positions = this.getComponentData(chunkId, position)
+			const columns = this.getComponentData(chunkId, column)
 
-			for (let i = 0; i < chunk.size; i++) {
-				const entityId = entities[i]
-				const x = positions.x[i]
-				const y = positions.y[i]
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
+				const entityId = entities[j]
+				const x = positions.x[j]
+				const y = positions.y[j]
 
 				const sprite = this.entitySprites.get(entityId)
 				sprite.position.set(x, y)
 
-				const columnIndex = columns.index[i]
+				const columnIndex = columns.index[j]
 				if (!columnInfo.has(columnIndex)) {
 					columnInfo.set(columnIndex, { x: 0, chunkIds: new Set() })
 				}
 				const info = columnInfo.get(columnIndex)
-				info.x = x // All x values in a column are the same, so we can just overwrite.
-				info.chunkIds.add(chunk.chunkId)
+				info.x = x
+				info.chunkIds.add(chunkId)
 			}
 		}
 
@@ -241,13 +245,14 @@ export class ParallelismTestSystem {
 		const columns = new Map()
 
 		// Group all entities by their column index.
-		for (const chunk of this.query.iter()) {
-			const positions = chunk.componentData[position]
-			const columnIndices = chunk.componentData[column]
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const positions = this.getComponentData(chunkId, position)
+			const columnIndices = this.getComponentData(chunkId, column)
 
-			for (let i = 0; i < chunk.size; i++) {
-				const columnIndex = columnIndices.index[i]
-				const x = positions.x[i]
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
+				const columnIndex = columnIndices.index[j]
+				const x = positions.x[j]
 
 				if (!columns.has(columnIndex)) {
 					columns.set(columnIndex, [])
@@ -269,7 +274,10 @@ export class ParallelismTestSystem {
 		// --- HMR Cleanup ---
 		// On hot-swap, destroy any entities that were created by the previous instance of this system.
 		// Use the efficient chunk-based destruction. This query will find all entities with the tag
-		for (const chunk of this.query.iter()) this.destroyEntitiesInChunk(chunk)
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			this.destroyEntitiesInChunk(chunkIds[i])
+		}
 
 		// Destroy all PIXI objects created by this system.
 		if (this.particleContainer) {

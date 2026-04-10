@@ -2,9 +2,11 @@ const { engine } = await import(`@client/Engine.js`)
 
 const { ecs } = engine.getManagers()
 
+//! this won't do.
+
 const benchmarkConfig = {
 	// Options: 'creation', 'destruction', 'structuralChange', 'setData'
-	activeBenchmark: 'setData',
+	activeBenchmark: 'structuralChange',
 
 	creation: {
 		entityCount: 0, // Not used for this test as it starts with an empty world.
@@ -16,7 +18,7 @@ const benchmarkConfig = {
 		batchSize: 5_000, //5k
 	},
 	structuralChange: {
-		entityCount: 100_000,
+		entityCount: 50_000,
 		batchSize: 4_000, //4k
 	},
 	setData: {
@@ -83,15 +85,17 @@ export class CommandBufferBenchmarkSystem {
 				this._updateSetData()
 				break
 		}
-		//this system is responsible for executing command buffer on it's own.
+
 		this.flush()
 	}
 
 	_updateCreation() {
 		const config = benchmarkConfig.creation
 		// Destroy all entities from the previous frame and create a new batch.
-		for (const chunk of this.benchmarkQuery.iter()) {
-			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
+		const chunkIds = this.benchmarkQuery.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			if (this.getChunkSize(chunkId) > 0) this.destroyEntitiesInChunk(chunkId)
 		}
 		for (let i = 0; i < config.batchSize; i++) {
 			// This part remains the same
@@ -105,10 +109,13 @@ export class CommandBufferBenchmarkSystem {
 		this.createEntities(this.creationPayload, config.batchSize)
 
 		let destroyedCount = 0
-		for (const chunk of this.benchmarkQuery.iter()) {
-			for (let i = 0; i < chunk.size; i++) {
+		const chunkIds = this.benchmarkQuery.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const entities = this.getEntities(chunkId)
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
 				if (destroyedCount >= config.batchSize) break
-				this.destroyEntity(chunk.entities[i])
+				this.destroyEntity(entities[j])
 				destroyedCount++
 			}
 			if (destroyedCount >= config.batchSize) break
@@ -119,10 +126,13 @@ export class CommandBufferBenchmarkSystem {
 		const config = benchmarkConfig.structuralChange
 		if (this.isAdding) {
 			let processedCount = 0
-			for (const chunk of this.addQuery.iter()) {
-				for (let i = 0; i < chunk.size; i++) {
+			const chunkIds = this.addQuery.getChunks()
+			for (let i = 0; i < chunkIds.length; i++) {
+				const chunkId = chunkIds[i]
+				const entities = this.getEntities(chunkId)
+				for (let j = 0; j < this.getChunkSize(chunkId); j++) {
 					if (processedCount >= config.batchSize) break
-					this.addComponent(chunk.entities[i], this.addComponentPayload)
+					this.addComponent(entities[j], this.addComponentPayload)
 					processedCount++
 				}
 				if (processedCount >= config.batchSize) break
@@ -133,10 +143,13 @@ export class CommandBufferBenchmarkSystem {
 			}
 		} else {
 			let processedCount = 0
-			for (const chunk of this.removeQuery.iter()) {
-				for (let i = 0; i < chunk.size; i++) {
+			const chunkIds = this.removeQuery.getChunks()
+			for (let i = 0; i < chunkIds.length; i++) {
+				const chunkId = chunkIds[i]
+				const entities = this.getEntities(chunkId)
+				for (let j = 0; j < this.getChunkSize(chunkId); j++) {
 					if (processedCount >= config.batchSize) break
-					this.removeComponent(chunk.entities[i], componentB)
+					this.removeComponent(entities[j], componentB)
 					processedCount++
 				}
 				if (processedCount >= config.batchSize) break
@@ -156,10 +169,13 @@ export class CommandBufferBenchmarkSystem {
 		this.setComponentMutators.position.y[0] = Math.random() * 100
 
 		let processedCount = 0
-		for (const chunk of this.benchmarkQuery.iter()) {
-			for (let i = 0; i < chunk.size; i++) {
+		const chunkIds = this.benchmarkQuery.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const entities = this.getEntities(chunkId)
+			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
 				if (processedCount >= config.batchSize) break
-				this.setComponentData(chunk.entities[i], this.setComponentPayload)
+				this.setComponent(entities[j], this.setComponentPayload)
 				processedCount++
 			}
 			if (processedCount >= config.batchSize) break

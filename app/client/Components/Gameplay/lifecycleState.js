@@ -6,7 +6,7 @@ export const lifecycleState = {
 	/**
 	 * A bitmask representing the entity's current state (e.g., ACTIVE, DYING, POOLED).
 	 */
-	isTrackable: true,
+	meta: { isTrackable: true },
 	flags: {
 		type: 'bitmask',
 		of: {

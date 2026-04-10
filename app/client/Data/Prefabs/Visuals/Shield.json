@@ -2,6 +2,7 @@
 	"components": {
 		"position": {},
 		"spriteDescriptor": { "assetName": "shield" },
+		"visibility": { "isVisible": false },
 		"viewable": {},
 		"layer": { "name": "playerEffects" },
 		"tint": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 0.0 },

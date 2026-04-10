@@ -24,10 +24,13 @@ const { interpret, resolveComponentData } = await import(`@managers/ComponentMan
 const Schema = await import(`@managers/ComponentManager/ComponentSchema.js`)
 
 class PayloadCompiler {
-	init(ecs) {
-		this.entityManager = ecs.engine.entityManager
-		this.prefabManager = ecs.engine.prefabManager
-		this.sharedDataManager = ecs.engine.sharedDataManager
+	init(engine) {
+		this.entityManager = engine.entityManager
+		this.prefabManager = engine.prefabManager
+		this.sharedDataManager = engine.sharedDataManager
+		this.componentManager = engine.componentManager
+
+		this.prefabComponentId = Schema.componentNameToTypeID.get('prefab')
 	}
 
 	/**
@@ -68,7 +71,11 @@ class PayloadCompiler {
 			const { payload, mutators } = this._compile(archetypeId, componentDataMap)
 
 			return {
-				payload: { typeID, data: payload.data },
+				payload: {
+					typeID,
+					data: payload.data,
+					trackableComponentIds: payload.trackableComponentIds,
+				},
 				mutators,
 			}
 		}
@@ -81,12 +88,69 @@ class PayloadCompiler {
 	}
 
 	/**
+	 * Compiles a special-purpose payload containing the default values for a set of components.
+	 * This is used for efficiently resetting pooled entities.
+	 *
+	 * @param {string|object} source - A prefab name or a component object defining the set of components to get defaults for.
+	 * @param {object} [overrides={}] - A component data object specifying values to use instead of the schema defaults.
+	 * @param {string[]} [ignores=[]] - An array of component names to exclude from the defaults payload.
+	 * @returns {{payload: object, mutators: object}} The compiled payload containing default values.
+	 */
+	compileDefaults(source, overrides = {}, ignores = []) {
+		let sourceComponentData = {}
+		if (typeof source === 'string') {
+			// Prefab name
+			const prefabData = this.prefabManager.getPrefabData(source)
+			if (!prefabData) {
+				throw new Error(`PayloadCompiler.compileDefaults: Prefab '${source}' not found.`)
+			}
+			// A prefab file has a top-level 'components' key. We need to use the inner object.
+			sourceComponentData = prefabData.components || prefabData
+		} else if (typeof source === 'object' && source !== null) {
+			// Component object
+			sourceComponentData = source
+		} else {
+			throw new TypeError(
+				'PayloadCompiler.compileDefaults: First argument must be a prefab name or a component data object.',
+			)
+		}
+
+		const componentNames = Object.keys(sourceComponentData)
+		const allTypeIDs = []
+		for (const name of componentNames) {
+			const typeID = Schema.componentNameToTypeID.get(name.toLowerCase())
+			if (typeID !== undefined) {
+				allTypeIDs.push(typeID)
+			} else {
+				// A prefab might contain components not known to this client (e.g. server-only components).
+				// This is a valid scenario, so we warn instead of throwing an error.
+				console.warn(`PayloadCompiler.compileDefaults: Component name "${name}" not found in schema. It will be ignored.`)
+			}
+		}
+
+		const ignoresSet = new Set(ignores)
+		const typeIDsToCompile = allTypeIDs.filter(id => !ignoresSet.has(id))
+		const componentDataMap = new Map()
+		const interpretedOverrides = this._createIdMapFromData(overrides)
+
+		for (const typeID of typeIDsToCompile) {
+			const schemaDefaults = Schema.compiledDefaults[typeID]
+			const overrideData = interpretedOverrides.get(typeID) || {}
+			const finalData = { ...schemaDefaults, ...overrideData }
+			componentDataMap.set(typeID, finalData)
+		}
+
+		const archetypeId = this.entityManager.getArchetype(componentDataMap.keys())
+		return this._compile(archetypeId, componentDataMap)
+	}
+
+	/**
 	 * [PLANNED] Compiles component data for a BATCH of entities, each with varying data for the same component type.
-	 * This is intended for a future `commands.setComponentsData(payload)` command.
+	 * This is intended for a future `commands.setComponent(payload)` command.
 	 *
 	 * This method produces a **Structure-of-Arrays (SoA)** payload, which is fundamentally
 	 * different from the AoS payload produced by `compile`. SoA is highly efficient
-	* for batch-updating a single component across many entities, as it mirrors the engine's
+	 * for batch-updating a single component across many entities, as it mirrors the engine's
 	 * internal chunk storage format.
 	 *
 	 * @example
@@ -112,10 +176,15 @@ class PayloadCompiler {
 			throw new Error(`PayloadCompiler: Archetype with ID ${archetypeId} not found.`)
 		}
 
+		const trackableComponentIds = []
+
 		let totalByteSize = 0 // The rest of the logic remains the same.
 		const componentOffsets = new Map()
 		for (const typeID of sortedTypeIDs) {
 			const info = Schema.componentInfo[typeID]
+			if (info.isTrackable) {
+				trackableComponentIds.push(typeID)
+			}
 			const alignment = info.alignment
 			if (alignment > 0 && totalByteSize % alignment !== 0) {
 				totalByteSize += alignment - (totalByteSize % alignment)
@@ -147,12 +216,7 @@ class PayloadCompiler {
 				if (!propInfo) continue
 
 				const value = initialData[propKey] ?? compiledDefaults[propKey]
-				const componentBaseOffset = componentOffsets.get(typeID)
-				let writeOffset = componentBaseOffset + propInfo.offset
-				const alignment = propInfo.alignment
-				if (alignment > 0 && writeOffset % alignment !== 0) {
-					writeOffset += alignment - (writeOffset % alignment)
-				}
+				const writeOffset = componentOffsets.get(typeID) + propInfo.offset
 				this._writeValue(payloadView, writeOffset, value, propInfo.type)
 			}
 		}
@@ -160,6 +224,7 @@ class PayloadCompiler {
 		const payload = {
 			archetypeId,
 			data: payloadBuffer,
+			trackableComponentIds,
 		}
 
 		return Object.freeze({ payload, mutators: Object.freeze(mutators) })
@@ -201,8 +266,14 @@ class PayloadCompiler {
 			const prefabCompData = finalComponentData[compName]
 
 			// This logic correctly handles both partial object overrides and primitive/shorthand overrides.
-			if (typeof overrideData === 'object' && overrideData !== null && !Array.isArray(overrideData) &&
-				typeof prefabCompData === 'object' && prefabCompData !== null && !Array.isArray(prefabCompData)) {
+			if (
+				typeof overrideData === 'object' &&
+				overrideData !== null &&
+				!Array.isArray(overrideData) &&
+				typeof prefabCompData === 'object' &&
+				prefabCompData !== null &&
+				!Array.isArray(prefabCompData)
+			) {
 				finalComponentData[compName] = { ...prefabCompData, ...overrideData }
 			} else {
 				finalComponentData[compName] = overrideData

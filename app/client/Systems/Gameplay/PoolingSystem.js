@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { lifecycleState, isPooled, tint, hitFlash, playerProjectile } = ecs.getComponentIDs()
+const { lifecycleState, isPooled, tint, hitFlash, playerProjectile, visibility } = ecs.getComponentIDs()
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 
@@ -21,64 +21,87 @@ export class PoolingSystem {
 	}
 
 	init() {
-		// Query for dying entities that have hitFlash (e.g., enemies, player).
-		this.dyingWithHitFlashQuery = this.getQuery({
-			with: [lifecycleState, tint, hitFlash], // Ensure hitFlash exists
+		// Query for dying entities that are "living" things which can be damaged and show a hit flash.
+		this.dyingDamageablesQuery = this.getQuery({
+			with: [lifecycleState, tint, hitFlash, visibility],
 			modified: [lifecycleState],
 		})
 
-		// Query for dying entities that do NOT have hitFlash (e.g., projectiles).
-		this.dyingWithoutHitFlashQuery = this.getQuery({
-			with: [lifecycleState, tint], // Projectiles have tint
+		// Query for dying projectiles. They don't have hitFlash.
+		this.dyingProjectilesQuery = this.getQuery({
+			with: [lifecycleState, tint, playerProjectile, visibility],
 			without: [hitFlash], // Explicitly exclude entities with hitFlash
 			modified: [lifecycleState],
 		})
 
 		// --- Payloads ---
 		this.addIsPooledPayload = this.compile(isPooled, {}).payload
-		this.pooledStatePayload = this.compile(lifecycleState, { flags: LIFECYCLE.POOLED }).payload
 
-		// Payload for resetting entities WITH hitFlash. We only need to reset the tint.
-		this.resetWithHitFlashPayload = this.compile({ tint: { r: 1.0, g: 1.0, b: 1.0 } }).payload
+		// Payload for resetting damageable entities (e.g., enemies).
+		// We set their state to POOLED, reset their tint, and make them invisible.
+		this.pooledDamageableResetPayload = this.compileDefaults(
+			{ lifecycleState: {}, tint: {}, visibility: {} },
+			{
+				lifecycleState: { flags: LIFECYCLE.POOLED },
+				visibility: { isVisible: 0 },
+			},
+		).payload
 
-		// Payload for resetting entities WITHOUT hitFlash.
-		this.resetWithoutHitFlashPayload = this.compile({ tint: { r: 1.0, g: 1.0, b: 1.0 } }).payload
+		// Payload for resetting projectiles.
+		// We set their state to POOLED and make them invisible.
+		this.pooledProjectileResetPayload = this.compile([lifecycleState, visibility], {
+			lifecycleState: { flags: LIFECYCLE.POOLED },
+			visibility: { isVisible: 0 },
+		}).payload
 
-		this.scratchBuffer = this.getScratchBuffer(lifecycleState)
+		this.scratchBuffer = this.createScratchBuffer()
 	}
 
 	update({ currentTick, lastTick }) {
-		// Process entities that have hitFlash (enemies, player)
-		for (const chunk of this.dyingWithHitFlashQuery.iter()) {
-			this._processDyingChunk(chunk, lastTick, true /* hasHitFlash */)
+		// Process damageable entities (enemies, player)
+		const dyingDamageableChunkIds = this.dyingDamageablesQuery.getChunks(lastTick, currentTick)
+		for (let i = 0; i < dyingDamageableChunkIds.length; i++) {
+			this._processDyingDamageableChunk(dyingDamageableChunkIds[i], lastTick, currentTick)
 		}
 
-		// Process entities that do NOT have hitFlash (projectiles)
-		for (const chunk of this.dyingWithoutHitFlashQuery.iter()) {
-			this._processDyingChunk(chunk, lastTick, false /* hasHitFlash */)
+		// Process projectiles
+		const dyingProjectileChunkIds = this.dyingProjectilesQuery.getChunks(lastTick, currentTick)
+		for (let i = 0; i < dyingProjectileChunkIds.length; i++) {
+			this._processDyingProjectileChunk(dyingProjectileChunkIds[i], lastTick, currentTick)
 		}
 	}
 
-	_processDyingChunk(chunk, lastTick, hasHitFlash) {
-		const states = chunk.componentData[lifecycleState]
-		const changedCount = chunk.getChangedIndices(lifecycleState, lastTick, this.scratchBuffer)
+	_processDyingDamageableChunk(chunkId, lastTick, currentTick) {
+		const states = this.getComponentData(chunkId, lifecycleState)
+		const entities = this.getEntities(chunkId)
+		const changedCount = this.getDirty(chunkId, lifecycleState, lastTick, currentTick, this.scratchBuffer)
 
 		for (let i = 0; i < changedCount; i++) {
 			const indexInChunk = this.scratchBuffer[i]
 			if ((states.flags[indexInChunk] & LIFECYCLE.DYING) !== 0) {
-				const entityId = chunk.entities[indexInChunk]
-
-				// Common commands for all pooled entities
+				const entityId = entities[indexInChunk]
+				// Add the isPooled tag to move it to the inactive pool archetype.
 				this.addComponent(entityId, this.addIsPooledPayload)
-				this.setComponentData(entityId, this.pooledStatePayload)
+				// Set its state to POOLED, reset its tint, and make it invisible.
+				this.setComponents(entityId, this.pooledDamageableResetPayload)
+				// Disable the hitFlash component so it doesn't run while pooled.
+				this.disableComponent(chunkId, indexInChunk, hitFlash)
+			}
+		}
+	}
 
-				// Specific commands based on whether it has hitFlash
-				if (hasHitFlash) {
-					this.setComponentsData(entityId, this.resetWithHitFlashPayload)
-					this.disableComponent(entityId, hitFlash)
-				} else {
-					this.setComponentsData(entityId, this.resetWithoutHitFlashPayload)
-				}
+	_processDyingProjectileChunk(chunkId, lastTick, currentTick) {
+		const states = this.getComponentData(chunkId, lifecycleState)
+		const entities = this.getEntities(chunkId)
+		const changedCount = this.getDirty(chunkId, lifecycleState, lastTick, currentTick, this.scratchBuffer)
+
+		for (let i = 0; i < changedCount; i++) {
+			const indexInChunk = this.scratchBuffer[i]
+			if ((states.flags[indexInChunk] & LIFECYCLE.DYING) !== 0) {
+				const entityId = entities[indexInChunk]
+				this.addComponent(entityId, this.addIsPooledPayload)
+				// Set state to POOLED and hide the entity.
+				this.setComponents(entityId, this.pooledProjectileResetPayload)
 			}
 		}
 	}

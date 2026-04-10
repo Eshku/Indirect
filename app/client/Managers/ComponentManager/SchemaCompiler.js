@@ -27,11 +27,7 @@ const PrimitiveTypeProcessors = Object.keys(TYPED_ARRAY_MAP).reduce((processors,
 			const offset = componentInfo.byteSize
 
 			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
-				let writeOffset = componentBaseOffset + offset
-				if (alignment > 0 && writeOffset % alignment !== 0) {
-					writeOffset += alignment - (writeOffset % alignment)
-				}
-				mutators[propName] = new arrayConstructor(payloadBuffer, writeOffset, 1)
+				mutators[propName] = new arrayConstructor(payloadBuffer, componentBaseOffset + offset, 1)
 			}
 
 			componentInfo.mutatorFactories.push(factory)
@@ -96,11 +92,7 @@ Object.assign(TypeProcessors, {
 			const offset = componentInfo.byteSize
 
 			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
-				let writeOffset = componentBaseOffset + offset
-				if (alignment > 0 && writeOffset % alignment !== 0) {
-					writeOffset += alignment - (writeOffset % alignment)
-				}
-				mutators[propName] = new arrayConstructor(payloadBuffer, writeOffset, 1)
+				mutators[propName] = new arrayConstructor(payloadBuffer, componentBaseOffset + offset, 1)
 			}
 
 			componentInfo.mutatorFactories.push(factory)
@@ -169,11 +161,7 @@ Object.assign(TypeProcessors, {
 			const offset = componentInfo.byteSize
 
 			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
-				let writeOffset = componentBaseOffset + offset
-				if (alignment > 0 && writeOffset % alignment !== 0) {
-					writeOffset += alignment - (writeOffset % alignment)
-				}
-				mutators[propName] = new arrayConstructor(payloadBuffer, writeOffset, 1)
+				mutators[propName] = new arrayConstructor(payloadBuffer, componentBaseOffset + offset, 1)
 			}
 
 			componentInfo.mutatorFactories.push(factory)
@@ -485,7 +473,7 @@ export class SchemaCompiler {
 			sharedProperties: [],
 			perEntityProperties: [],
 			isEnableable: false,
-			isTrackable: false, // Renamed from 'isTracked' for consistency
+			isTrackable: false,
 		}
 
 		if (schema === undefined || Object.keys(schema).length === 0) {
@@ -498,16 +486,11 @@ export class SchemaCompiler {
 		componentInfo.originalSchemaKeys = [...schemaKeys]
 		const implicitKeys = []
 		for (const propName of schemaKeys) {
-			const propDefinition = schema[propName]
-			if (propName === 'isEnableable') {
-				if (schema.isEnableable === true) componentInfo.isEnableable = true
-				continue
-			} else if (propName === 'isTrackable') {
-				// Renamed from 'tracked' for consistency with 'isEnableable'
-				if (schema.isTrackable === true) componentInfo.isTrackable = true
+			if (propName === 'meta') {
+				this._parseMeta(schema.meta, componentInfo)
 				continue
 			}
-
+			const propDefinition = schema[propName]
 			this._parseProperty(propName, propDefinition, componentInfo, implicitKeys, componentName, constants)
 		}
 
@@ -559,6 +542,15 @@ export class SchemaCompiler {
 		}
 
 		return componentInfo
+	}
+
+	_parseMeta(metaDefinition, componentInfo) {
+		if (metaDefinition.isEnableable) {
+			componentInfo.isEnableable = true
+		}
+		if (metaDefinition.isTrackable) {
+			componentInfo.isTrackable = true
+		}
 	}
 
 	_parseProperty(propName, definitionObject, componentInfo, implicitKeys, componentName, constants) {

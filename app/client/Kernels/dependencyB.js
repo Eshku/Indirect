@@ -8,8 +8,8 @@ export function dependencyB(payload, systemContext, kernelContext) {
 	const { velocity } = systemContext
 	const { currentTick } = frameContext
 
-	const chunk = kernel.getChunkView(payload)
-	const velocities = chunk.componentData[velocity]
+	const chunkId = payload
+	const velocities = self.kernel.getComponentData(chunkId, velocity)
 
 	// We only need to check the first entity in the chunk.
 	const value = velocities.x[0]
@@ -31,5 +31,5 @@ export function dependencyB(payload, systemContext, kernelContext) {
 
 	// Now, write a new value for DependencySystemC to read.
 	velocities.x[0] = 456
-	chunk.markDirty(velocity, currentTick)
+	// Marking dirty from kernels is currently disabled.
 }

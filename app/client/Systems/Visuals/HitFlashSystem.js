@@ -2,16 +2,17 @@ const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
 const { hitFlash, tint, isPooled } = ecs.getComponentIDs()
-const { SyncTransforms, RenderLayerSystem, SpriteFactorySystem } = ecs.getSystemIDs()
+const { SyncTransforms, HitFlashTimerSystem } = ecs.getSystemIDs()
 
 /**
  * Manages the "hit flash" visual effect.
- * When an entity has an active `hitFlash` component, this system will
- * tint it red and fade it back to its normal color.
+ * When an entity has an active `hitFlash` component, this system reads the
+ * timer and applies a corresponding red tint. The timer itself is managed
+ * by HitFlashTimerSystem, which also handles resetting the tint.
  */
 export class HitFlashSystem {
-	static runsBefore = [SyncTransforms]
-	static runsAfter = [RenderLayerSystem, SpriteFactorySystem]
+	static runsAfter = [HitFlashTimerSystem] // Must run after the timer is updated for the current frame.
+	static runsBefore = [SyncTransforms] // Must run before the tint is rendered.
 
 	static dependencies = {
 		update: {
@@ -22,40 +23,38 @@ export class HitFlashSystem {
 
 	init() {
 		// Query for entities that have the necessary components for the effect.
-		// We will check the enabled state inside the loop.
 		this.query = this.getQuery({
 			with: [hitFlash, tint],
 			without: [isPooled],
 		})
+		this.scratchBuffer = this.createScratchBuffer()
 	}
 
 	update({ deltaTime, currentTick }) {
-		for (const chunk of this.query.iter()) {
-			const flashes = chunk.componentData[hitFlash]
-			const tints = chunk.componentData[tint]
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const flashes = this.getComponentData(chunkId, hitFlash)
+			const tints = this.getComponentData(chunkId, tint)
+			let wasChunkModified = false
 
-			for (let i = 0; i < chunk.size; i++) {
-				// Check if the hitFlash effect is active for this entity.
-				if (chunk.isComponentEnabled(i, hitFlash)) {
-					// 'progress' goes from 1 (at the start) down to 0 (at the end).
-					const progress = flashes.timer[i] / flashes.duration[i]
+			// This is much more efficient than iterating all entities. We only get the ones that are flashing.
+			const enabledCount = this.getEnabled(chunkId, hitFlash, this.scratchBuffer)
 
-					// Set the tint based on progress.
-					tints.r[i] = 1.0
-					tints.g[i] = 1.0 - progress
-					tints.b[i] = 1.0 - progress
-					chunk.markEntityDirty(i, tint, currentTick)
-				} else {
-					// If the effect is not active, ensure the tint is reset to normal (white).
-					// We only need to do this if it's not already white to avoid unnecessary dirty marking.
-					if (tints.g[i] < 1.0 || tints.b[i] < 1.0) {
-						tints.r[i] = 1.0
-						tints.g[i] = 1.0
-						tints.b[i] = 1.0
-						chunk.markEntityDirty(i, tint, currentTick)
-					}
-				}
+			for (let j = 0; j < enabledCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+				// 'progress' goes from 1 (at the start) down to 0 (at the end).
+				const progress = flashes.timer[indexInChunk] / flashes.duration[indexInChunk]
+
+				// Set the tint based on progress. The reset to white is now handled by HitFlashTimerSystem.
+				tints.r[indexInChunk] = 1.0
+				tints.g[indexInChunk] = 1.0 - progress
+				tints.b[indexInChunk] = 1.0 - progress
+				this.markEntityDirty(chunkId, indexInChunk, tint, currentTick)
+				wasChunkModified = true
 			}
+
+			if (wasChunkModified) this.markComponentDirty(chunkId, tint, currentTick)
 		}
 	}
 }

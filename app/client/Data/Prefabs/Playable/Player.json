@@ -10,6 +10,7 @@
 
 		"spriteDescriptor": { "assetName": "player_ship" },
 		"viewable": {},
+		"visibility": {},
 		"layer": { "name": "player" },
 
 		"movementIntent": {},
@@ -30,7 +31,7 @@
 			"velocityInheritance": 0,
 			"range": 2000,
 			"fireRate": 0.25,
-			"damage": 9
+			"damage": 5
 		},
 		"weaponCooldown": {}
 	}

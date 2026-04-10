@@ -45,9 +45,7 @@ export class CursorSystem {
 		this.cursorLayer.addChild(this.cursorGraphic)
 
 		// Find the cursor entity that was instantiated from the prefab
-		for (const chunk of this.cursorQuery.iter()) {
-			this.cursorEntityId = chunk.entities[0]
-		}
+		this.cursorEntityId = this.cursorQuery.getSingleEntity()
 
 		if (this.cursorEntityId === null) {
 			console.error('CursorSystem: Could not find the cursor entity. Was it instantiated at startup?')
@@ -90,20 +88,25 @@ export class CursorSystem {
 		let playerX = 0
 		let playerY = 0
 
-		// Get player position. This is a singleton query.
-		for (const chunk of this.playerQuery.iter()) {
-			playerX = chunk.componentData[position].x[0]
-			playerY = chunk.componentData[position].y[0]
+		const playerChunkIds = this.playerQuery.getChunks()
+		if (playerChunkIds.length > 0) {
+			const playerChunkId = playerChunkIds[0]
+			if (this.getChunkSize(playerChunkId) > 0) {
+				const playerPositions = this.getComponentData(playerChunkId, position)
+				playerX = playerPositions.x[0]
+				playerY = playerPositions.y[0]
+			}
 		}
 
-		// This is a singleton query, so it will only run once.
-		for (const chunk of this.cursorQuery.iter()) {
+		const cursorChunkIds = this.cursorQuery.getChunks()
+		if (cursorChunkIds.length > 0) {
+			const cursorChunkId = cursorChunkIds[0]
 			// Convert screen-space hardware position to world-space coordinates.
 			// This accounts for camera panning by using the player's position as the camera's focus.
 			const worldX = this.hardwarePosition.x + playerX - screenWidth / 2
 			const worldY = -this.hardwarePosition.y + playerY + screenHeight / 2
 
-			const positions = chunk.componentData[position]
+			const positions = this.getComponentData(cursorChunkId, position)
 			positions.x[0] = worldX
 			positions.y[0] = worldY
 		}

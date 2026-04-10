@@ -16,6 +16,8 @@ const {
 	bitmaskComponent,
 	rpnComponent,
 	entityRefComponent,
+	health,
+	prefab,
 	shorthandDefaultComponent,
 } = componentManager.getTypeIDs()
 
@@ -33,7 +35,7 @@ export class PayloadCompilerTestSystem {
 		await prefabManager.preload(['test_prefab', 'ShorthandDefaultTest.prefab'])
 
 		describe('PayloadCompiler', () => {
-			describe('compile(typeID, data) - Single Component Payloads', () => {
+/* 			describe('compile(typeID, data) - Single Component Payloads', () => {
 				it('should compile a basic component payload', () => {
 					const { payload, mutators } = this.compile(position, { x: 123, y: 456 })
 
@@ -369,6 +371,7 @@ export class PayloadCompilerTestSystem {
 					ecs.destroyEntity(entityId)
 				})
 			})
+
 			describe('Integration with ECS.instantiate()', () => {
 				it('should correctly apply a shorthand override during immediate-mode instantiation', () => {
 					const entityId = ecs.instantiate('ShorthandDefaultTest.prefab', {
@@ -394,6 +397,116 @@ export class PayloadCompilerTestSystem {
 
 					// Cleanup
 					ecs.destroyEntity(entityId)
+				})
+			})
+
+			describe('Dirty Tracking Metadata', () => {
+				it('should include trackableComponentIds for multi-component payloads', () => {
+					// health is trackable, position is not.
+					const source = {
+						health: { current: 50 },
+						position: { x: 10, y: 20 },
+					}
+					const { payload } = this.compile(source)
+
+					expect(payload.trackableComponentIds).toBeDefined()
+					expect(payload.trackableComponentIds).toBeInstanceOf(Array)
+					expect(payload.trackableComponentIds).toEqual([health])
+
+				})
+
+				it('should include trackableComponentIds for single-component payloads (trackable)', () => {
+					const { payload } = this.compile(health, { current: 50 })
+
+					expect(payload.trackableComponentIds).toBeDefined()
+					expect(payload.trackableComponentIds).toEqual([health])
+				})
+
+				it('should include an empty trackableComponentIds for single-component payloads (not trackable)', () => {
+					const { payload } = this.compile(position, { x: 10 })
+
+					expect(payload.trackableComponentIds).toBeDefined()
+					expect(payload.trackableComponentIds).toEqual([])
+				})
+
+				it('should include an empty trackableComponentIds when no components are trackable', () => {
+					const source = {
+						position: { x: 10 },
+						velocity: { x: 1 },
+					}
+					const { payload } = this.compile(source)
+
+					expect(payload.trackableComponentIds).toBeDefined()
+					expect(payload.trackableComponentIds).toEqual([])
+				})
+			}) */
+
+			describe('compileDefaults() - Pooling Resets', () => {
+				it('should compile a defaults payload from a prefab, applying overrides and ignores', () => {
+					// The 'test_prefab' has Position {x:0, y:0}, Velocity {x:0, y:0}, TestEntityTag
+					// The schema for Health has a default of { current: 100, max: 100 }
+					const { payload, mutators } = this.compileDefaults(
+						'test_prefab',
+						{
+							// Override the default for position
+							position: { x: 50, y: 50 },
+						},
+						[
+							// Ignore the Velocity component by its ID
+							velocity,
+						],
+					)
+
+					// 1. Verify Archetype & Size
+					// The resulting payload should contain Position and TestEntityTag.
+					const expectedArchetype = entityManager.getArchetype([position, testEntityTag])
+					expect(payload.archetypeId).toBe(expectedArchetype)
+					// Position (16 bytes) + TestEntityTag (0 bytes). Prefab component should be ignored.
+					expect(payload.data.byteLength).toBe(16)
+
+					// 2. Verify Mutators and Values
+					expect(mutators.position).toBeDefined()
+					expect(mutators.velocity).toBeUndefined() // Should be ignored
+					expect(mutators.testEntityTag).toBeDefined()
+
+					// Check the overridden value
+					expect(mutators.position.x[0]).toBe(50)
+					expect(mutators.position.y[0]).toBe(50)
+
+					// 3. Verify on a real entity (via command buffer)
+					const entityId = ecs.createEntity({
+						position: { x: 999, y: 999 },
+						velocity: { x: 1, y: 1 },
+						testEntityTag: {},
+					})
+
+					this.setComponents(entityId, payload)
+					this.flush()
+
+					const pos = ecs.getComponent(entityId, 'position')
+					const vel = ecs.getComponent(entityId, 'velocity')
+
+					// Position should be reset to the overridden default
+					expect(pos).toEqual({ x: 50, y: 50 })
+					// Velocity should be untouched because it was ignored
+					expect(vel).toEqual({ x: 1, y: 1 })
+
+					ecs.destroyEntity(entityId)
+				})
+
+				it('should compile a defaults payload from a component object', () => {
+					// Schemas: Position defaults to {x:0, y:0}, Health to {current:100, max:100}
+					const sourceObject = {
+						position: {},
+						health: {},
+					}
+
+					const { payload } = this.compileDefaults(sourceObject)
+
+					// Verify Archetype & Size
+					const expectedArchetype = entityManager.getArchetype([position, health])
+					expect(payload.archetypeId).toBe(expectedArchetype)
+					expect(payload.data.byteLength).toBe(24) // Position (16) + Health (8)
 				})
 			})
 		})

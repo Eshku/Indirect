@@ -1,7 +1,7 @@
 {
     "components": {
-        "Position": { "x": 0, "y": 0 },
-        "Velocity": { "x": 0, "y": 0 },
-        "TestEntityTag": {}
+        "position": { "x": 0, "y": 0 },
+        "velocity": { "x": 0, "y": 0 },
+        "testEntityTag": {}
     }
 }

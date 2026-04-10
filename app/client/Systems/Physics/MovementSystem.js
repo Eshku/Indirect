@@ -24,18 +24,21 @@ export class MovementSystem {
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
-		for (const chunk of this.query.iter()) {
-			const velocityArrays = chunk.componentData[velocity]
-			const intentArrays = chunk.componentData[movementIntent]
-			const speedArrays = chunk.componentData[speed]
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const velocityArrays = this.getComponentData(chunkId, velocity)
+			const intentArrays = this.getComponentData(chunkId, movementIntent)
+			const speedArrays = this.getComponentData(chunkId, speed)
 
 			const velX = velocityArrays.x
 			const velY = velocityArrays.y
 			const intentX = intentArrays.desiredX
 			const intentY = intentArrays.desiredY
 			const speedVal = speedArrays.value
+			const chunkSize = this.getChunkSize(chunkId)
 
-			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
+			for (let indexInChunk = 0; indexInChunk < chunkSize; indexInChunk++) {
 				velX[indexInChunk] = intentX[indexInChunk] * speedVal[indexInChunk]
 				velY[indexInChunk] = intentY[indexInChunk] * speedVal[indexInChunk]
 			}

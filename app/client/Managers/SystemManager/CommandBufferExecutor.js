@@ -2,6 +2,7 @@ import { OpCodes } from './CommandOpcodes.js'
 import { CommandBufferReader } from './CommandBufferReader.js'
 import * as Schema from '../ComponentManager/ComponentSchema.js'
 import { entityStore, MASK_PARTS } from '../EntityManager/EntityManager.js'
+import { entityMaskManager } from '../EntityMaskManager/EntityMaskManager.js'
 
 /**
  * Executes commands from a pre-sorted CommandBuffer using a consolidation and batching strategy.
@@ -20,6 +21,7 @@ export class CommandBufferExecutor {
 		this.entityManager = entityManager
 		this.prefabManager = prefabManager
 		this.queryManager = queryManager
+		this.entityMaskManager = entityMaskManager
 
 		// --- Pre-allocated data structures to reduce GC pressure ---
 		this._creations = { identical: [], varied: [] }
@@ -28,26 +30,21 @@ export class CommandBufferExecutor {
 			remove: new Map(),
 			set: new Map(),
 			setSilent: new Map(),
-			setEnabled: new Map(),
-			markDirty: new Map(),
 		}
 		this._deferredModifications = {
 			add: [],
 			remove: [],
 			set: [],
+			setSilent: [],
 			addComponents: [],
 			setComponents: [],
 			setComponentsSilent: [],
-			setEnabled: [],
-			markDirty: [],
 		}
 		this._deferredBatching = {
 			add: new Map(),
 			remove: new Map(),
 			set: new Map(),
 			setSilent: new Map(),
-			setEnabled: new Map(),
-			markDirty: new Map(),
 		}
 		this._placeholderResolutionMap = new Map()
 		this._deletions = new Set()
@@ -55,14 +52,15 @@ export class CommandBufferExecutor {
 		this._entityTransitions = new Map()
 		this._movesByChunk = new Map()
 		this._removalsByArchetype = new Map()
+		this._trackableIdsBuffer = []
 	}
 
 	/**
 	 * Executes all commands queued in the provided CommandBuffer.
-	 * @param {import('./CommandBuffer.js').CommandBuffer} commandBuffer
-	 * @param {number} currentTick The current game tick for timestamping changes.
+	 * @param {import('./CommandBuffer.js').CommandBuffer} commandBuffer The command buffer to execute.
+	 * @param {number} timestampTick The tick value to use for timestamping all dirty changes.
 	 */
-	execute(commandBuffer, currentTick) {
+	execute(commandBuffer, timestampTick) {
 		const { sortedOffsets } = commandBuffer.getSortedCommands()
 		if (sortedOffsets.length === 0) return
 
@@ -80,18 +78,15 @@ export class CommandBufferExecutor {
 		modifications.remove.clear()
 		modifications.set.clear()
 		modifications.setSilent.clear()
-		modifications.setEnabled.clear()
-		modifications.markDirty.clear()
 
 		const deferredModifications = this._deferredModifications
 		deferredModifications.add.length = 0
 		deferredModifications.set.length = 0
+		deferredModifications.setSilent.length = 0
 		deferredModifications.remove.length = 0
 		deferredModifications.addComponents.length = 0
 		deferredModifications.setComponents.length = 0
 		deferredModifications.setComponentsSilent.length = 0
-		deferredModifications.setEnabled.length = 0
-		deferredModifications.markDirty.length = 0
 
 		const placeholderResolutionMap = this._placeholderResolutionMap
 		placeholderResolutionMap.clear()
@@ -118,11 +113,17 @@ export class CommandBufferExecutor {
 					chunkDeletions.add(chunkId)
 					break
 				}
+				case OpCodes.DESTROY_BY_QUERY: {
+					const queryId = reader.readU32()
+					const query = this.queryManager.getQueryById(queryId)
+					if (query) this.entityManager.destroyEntitiesInArchetypes(query.getArchetypes())
+					break
+				}
 
 				// --- Modification Phase Commands ---
 				case OpCodes.ADD_COMPONENT: {
 					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
+					if (entityId >> 63n === 1n) {
 						// Defer modifications on placeholder entities
 						deferredModifications.add.push(sortedOffsets[i])
 						continue
@@ -131,19 +132,25 @@ export class CommandBufferExecutor {
 					const componentTypeID = reader.readU16()
 					const dataLength = reader.readU16()
 					const dataOffset = reader.offset // The offset where the binary data starts
+					reader.seek(reader.offset + dataLength)
+					const trackableIdsCount = reader.readU8()
+					const trackableIds = this._trackableIdsBuffer
+					trackableIds.length = 0
+					for (let j = 0; j < trackableIdsCount; j++) {
+						trackableIds.push(reader.readU16())
+					}
 
 					if (!modifications.add.has(componentTypeID)) {
-						modifications.add.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+						modifications.add.set(componentTypeID, [])
 					}
-					const addBatch = modifications.add.get(componentTypeID)
-					addBatch.dataLengths.push(dataLength)
-					addBatch.entityIds.push(entityId)
-					addBatch.dataOffsets.push(dataOffset)
+					modifications.add
+						.get(componentTypeID)
+						.push({ entityId, dataOffset, dataLength, trackableIds: [...trackableIds] })
 					break
 				}
 				case OpCodes.ADD_COMPONENTS: {
 					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
+					if (entityId >> 63n === 1n) {
 						// Defer modifications on placeholder entities
 						deferredModifications.addComponents.push(sortedOffsets[i])
 						continue
@@ -151,16 +158,21 @@ export class CommandBufferExecutor {
 					if (deletions.has(entityId)) continue // Skip mods on deleted entities
 
 					const payloadArchetypeId = reader.readU16()
-					reader.readU16() // Skip dataLength
+					const dataLength = reader.readU16()
 					const payloadDataOffset = reader.offset // The offset where the AoS binary data starts
+					reader.seek(reader.offset + dataLength)
+					const trackableIdsCount = reader.readU8()
+					const trackableIds = this._trackableIdsBuffer
+					trackableIds.length = 0
+					for (let j = 0; j < trackableIdsCount; j++) {
+						trackableIds.push(reader.readU16())
+					}
 
 					const componentIds = this.entityManager.getComponentTypeIDsForArchetype(payloadArchetypeId)
-					if (!componentIds) continue
 
 					let componentRelativeOffset = 0
 					for (const componentTypeID of componentIds) {
 						const info = Schema.componentInfo[componentTypeID]
-						if (!info) continue
 
 						// Handle alignment within the AoS payload
 						const alignment = info.alignment
@@ -169,19 +181,21 @@ export class CommandBufferExecutor {
 						}
 
 						if (!modifications.add.has(componentTypeID)) {
-							modifications.add.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+							modifications.add.set(componentTypeID, [])
 						}
-						const addBatch = modifications.add.get(componentTypeID)
-						addBatch.entityIds.push(entityId)
-						addBatch.dataOffsets.push(payloadDataOffset + componentRelativeOffset)
-						addBatch.dataLengths.push(info.byteSize)
+						modifications.add.get(componentTypeID).push({
+							entityId,
+							dataOffset: payloadDataOffset + componentRelativeOffset,
+							dataLength: info.byteSize,
+							trackableIds: [...trackableIds],
+						})
 						componentRelativeOffset += info.byteSize
 					}
 					break
 				}
-				case OpCodes.SET_COMPONENTS_DATA: {
+				case OpCodes.SET_COMPONENTS: {
 					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
+					if (entityId >> 63n === 1n) {
 						// Defer modifications on placeholder entities
 						deferredModifications.setComponents.push(sortedOffsets[i])
 						continue
@@ -189,16 +203,21 @@ export class CommandBufferExecutor {
 					if (deletions.has(entityId)) continue // Skip mods on deleted entities
 
 					const payloadArchetypeId = reader.readU16()
-					reader.readU16() // Skip dataLength
+					const dataLength = reader.readU16()
 					const payloadDataOffset = reader.offset // The offset where the AoS binary data starts
+					reader.seek(reader.offset + dataLength)
+					const trackableIdsCount = reader.readU8()
+					const trackableIds = this._trackableIdsBuffer
+					trackableIds.length = 0
+					for (let j = 0; j < trackableIdsCount; j++) {
+						trackableIds.push(reader.readU16())
+					}
 
 					const componentIds = this.entityManager.getComponentTypeIDsForArchetype(payloadArchetypeId)
-					if (!componentIds) continue
 
 					let componentRelativeOffset = 0
 					for (const componentTypeID of componentIds) {
 						const info = Schema.componentInfo[componentTypeID]
-						if (!info) continue
 
 						// Handle alignment within the AoS payload
 						const alignment = info.alignment
@@ -207,19 +226,21 @@ export class CommandBufferExecutor {
 						}
 
 						if (!modifications.set.has(componentTypeID)) {
-							modifications.set.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+							modifications.set.set(componentTypeID, [])
 						}
-						const setBatch = modifications.set.get(componentTypeID)
-						setBatch.entityIds.push(entityId)
-						setBatch.dataOffsets.push(payloadDataOffset + componentRelativeOffset)
-						setBatch.dataLengths.push(info.byteSize)
+						modifications.set.get(componentTypeID).push({
+							entityId,
+							dataOffset: payloadDataOffset + componentRelativeOffset,
+							dataLength: info.byteSize,
+							trackableIds: [...trackableIds],
+						})
 						componentRelativeOffset += info.byteSize
 					}
 					break
 				}
-				case OpCodes.SET_COMPONENTS_DATA_SILENT: {
+				case OpCodes.SET_COMPONENTS_SILENT: {
 					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
+					if (entityId >> 63n === 1n) {
 						// Defer modifications on placeholder entities
 						deferredModifications.setComponentsSilent.push(sortedOffsets[i])
 						continue
@@ -227,16 +248,17 @@ export class CommandBufferExecutor {
 					if (deletions.has(entityId)) continue // Skip mods on deleted entities
 
 					const payloadArchetypeId = reader.readU16()
-					reader.readU16() // Skip dataLength
+					const dataLength = reader.readU16()
 					const payloadDataOffset = reader.offset
+					reader.seek(reader.offset + dataLength)
+					const trackableIdsCount = reader.readU8()
+					reader.seek(reader.offset + trackableIdsCount * 2)
 
 					const componentIds = this.entityManager.getComponentTypeIDsForArchetype(payloadArchetypeId)
-					if (!componentIds) continue
 
 					let componentRelativeOffset = 0
 					for (const componentTypeID of componentIds) {
 						const info = Schema.componentInfo[componentTypeID]
-						if (!info) continue
 
 						// Handle alignment within the AoS payload
 						const alignment = info.alignment
@@ -245,19 +267,20 @@ export class CommandBufferExecutor {
 						}
 
 						if (!modifications.setSilent.has(componentTypeID)) {
-							modifications.setSilent.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+							modifications.setSilent.set(componentTypeID, [])
 						}
-						const setBatch = modifications.setSilent.get(componentTypeID)
-						setBatch.entityIds.push(entityId)
-						setBatch.dataOffsets.push(payloadDataOffset + componentRelativeOffset)
-						setBatch.dataLengths.push(info.byteSize)
+						modifications.setSilent.get(componentTypeID).push({
+							entityId,
+							dataOffset: payloadDataOffset + componentRelativeOffset,
+							dataLength: info.byteSize,
+						})
 						componentRelativeOffset += info.byteSize
 					}
 					break
 				}
 				case OpCodes.REMOVE_COMPONENT: {
 					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
+					if (entityId >> 63n === 1n) {
 						// Defer modifications on placeholder entities
 						deferredModifications.remove.push(sortedOffsets[i])
 						continue
@@ -268,9 +291,9 @@ export class CommandBufferExecutor {
 					modifications.remove.get(componentTypeID).push(entityId)
 					break
 				}
-				case OpCodes.SET_COMPONENT_DATA: {
+				case OpCodes.SET_COMPONENT: {
 					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
+					if (entityId >> 63n === 1n) {
 						// Defer modifications on placeholder entities
 						deferredModifications.set.push(sortedOffsets[i])
 						continue
@@ -279,77 +302,45 @@ export class CommandBufferExecutor {
 					const componentTypeID = reader.readU16()
 					const dataLength = reader.readU16()
 					const dataOffset = reader.offset
+					reader.seek(reader.offset + dataLength)
+					const trackableIdsCount = reader.readU8()
+					const trackableIds = this._trackableIdsBuffer
+					trackableIds.length = 0
+					for (let j = 0; j < trackableIdsCount; j++) {
+						trackableIds.push(reader.readU16())
+					}
 
 					if (!modifications.set.has(componentTypeID)) {
-						modifications.set.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+						modifications.set.set(componentTypeID, [])
 					}
-					const setBatch = modifications.set.get(componentTypeID)
-					setBatch.entityIds.push(entityId)
-					setBatch.dataOffsets.push(dataOffset)
-					setBatch.dataLengths.push(dataLength)
-
+					modifications.set
+						.get(componentTypeID)
+						.push({ entityId, dataOffset, dataLength, trackableIds: [...trackableIds] })
 					break
 				}
 
-				case OpCodes.SET_COMPONENT_DATA_SILENT: {
+				case OpCodes.SET_COMPONENT_SILENT: {
 					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
+					if (entityId >> 63n === 1n) {
 						// Defer modifications on placeholder entities
-						deferredModifications.set.push(sortedOffsets[i]) // Can reuse the 'set' deferred array
+						deferredModifications.setSilent.push(sortedOffsets[i])
 						continue
 					}
 					if (deletions.has(entityId)) continue
 					const componentTypeID = reader.readU16()
 					const dataLength = reader.readU16()
 					const dataOffset = reader.offset
+					reader.seek(reader.offset + dataLength)
+					const trackableIdsCount = reader.readU8()
+					reader.seek(reader.offset + trackableIdsCount * 2)
 
 					if (!modifications.setSilent.has(componentTypeID)) {
-						modifications.setSilent.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+						modifications.setSilent.set(componentTypeID, [])
 					}
-					const setBatch = modifications.setSilent.get(componentTypeID)
-					setBatch.entityIds.push(entityId)
-					setBatch.dataOffsets.push(dataOffset)
-					setBatch.dataLengths.push(dataLength)
+					modifications.setSilent.get(componentTypeID).push({ entityId, dataOffset, dataLength, trackableIds: [] })
 					break
 				}
 
-				case OpCodes.SET_COMPONENT_ENABLED: {
-					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
-						deferredModifications.setEnabled.push(sortedOffsets[i])
-						continue
-					}
-					if (deletions.has(entityId)) continue
-					const componentTypeID = reader.readU16()
-					const enabledState = reader.readU8()
-
-					if (!modifications.setEnabled.has(componentTypeID)) {
-						modifications.setEnabled.set(componentTypeID, { entityIds: [], states: [] })
-					}
-					const setEnabledBatch = modifications.setEnabled.get(componentTypeID)
-					setEnabledBatch.entityIds.push(entityId)
-					setEnabledBatch.states.push(enabledState)
-					break
-				}
-
-				case OpCodes.MARK_DIRTY: {
-					const entityId = reader.readU64()
-					if ((entityId >> 63n) === 1n) {
-						deferredModifications.markDirty.push(sortedOffsets[i])
-						continue
-					}
-					if (deletions.has(entityId)) continue
-					const componentTypeID = reader.readU16()
-					const tick = reader.readU32()
-
-					if (!modifications.markDirty.has(componentTypeID)) {
-						modifications.markDirty.set(componentTypeID, { entityIds: [], ticks: [] })
-					}
-					const markDirtyBatch = modifications.markDirty.get(componentTypeID)
-					markDirtyBatch.entityIds.push(entityId)
-					markDirtyBatch.ticks.push(tick)
-					break
-				}
 				// --- Creation Phase Commands ---
 				case OpCodes.CREATE_ENTITY: {
 					// Reads the new format with a placeholder ID.
@@ -360,7 +351,13 @@ export class CommandBufferExecutor {
 					const archetypeId = reader.readU16()
 					const dataSize = reader.readU16()
 					const payload = reader.readBuffer(dataSize)
-					creations.varied.push({ placeholderId, archetypeId, payload })
+					const trackableIdsCount = reader.readU8()
+					const trackableIds = this._trackableIdsBuffer
+					trackableIds.length = 0
+					for (let j = 0; j < trackableIdsCount; j++) {
+						trackableIds.push(reader.readU16())
+					}
+					creations.varied.push({ placeholderId, archetypeId, payload, trackableIds: [...trackableIds] })
 					break
 				}
 				case OpCodes.CREATE_ENTITIES_IDENTICAL: {
@@ -368,7 +365,13 @@ export class CommandBufferExecutor {
 					const archetypeId = reader.readU16()
 					const dataSize = reader.readU16()
 					const payload = reader.readBuffer(dataSize)
-					creations.identical.push({ count, archetypeId, payload })
+					const trackableIdsCount = reader.readU8()
+					const trackableIds = this._trackableIdsBuffer
+					trackableIds.length = 0
+					for (let j = 0; j < trackableIdsCount; j++) {
+						trackableIds.push(reader.readU16())
+					}
+					creations.identical.push({ count, archetypeId, payload, trackableIds: [...trackableIds] })
 					break
 				}
 			}
@@ -378,45 +381,59 @@ export class CommandBufferExecutor {
 		// Execute consolidated batches in the correct order: Destroy > Modify (real) > Create > Modify (deferred)
 
 		// --- Deletion ---
-		this.entityManager.destroyEntitiesInBatch(deletions);
+		this.entityManager.destroyEntitiesInBatch(deletions)
 
 		for (const chunkId of chunkDeletions) {
-			this.entityManager.destroyAllEntitiesInChunk(chunkId);
+			this.entityManager.destroyAllEntitiesInChunk(chunkId)
 		}
 
 		// --- Modification (on existing entities) ---
-		this._buildAndExecuteMoveBatches(modifications, reader, currentTick);
-		this._executeSetDataBatches(modifications.set, reader, currentTick, true); // Mark dirty
-		this._executeSetDataBatches(modifications.setSilent, reader, currentTick, false); // Do not mark dirty
-		this._executeSetEnabledBatches(modifications.setEnabled);
-		this._executeMarkDirtyBatches(modifications.markDirty);
+		this._buildAndExecuteMoveBatches(modifications, reader, timestampTick)
+		this._executeSetDataBatches(modifications.set, reader, timestampTick, true) // Mark dirty
+		this._executeSetDataBatches(modifications.setSilent, reader, timestampTick, false) // Do not mark dirty
 
 		// --- Creation & Placeholder Resolution ---
-		for (const { placeholderId, archetypeId, payload } of creations.varied) {
-			const realEntityId = this.entityManager.createEntityFromAosPayload(archetypeId, payload, currentTick)
+		for (const { placeholderId, archetypeId, payload, trackableIds } of creations.varied) {
+			const realEntityId = this.entityManager.createEntityFromAosPayload(archetypeId, payload, timestampTick)
+			if (trackableIds.length > 0) {
+				// The EntityManager now handles broad-phase dirty marking on creation.
+				// The executor is only responsible for the narrow-phase bitmask.
+				this.entityMaskManager.markEntitiesDirtyById(realEntityId, trackableIds, timestampTick)
+			}
 			placeholderResolutionMap.set(placeholderId, realEntityId)
 		}
 
-		for (const { count, archetypeId, payload } of creations.identical) {
-			this.entityManager.createIdenticalEntitiesInArchetype(archetypeId, payload, count, currentTick)
+		for (const { count, archetypeId, payload, trackableIds } of creations.identical) {
+			const realEntityIds = this.entityManager.createIdenticalEntitiesInArchetype(
+				archetypeId,
+				payload,
+				count,
+				timestampTick,
+			)
+			if (trackableIds.length > 0) {
+				for (const realEntityId of realEntityIds) {
+					// The EntityManager now handles broad-phase dirty marking on creation.
+					// The executor is only responsible for the narrow-phase bitmask.
+					this.entityMaskManager.markEntitiesDirtyById(realEntityId, trackableIds, timestampTick)
+				}
+			}
 		}
 
 		// --- Deferred Modifications (on newly created entities) ---
 		if (
 			deferredModifications.add.length > 0 ||
 			deferredModifications.set.length > 0 ||
+			deferredModifications.setSilent.length > 0 ||
 			deferredModifications.setComponents.length > 0 ||
 			deferredModifications.setComponentsSilent.length > 0 ||
 			deferredModifications.addComponents.length > 0 ||
-			deferredModifications.remove.length > 0 ||
-			deferredModifications.setEnabled.length > 0 ||
-			deferredModifications.markDirty.length > 0
+			deferredModifications.remove.length > 0
 		) {
-			this._executeDeferredModifications(deferredModifications, placeholderResolutionMap, reader, currentTick)
+			this._executeDeferredModifications(deferredModifications, placeholderResolutionMap, reader, timestampTick)
 		}
 
 		// Cleanup
-		commandBuffer.clear();
+		commandBuffer.clear()
 	}
 
 	/**
@@ -424,14 +441,12 @@ export class CommandBufferExecutor {
 	 * This runs after creations are complete and all placeholders have been resolved to real entity IDs.
 	 * @private
 	 */
-	_executeDeferredModifications(deferredCommands, resolutionMap, reader, currentTick) {
+	_executeDeferredModifications(deferredCommands, resolutionMap, reader, timestampTick) {
 		const modifications = this._deferredBatching
 		modifications.add.clear()
 		modifications.remove.clear()
 		modifications.set.clear()
 		modifications.setSilent.clear()
-		modifications.setEnabled.clear()
-		modifications.markDirty.clear()
 
 		const resolve = id => resolutionMap.get(id) ?? id
 
@@ -444,16 +459,21 @@ export class CommandBufferExecutor {
 			if (!entityId) continue // Entity was created and destroyed in the same frame
 
 			const payloadArchetypeId = reader.readU16()
-			reader.readU16() // Skip dataLength
+			const dataLength = reader.readU16()
 			const payloadDataOffset = reader.offset
+			reader.seek(reader.offset + dataLength)
+			const trackableIdsCount = reader.readU8()
+			const trackableIds = this._trackableIdsBuffer
+			trackableIds.length = 0
+			for (let j = 0; j < trackableIdsCount; j++) {
+				trackableIds.push(reader.readU16())
+			}
 
 			const componentIds = this.entityManager.getComponentTypeIDsForArchetype(payloadArchetypeId)
-			if (!componentIds) continue
 
 			let componentRelativeOffset = 0
 			for (const componentTypeID of componentIds) {
 				const info = Schema.componentInfo[componentTypeID]
-				if (!info) continue
 
 				// Handle alignment
 				const alignment = info.alignment
@@ -462,18 +482,19 @@ export class CommandBufferExecutor {
 				}
 
 				if (!modifications.add.has(componentTypeID)) {
-					modifications.add.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+					modifications.add.set(componentTypeID, [])
 				}
-				const addBatch = modifications.add.get(componentTypeID)
-				addBatch.entityIds.push(entityId)
-				addBatch.dataOffsets.push(payloadDataOffset + componentRelativeOffset)
-				addBatch.dataLengths.push(info.byteSize)
-
+				modifications.add.get(componentTypeID).push({
+					entityId,
+					dataOffset: payloadDataOffset + componentRelativeOffset,
+					dataLength: info.byteSize,
+					trackableIds: [...trackableIds],
+				})
 				componentRelativeOffset += info.byteSize
 			}
 		}
 
-		// Unpack and consolidate deferred SET_COMPONENTS_DATA commands
+		// Unpack and consolidate deferred SET_COMPONENTS commands
 		for (const offset of deferredCommands.setComponents) {
 			reader.seek(offset)
 			reader.readU8() // Skip OpCode
@@ -482,16 +503,21 @@ export class CommandBufferExecutor {
 			if (!entityId) continue // Entity was created and destroyed in the same frame
 
 			const payloadArchetypeId = reader.readU16()
-			reader.readU16() // Skip dataLength
+			const dataLength = reader.readU16()
 			const payloadDataOffset = reader.offset
+			reader.seek(reader.offset + dataLength)
+			const trackableIdsCount = reader.readU8()
+			const trackableIds = this._trackableIdsBuffer
+			trackableIds.length = 0
+			for (let j = 0; j < trackableIdsCount; j++) {
+				trackableIds.push(reader.readU16())
+			}
 
 			const componentIds = this.entityManager.getComponentTypeIDsForArchetype(payloadArchetypeId)
-			if (!componentIds) continue
 
 			let componentRelativeOffset = 0
 			for (const componentTypeID of componentIds) {
 				const info = Schema.componentInfo[componentTypeID]
-				if (!info) continue
 
 				// Handle alignment
 				const alignment = info.alignment
@@ -500,18 +526,19 @@ export class CommandBufferExecutor {
 				}
 
 				if (!modifications.set.has(componentTypeID)) {
-					modifications.set.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+					modifications.set.set(componentTypeID, [])
 				}
-				const setBatch = modifications.set.get(componentTypeID)
-				setBatch.entityIds.push(entityId)
-				setBatch.dataOffsets.push(payloadDataOffset + componentRelativeOffset)
-				setBatch.dataLengths.push(info.byteSize)
-
+				modifications.set.get(componentTypeID).push({
+					entityId,
+					dataOffset: payloadDataOffset + componentRelativeOffset,
+					dataLength: info.byteSize,
+					trackableIds: [...trackableIds],
+				})
 				componentRelativeOffset += info.byteSize
 			}
 		}
 
-		// Unpack and consolidate deferred SET_COMPONENTS_DATA_SILENT commands
+		// Unpack and consolidate deferred SET_COMPONENTS_SILENT commands
 		for (const offset of deferredCommands.setComponentsSilent) {
 			reader.seek(offset)
 			reader.readU8() // Skip OpCode
@@ -520,16 +547,17 @@ export class CommandBufferExecutor {
 			if (!entityId) continue
 
 			const payloadArchetypeId = reader.readU16()
-			reader.readU16() // Skip dataLength
+			const dataLength = reader.readU16()
 			const payloadDataOffset = reader.offset
+			reader.seek(reader.offset + dataLength)
+			const trackableIdsCount = reader.readU8()
+			reader.seek(reader.offset + trackableIdsCount * 2)
 
 			const componentIds = this.entityManager.getComponentTypeIDsForArchetype(payloadArchetypeId)
-			if (!componentIds) continue
 
 			let componentRelativeOffset = 0
 			for (const componentTypeID of componentIds) {
 				const info = Schema.componentInfo[componentTypeID]
-				if (!info) continue
 
 				// Handle alignment
 				const alignment = info.alignment
@@ -538,13 +566,14 @@ export class CommandBufferExecutor {
 				}
 
 				if (!modifications.setSilent.has(componentTypeID)) {
-					modifications.setSilent.set(componentTypeID, { entityIds: [], dataOffsets: [], dataLengths: [] })
+					modifications.setSilent.set(componentTypeID, [])
 				}
-				const setBatch = modifications.setSilent.get(componentTypeID)
-				setBatch.entityIds.push(entityId)
-				setBatch.dataOffsets.push(payloadDataOffset + componentRelativeOffset)
-				setBatch.dataLengths.push(info.byteSize)
-
+				modifications.setSilent.get(componentTypeID).push({
+					entityId,
+					dataOffset: payloadDataOffset + componentRelativeOffset,
+					dataLength: info.byteSize,
+					trackableIds: [],
+				})
 				componentRelativeOffset += info.byteSize
 			}
 		}
@@ -557,66 +586,37 @@ export class CommandBufferExecutor {
 				const entityId = resolve(reader.readU64())
 				const componentTypeID = reader.readU16()
 
+				const dataLength = reader.readU16()
+				const dataOffset = reader.offset
+				reader.seek(reader.offset + dataLength)
+				const trackableIdsCount = reader.readU8()
+				const trackableIds = this._trackableIdsBuffer
+				trackableIds.length = 0
+				for (let j = 0; j < trackableIdsCount; j++) {
+					trackableIds.push(reader.readU16())
+				}
+
 				if (!batchMap.has(componentTypeID)) {
-					batchMap.set(componentTypeID, hasPayload ? { entityIds: [], dataOffsets: [], dataLengths: [] } : [])
+					batchMap.set(componentTypeID, hasPayload ? [] : [])
 				}
 				const batch = batchMap.get(componentTypeID)
 
-				if (hasPayload) {
-					const dataLength = reader.readU16()
-					const dataOffset = reader.offset
-					batch.entityIds.push(entityId)
-					batch.dataOffsets.push(dataOffset)
-					batch.dataLengths.push(dataLength)
-				} else {
+				if (hasPayload) batch.push({ entityId, dataOffset, dataLength, trackableIds: [...trackableIds] })
+				else {
 					batch.push(entityId)
 				}
 			}
 		}
 
 		processDeferred(deferredCommands.add, OpCodes.ADD_COMPONENT, modifications.add, true)
-		processDeferred(deferredCommands.set, OpCodes.SET_COMPONENT_DATA, modifications.set, true)
+		processDeferred(deferredCommands.set, OpCodes.SET_COMPONENT, modifications.set, true)
+		processDeferred(deferredCommands.setSilent, OpCodes.SET_COMPONENT_SILENT, modifications.setSilent, true)
 		processDeferred(deferredCommands.remove, OpCodes.REMOVE_COMPONENT, modifications.remove, false)
 
-		// Note: We don't need a separate deferred path for setSilent. If a silent set is deferred,
-		// it's because it's on a new entity. New entities are already marked dirty on creation,
-		// so treating a deferred silent set as a normal set is acceptable and simpler.
-		for (const offset of deferredCommands.setEnabled) {
-			reader.seek(offset)
-			reader.readU8() // Skip OpCode
-			const entityId = resolve(reader.readU64())
-			const componentTypeID = reader.readU16()
-			const enabledState = reader.readU8()
-
-			if (!modifications.setEnabled.has(componentTypeID)) {
-				modifications.setEnabled.set(componentTypeID, { entityIds: [], states: [] })
-			}
-			const batch = modifications.setEnabled.get(componentTypeID)
-			batch.entityIds.push(entityId)
-			batch.states.push(enabledState)
-		}
-
-		for (const offset of deferredCommands.markDirty) {
-			reader.seek(offset)
-			reader.readU8() // Skip OpCode
-			const entityId = resolve(reader.readU64())
-			const componentTypeID = reader.readU16()
-			const tick = reader.readU32()
-
-			if (!modifications.markDirty.has(componentTypeID)) {
-				modifications.markDirty.set(componentTypeID, { entityIds: [], ticks: [] })
-			}
-			const batch = modifications.markDirty.get(componentTypeID)
-			batch.entityIds.push(entityId)
-			batch.ticks.push(tick)
-		}
-
 		// Finally, execute the now-resolved modification batches.
-		this._buildAndExecuteMoveBatches(modifications, reader, currentTick, resolutionMap);
-		this._executeSetDataBatches(modifications.set, reader, currentTick, true, resolutionMap);
-		this._executeSetDataBatches(modifications.setSilent, reader, currentTick, false, resolutionMap);
-		this._executeSetEnabledBatches(modifications.setEnabled);
-		this._executeMarkDirtyBatches(modifications.markDirty);
+		this._buildAndExecuteMoveBatches(modifications, reader, timestampTick, resolutionMap)
+		this._executeSetDataBatches(modifications.set, reader, timestampTick, true, resolutionMap)
+		this._executeSetDataBatches(modifications.setSilent, reader, timestampTick, false, resolutionMap)
 	}
 
 	/**
@@ -625,10 +625,10 @@ export class CommandBufferExecutor {
 	 * source chunk and target archetype, and then executes them in batches.
 	 * @param {object} modifications The consolidated modification commands.
 	 * @param {CommandBufferReader} reader The reader for the raw command buffer.
-	 * @param {number} currentTick The current game tick.
+	 * @param {number} timestampTick The tick to use for timestamping changes.
 	 * @private
 	 */
-	_buildAndExecuteMoveBatches(modifications, reader, currentTick, resolutionMap = null) {
+	_buildAndExecuteMoveBatches(modifications, reader, timestampTick, resolutionMap = null) {
 		// Use pre-allocated maps and clear them for this execution.
 		const entityTransitions = this._entityTransitions
 		entityTransitions.clear()
@@ -656,19 +656,21 @@ export class CommandBufferExecutor {
 		}
 
 		// Process Additions
-		for (const [componentTypeID, addBatch] of modifications.add.entries()) {
+		for (const [componentTypeID, addCommands] of modifications.add.entries()) {
 			const partIndex = Math.floor(componentTypeID / 64)
 			const bitInPart = 1n << BigInt(componentTypeID % 64)
-			for (let i = 0; i < addBatch.entityIds.length; i++) {
-				const entityId = addBatch.entityIds[i]
+			for (const cmd of addCommands) {
+				const { entityId, dataOffset, dataLength, trackableIds } = cmd
 				const transition = ensureTransition(entityId)
 				if (!transition) continue
 
 				transition.targetMask[partIndex] |= bitInPart
 				transition.componentsToAdd.set(componentTypeID, {
-					dataOffset: addBatch.dataOffsets[i],
-					dataLength: addBatch.dataLengths[i],
+					dataOffset,
+					dataLength,
 				})
+				// Also mark dirty immediately if it's an add, as it's a structural change.
+				if (trackableIds.length > 0) this.entityMaskManager.markEntitiesDirtyById(entityId, trackableIds, timestampTick)
 			}
 		}
 
@@ -748,14 +750,15 @@ export class CommandBufferExecutor {
 					removedMask[i] = sourceMask[i] & ~targetMask[i]
 				}
 
-				this.entityManager._addEntitiesByCopyingBatch( // This copies data to the new location
+				this.entityManager._addEntitiesByCopyingBatch(
+					// This copies data to the new location
 					targetArchetypeId,
 					sourceArchetypeId,
 					sourceLocations,
 					entityIds,
 					componentsToAssign,
 					reader,
-					currentTick,
+					timestampTick,
 					addedMask,
 					removedMask,
 					resolutionMap,
@@ -781,30 +784,31 @@ export class CommandBufferExecutor {
 		}
 	}
 
-	_executeSetDataBatches(setDataMap, reader, currentTick, shouldMarkDirty, resolutionMap = null) {
-
-		for (const [componentTypeID, sets] of setDataMap.entries()) {
-			const info = Schema.componentInfo[componentTypeID]
-			if (!info) continue
-
+	_executeSetDataBatches(setDataMap, reader, timestampTick, shouldMarkDirty, resolutionMap = null) {
+		for (const [componentTypeID, commands] of setDataMap.entries()) {
 			// --- 1. Gather Pass ---
 			// First, group all modifications by their destination chunk.
-			const setsByChunk = new Map() // Map<chunkId, { destIndices: number[], dataOffsets: number[], dataLengths: number[] }>
-			const { entityIds, dataOffsets, dataLengths } = sets
-			for (let i = 0; i < entityIds.length; i++) {
-				const entityId = entityIds[i]
+			const setsByChunk = new Map() // Map<chunkId, { destIndices: [], dataOffsets: [], dataLengths: [], trackableCmds: [] }>
+
+			for (const cmd of commands) {
+				const { entityId, dataOffset, dataLength, trackableIds } = cmd
 				const location = this.entityManager.getEntityLocation(entityId)
 				if (!location) continue
 
 				// Developer is responsible for ensuring the entity has the component.
 				const chunkId = location.chunkId
+
 				if (!setsByChunk.has(chunkId)) {
-					setsByChunk.set(chunkId, { destIndices: [], dataOffsets: [], dataLengths: [] })
+					setsByChunk.set(chunkId, { destIndices: [], dataOffsets: [], dataLengths: [], trackableCmds: [] })
 				}
+
 				const batch = setsByChunk.get(chunkId)
 				batch.destIndices.push(location.indexInChunk)
-				batch.dataOffsets.push(dataOffsets[i])
-				batch.dataLengths.push(dataLengths[i])
+				batch.dataOffsets.push(dataOffset)
+				batch.dataLengths.push(dataLength)
+				if (shouldMarkDirty && trackableIds && trackableIds.length > 0) {
+					batch.trackableCmds.push({ entityId, trackableIds })
+				}
 			}
 
 			// --- 2. Blit Pass ---
@@ -816,104 +820,14 @@ export class CommandBufferExecutor {
 					batch.dataOffsets,
 					batch.dataLengths,
 					reader,
-					currentTick,
+					timestampTick,
 					shouldMarkDirty,
 					resolutionMap,
 				)
-			}
-		}
-	}
 
-	_executeSetEnabledBatches(setEnabledMap) {
-		for (const [componentTypeID, sets] of setEnabledMap.entries()) {
-			const info = Schema.componentInfo[componentTypeID]
-			if (!info || !info.isEnableable) {
-				console.warn(
-					`[CommandBufferExecutor] Attempted to set enabled state for non-enableable component ID ${componentTypeID}.`,
-				)
-				continue
-			}
-
-			const { entityIds, states } = sets
-			for (let i = 0; i < entityIds.length; i++) {
-				const entityId = entityIds[i]
-				const enabledState = states[i]
-
-				const location = this.entityManager.getEntityLocation(entityId)
-				if (!location) continue
-
-				const { chunkId, indexInChunk } = location
-				const chunkMetadata = entityStore.chunkMetadata[chunkId]
-				const componentMetadata = chunkMetadata?.[componentTypeID]
-				const enabledMask = componentMetadata?.enabledMask
-
-				if (!enabledMask) {
-					continue
+				for (const { entityId, trackableIds } of batch.trackableCmds) {
+					this.entityMaskManager.markEntitiesDirtyById(entityId, trackableIds, timestampTick)
 				}
-
-				const wordIndex = indexInChunk >>> 5 // Math.floor(i / 32)
-				const bitMask = 1 << (indexInChunk & 31) // 1 << (i % 32)
-				const shouldBeEnabled = enabledState === 1
-
-				if (shouldBeEnabled) {
-					Atomics.or(enabledMask, wordIndex, bitMask)
-				} else {
-					Atomics.and(enabledMask, wordIndex, ~bitMask)
-				}
-			}
-		}
-	}
-
-	_executeMarkDirtyBatches(markDirtyMap) {
-		for (const [componentTypeID, marks] of markDirtyMap.entries()) {
-			const info = Schema.componentInfo[componentTypeID]
-			if (!info || !info.isTrackable) {
-				console.warn(
-					`[CommandBufferExecutor] Attempted to mark dirty for non-tracked component ID ${componentTypeID}.`,
-				)
-				continue
-			}
-
-			const { entityIds, ticks } = marks
-			for (let i = 0; i < entityIds.length; i++) {
-				const entityId = entityIds[i]
-				const tick = ticks[i]
-				const location = this.entityManager.getEntityLocation(entityId)
-				if (!location) continue
-
-				const { chunkId, indexInChunk } = location
-				const chunkMetadata = entityStore.chunkMetadata[chunkId]
-				const componentMetadata = chunkMetadata?.[componentTypeID]
-				const dirtyMasks = componentMetadata?.dirtyMasks
-
-				if (!dirtyMasks) {
-					continue
-				}
-
-				const frameIndex = tick % Schema.DIRTY_HISTORY_LENGTH
-				const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
-				const wordIndexInFrame = indexInChunk >>> 5
-				const bitMask = 1 << (indexInChunk & 31)
-				const finalWordIndex = frameIndex * wordsPerFrame + wordIndexInFrame
-
-				Atomics.or(dirtyMasks, finalWordIndex, bitMask)
-
-				// Also update the broad-phase tick
-				const componentIdArray = this.entityManager.getComponentTypeIDsForArchetype(location.archetypeId)
-				let indexInArchetype = -1
-				let low = 0,
-					high = componentIdArray.length - 1
-				while (low <= high) {
-					const mid = (low + high) >>> 1
-					const midVal = componentIdArray[mid]
-					if (midVal === componentTypeID) {
-						indexInArchetype = mid
-						break
-					} else if (midVal < componentTypeID) low = mid + 1
-					else high = mid - 1
-				}
-
-				if (indexInArchetype !== -1) this.entityManager._updateArchetypeDirtyTick(chunkId, indexInArchetype, tick)
 			}
 		}
 	}

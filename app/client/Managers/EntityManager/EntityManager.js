@@ -117,26 +117,24 @@ export const entityStore = {
 Atomics.store(entityStore.nextArchetypeId, 0, 0)
 
 export class EntityManager {
-	constructor() {
-		// --- Manager References ---
-		this.queryManager = null
-		this.componentManager = null
-		this.systemManager = null
-		this.prefabManager = null
-		this.workerManager = null
-
-		// Tracks chunk IDs created within a single frame for delta-syncing to workers.
-		this.newlyCreatedChunks = []
-		this.destroyedChunks = []
-		this.newlyCreatedArchetypePages = []
-	}
-
 	async init(ecs) {
 		this.queryManager = ecs.queryManager
 		this.componentManager = ecs.componentManager
 		this.systemManager = ecs.systemManager
 		this.prefabManager = ecs.prefabManager
 		this.workerManager = ecs.workerManager
+
+		// --- Lifecycle Hooks ---
+		// External managers can subscribe to these to stay in sync with the world state.
+		this.onChunkCreated = new Set()
+		this.onChunkDestroyed = new Set()
+		this.onEntitiesMoved = new Set()
+		this.onEntitiesSwapped = new Set()
+
+		// Tracks chunk IDs created within a single frame for delta-syncing to workers.
+		this.newlyCreatedChunks = []
+		this.destroyedChunks = []
+		this.newlyCreatedArchetypePages = []
 
 		// Initialize the shared archetype map
 		entityStore.archetypeLookup = new SharedArchetypeHashMap(
@@ -294,7 +292,7 @@ export class EntityManager {
 	 * @param {number} currentTick current game tick.
 	 */
 	createEntityFromAosPayload(archetypeId, binaryAosPayload, currentTick) {
-		if (archetypeId === undefined) return
+		if (archetypeId === undefined) return 
 		const entityID = this._createEntityId() // This is now an array of one
 		this.createIdenticalEntitiesInArchetype(archetypeId, binaryAosPayload, 1, currentTick, [entityID])
 		return entityID
@@ -404,73 +402,78 @@ export class EntityManager {
 	 * @returns {boolean} True.
 	 */
 	destroyEntitiesInBatch(entityIDs) {
-		if (!entityIDs || entityIDs.size === 0) return true;
+		if (!entityIDs || entityIDs.size === 0) return true
 
-		const removalsByChunk = new Map(); // Map<chunkId, { archetypeId: number, indices: number[], entityIds: bigint[] }>
+		const removalsByChunk = new Map() // Map<chunkId, { archetypeId: number, indices: number[], entityIds: bigint[] }>
 
 		// --- Pass 1: Gather and group all entities to be removed by their chunk ---
 		for (const entityId of entityIDs) {
-			if (!this.isEntityActive(entityId)) continue;
+			if (!this.isEntityActive(entityId)) continue
 
-			const index = Number(entityId & 0xffffffffn);
-			const packed1 = entityStore.entityLocations[index * 2];
-			const chunkId = packed1 & 0xffff;
+			const index = Number(entityId & 0xffffffffn)
+			const packed1 = entityStore.entityLocations[index * 2]
+			const chunkId = packed1 & 0xffff
 
 			if (chunkId !== NULL_CHUNK_ID) {
-				const archetypeId = packed1 >> 16;
-				const indexInChunk = entityStore.entityLocations[index * 2 + 1];
+				const archetypeId = packed1 >> 16
+				const indexInChunk = entityStore.entityLocations[index * 2 + 1]
 				if (!removalsByChunk.has(chunkId)) {
-					removalsByChunk.set(chunkId, { archetypeId, indices: [], entityIds: [] });
+					removalsByChunk.set(chunkId, { archetypeId, indices: [], entityIds: [] })
 				}
-				const batch = removalsByChunk.get(chunkId);
-				batch.indices.push(indexInChunk);
-				batch.entityIds.push(entityId);
+				const batch = removalsByChunk.get(chunkId)
+				batch.indices.push(indexInChunk)
+				batch.entityIds.push(entityId)
 			} else {
 				// Handle entities that exist but have no components (and thus no location).
-				entityStore.freeIndices.push(index);
-				entityStore.generations[index]++;
-				entityStore.entityVersion[index] = undefined;
-				entityStore.entityLocations[index * 2] = 0;
-				entityStore.entityLocations[index * 2 + 1] = 0;
+				entityStore.freeIndices.push(index)
+				entityStore.generations[index]++
+				entityStore.entityVersion[index] = undefined
+				entityStore.entityLocations[index * 2] = 0
+				entityStore.entityLocations[index * 2 + 1] = 0
 			}
 		}
 
 		// --- Pass 2: Perform batched removals chunk by chunk ---
 		for (const [chunkId, batch] of removalsByChunk.entries()) {
-			const { archetypeId, indices, entityIds } = batch;
-			const componentTypeIDs = this.getComponentTypeIDsForArchetype(archetypeId);
-			const componentCount = componentTypeIDs.length;
-			const oldSize = entityStore.chunkSizes[chunkId];
+			const { archetypeId, indices, entityIds } = batch
+			const componentTypeIDs = this.getComponentTypeIDsForArchetype(archetypeId)
+			const componentCount = componentTypeIDs.length
+			const oldSize = entityStore.chunkSizes[chunkId]
 
 			// Sort indices descending for safe swap-and-pop.
-			indices.sort((a, b) => b - a);
-			const swappedMappings = this._removeEntitiesFromChunk(chunkId, indices, componentTypeIDs, componentCount);
+			indices.sort((a, b) => b - a)
+			const swappedMappings = this._removeEntitiesFromChunk(chunkId, indices, componentTypeIDs, componentCount)
 
 			// Update locations for any entities that were swapped.
-			for (const [swappedEntityId, newIndex] of swappedMappings.entries()) {
-				const swappedEntityIndex = Number(swappedEntityId & 0xffffffffn);
-				entityStore.entityLocations[swappedEntityIndex * 2 + 1] = newIndex;
+			for (const [swappedEntityId, { newIndex }] of swappedMappings.entries()) {
+				const swappedEntityIndex = Number(swappedEntityId & 0xffffffffn)
+				entityStore.entityLocations[swappedEntityIndex * 2 + 1] = newIndex
+			}
+			if (swappedMappings.size > 0) {
+				for (const callback of this.onEntitiesSwapped) {
+					callback({ chunkId, swappedMappings })
+				}
 			}
 
 			// Proactively update the non-full chunk pointer or destroy the chunk if it's now empty.
 			if (entityStore.chunkCapacities[chunkId] === oldSize && entityStore.chunkSizes[chunkId] < oldSize) {
-				entityStore.archetypeLastNonFullChunkId[archetypeId] = chunkId;
+				entityStore.archetypeLastNonFullChunkId[archetypeId] = chunkId
 			} else if (entityStore.chunkSizes[chunkId] === 0) {
-				this._destroyChunk(chunkId, archetypeId);
+				this._destroyChunk(chunkId, archetypeId)
 			}
 
 			// Invalidate all destroyed entity IDs from this chunk's batch.
 			for (const entityId of entityIds) {
-				const index = Number(entityId & 0xffffffffn);
-				entityStore.freeIndices.push(index);
-				entityStore.generations[index]++;
-				entityStore.entityVersion[index] = undefined;
-				entityStore.entityLocations[index * 2] = 0;
-				entityStore.entityLocations[index * 2 + 1] = 0;
+				const index = Number(entityId & 0xffffffffn)
+				entityStore.freeIndices.push(index)
+				entityStore.generations[index]++
+				entityStore.entityVersion[index] = undefined
+				entityStore.entityLocations[index * 2] = 0
+				entityStore.entityLocations[index * 2 + 1] = 0
 			}
 		}
 
-		return true;
+		return true
 	}
 
 	/**
@@ -506,6 +509,32 @@ export class EntityManager {
 		this._destroyChunk(chunkId, archetypeId)
 	}
 
+	/**
+	 * Destroys all entities belonging to a set of archetypes.
+	 * This is a highly-optimized bulk operation.
+	 * @param {Set<number>} archetypeIdSet - A set of archetype IDs.
+	 */
+	destroyEntitiesInArchetypes(archetypeIdSet) {
+		if (!archetypeIdSet || archetypeIdSet.size === 0) return
+
+		// We can iterate and call the existing chunk-based destruction.
+		// This is already very fast as it avoids per-entity processing.
+		for (const archetypeId of archetypeIdSet) {
+			// Traverse the archetype's linked list of chunks and destroy each one.
+			// We must be careful as destroyAllEntitiesInChunk modifies the list.
+			// So we gather all chunk IDs first.
+			const chunksToDestroy = []
+			let chunkId = entityStore.archetypeHeadChunkIds[archetypeId]
+			while (chunkId !== NULL_CHUNK_ID) {
+				chunksToDestroy.push(chunkId)
+				chunkId = entityStore.chunkNextInArchetype[chunkId]
+			}
+			for (const id of chunksToDestroy) {
+				this.destroyAllEntitiesInChunk(id)
+			}
+		}
+	}
+
 	destroyAllEntities() {
 		// This is a full reset. We can safely clear everything.
 		this.clearAllArchetypes() // Removes all chunks
@@ -515,8 +544,8 @@ export class EntityManager {
 		// in one test from being recycled in another, which could cause capacity mismatches.
 		entityStore.nextChunkId = 1
 		entityStore.freeChunkIds.length = 0
-		// Notify the query manager that all archetypes are gone so it can clear its queries.
-
+		// Notify the query manager that all archetypes are gone so it can clear its matching chunks/archetypes,
+		// but without destroying the query objects themselves.
 		this.queryManager.unregisterAllArchetypes()
 	}
 
@@ -596,8 +625,8 @@ export class EntityManager {
 
 		// 3. Initialize newly added components using their binary payloads.
 		for (const [typeID, data] of componentsToAssign.entries()) {
-			const dataView = new DataView(data);
-			this._writeComponentDataFromBuffer(targetChunkId, targetIndex, typeID, dataView, 0);
+			const dataView = new DataView(data)
+			this._writeComponentDataFromBuffer(targetChunkId, targetIndex, typeID, dataView, 0)
 		}
 
 		// 4. Mark only the newly added components as dirty for the current tick.
@@ -609,9 +638,6 @@ export class EntityManager {
 
 		for (const typeID of componentsToAssign.keys()) {
 			const indexInArchetype = componentIndexMap.get(typeID)
-			if (indexInArchetype !== undefined) {
-				this._updateArchetypeDirtyTick(targetChunkId, indexInArchetype, currentTick)
-			}
 		}
 
 		// 4. Remove entity from its source chunk (using swap-and-pop).
@@ -801,6 +827,7 @@ export class EntityManager {
 			return undefined
 		}
 
+		//! alloc
 		return {
 			archetypeId: packed1 >> 16,
 			chunkId: packed1 & 0xffff,
@@ -824,6 +851,16 @@ export class EntityManager {
 	}
 
 	clearAllArchetypes() {
+		// --- HMR/Reset Fix ---
+		// Before wiping the archetype data, we must notify any listeners that all
+		// existing chunks are about to be destroyed. This allows managers like
+		// EntityMaskManager to clean up their own state and avoid stale references.
+		for (let i = 1; i < entityStore.nextChunkId; i++) {
+			if (entityStore.chunkArchetypeIds[i] !== 0 && !entityStore.freeChunkIds.includes(i)) {
+				for (const callback of this.onChunkDestroyed) callback(i)
+			}
+		}
+
 		if (entityStore.archetypeLookup) entityStore.archetypeLookup.clear()
 		Atomics.store(entityStore.nextArchetypeId, 0, 0)
 		entityStore.archetypeByteSizes.fill(0)
@@ -859,26 +896,16 @@ export class EntityManager {
 		shouldMarkDirty,
 		resolutionMap = null,
 	) {
-
-		const batchSize = destIndices.length;
-		// Create a single DataView over the entire command buffer.
+		const batchSize = destIndices.length
 		const sourceView = new DataView(reader.buffer);
 
 		for (let i = 0; i < batchSize; i++) {
 			const destIndex = destIndices[i];
 			const sourceOffset = dataOffsets[i]; // This is the base offset of the component data.
-			// Pass the large view and the correct base offset for the component's data.
 			this._writeComponentDataFromBuffer(chunkId, destIndex, typeID, sourceView, sourceOffset, resolutionMap);
 		}
-
 		if (shouldMarkDirty) {
-			this._updateDirtyStateForComponent(chunkId, typeID, currentTick)
-			const info = Schema.componentInfo[typeID]
-			if (info.isTrackable) {
-				for (const destIndex of destIndices) {
-					this._markNarrowPhaseDirty(chunkId, destIndex, typeID, currentTick)
-				}
-			}
+			this._updateDirtyStateForComponent(chunkId, typeID, currentTick);
 		}
 	}
 
@@ -925,7 +952,7 @@ export class EntityManager {
 				entityStore.entityLocations[entityIndex * 2 + 1] = targetIndex
 			}
 
-			const componentIdArray = this.getComponentTypeIDsForArchetype(archetype);
+			const componentIdArray = this.getComponentTypeIDsForArchetype(archetype)
 			const componentCount = componentIdArray.length
 
 			// The AoS payload layout is determined by component ID order and then property declaration order.
@@ -964,8 +991,35 @@ export class EntityManager {
 				}
 			}
 
+			// --- Mark all components as dirty for broad-phase reactivity on creation ---
+			// This ensures that a `modified:` query will see newly created entities on the tick they are created.
+			const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[chunkId]
+			if (archetypeDirtyTicks) {
+				for (let i = 0; i < componentCount; i++) {
+					// The index in the dirty tick array corresponds to the component's index in the sorted componentIdArray.
+					this._updateArchetypeDirtyTick(chunkId, i, currentTick)
+				}
+			}
+
 			entityStore.chunkSizes[chunkId] += entitiesToAddInChunk
 			entityCursor += entitiesToAddInChunk
+		}
+	}
+
+	_fireMoveHook(entityIds, sourceLocations, newLocationsMap) {
+		const moveBatch = { entityIds: [], oldLocations: [], newLocations: [] }
+		for (let i = 0; i < entityIds.length; i++) {
+			const entityId = entityIds[i]
+			const oldLocation = sourceLocations[i]
+			const newLocation = newLocationsMap.get(entityId)
+			if (newLocation) {
+				moveBatch.entityIds.push(entityId)
+				moveBatch.oldLocations.push(oldLocation)
+				moveBatch.newLocations.push(newLocation)
+			}
+		}
+		if (moveBatch.entityIds.length > 0) {
+			for (const callback of this.onEntitiesMoved) callback(moveBatch)
 		}
 	}
 
@@ -1078,8 +1132,8 @@ export class EntityManager {
 					const destIndex = startIndexInChunk + i
 					const sourceOffset = payloadInfo.dataOffsets[overallIndex]
 					const sourceLength = payloadInfo.dataLengths[overallIndex]
-					const sourceView = new DataView(reader.buffer, sourceOffset, sourceLength);
-					this._writeComponentDataFromBuffer(chunkId, destIndex, typeID, sourceView, 0, resolutionMap);
+					const sourceView = new DataView(reader.buffer, sourceOffset, sourceLength)
+					this._writeComponentDataFromBuffer(chunkId, destIndex, typeID, sourceView, 0, resolutionMap)
 				}
 			}
 
@@ -1094,15 +1148,17 @@ export class EntityManager {
 			// Only mark components that were newly initialized as dirty.
 			for (const typeID of copyPlan.toInitialize) {
 				const indexInArchetype = componentIndexMap.get(typeID)
-				if (indexInArchetype === undefined) continue
-
-				this._updateArchetypeDirtyTick(chunkId, indexInArchetype, currentTick)
-				this._markNarrowPhaseDirtyForBatch(chunkId, startIndexInChunk, entitiesToAddInChunk, typeID, currentTick)
+				
+					this._updateArchetypeDirtyTick(chunkId, indexInArchetype, currentTick)
+	
 			}
 
 			entityStore.chunkSizes[chunkId] += entitiesToAddInChunk
 			entityCursor += entitiesToAddInChunk
 		}
+
+		// Fire the move hook after all entities in the batch have been processed.
+		this._fireMoveHook(entityIds, sourceLocations, newLocationsMap)
 	}
 
 	_removeEntitiesBatch(archetype, entitiesWithLocations) {
@@ -1131,11 +1187,17 @@ export class EntityManager {
 			indicesToRemove.sort((a, b) => b - a)
 			const swappedMappings = this._removeEntitiesFromChunk(chunkId, indicesToRemove, componentTypeIDs, componentCount)
 
-			for (const [swappedEntityId, newIndex] of swappedMappings.entries()) {
+			for (const [swappedEntityId, { newIndex }] of swappedMappings.entries()) {
 				const swappedEntityIndex = Number(swappedEntityId & 0xffffffffn)
 				// Only update the indexInChunk part of the packed data.
 				// This is safe because the archetype and chunkId have not changed.
 				entityStore.entityLocations[swappedEntityIndex * 2 + 1] = newIndex
+			}
+
+			if (swappedMappings.size > 0) {
+				for (const callback of this.onEntitiesSwapped) {
+					callback({ chunkId, swappedMappings })
+				}
 			}
 
 			// Proactively update the non-full chunk pointer if this chunk just gained space.
@@ -1162,8 +1224,8 @@ export class EntityManager {
 			if (!isLastElement) {
 				const chunkEntities = entityStore.chunkComponentData[chunkId].entities
 				const swappedEntityId = chunkEntities[lastIndex]
-				chunkEntities.copyWithin(indexToRemove, lastIndex, lastIndex + 1)
-				swappedMappings.set(swappedEntityId, indexToRemove)
+				chunkEntities[indexToRemove] = swappedEntityId
+				swappedMappings.set(swappedEntityId, { oldIndex: lastIndex, newIndex: indexToRemove })
 
 				for (let i = 0; i < componentCount; i++) {
 					const typeID = componentTypeIDs[i]
@@ -1219,10 +1281,16 @@ export class EntityManager {
 
 		const swappedMappings = this._removeEntitiesFromChunk(chunkId, [indexInChunk], componentTypeIDs, componentCount)
 
-		for (const [swappedEntityId, newIndex] of swappedMappings.entries()) {
+		for (const [swappedEntityId, { newIndex }] of swappedMappings.entries()) {
 			const swappedEntityIndex = Number(swappedEntityId & 0xffffffffn)
 			// Only update the indexInChunk part of the packed data.
 			entityStore.entityLocations[swappedEntityIndex * 2 + 1] = newIndex
+		}
+
+		if (swappedMappings.size > 0) {
+			for (const callback of this.onEntitiesSwapped) {
+				callback({ chunkId, swappedMappings })
+			}
 		}
 
 		if (entityStore.chunkCapacities[chunkId] === oldSize && entityStore.chunkSizes[chunkId] < oldSize) {
@@ -1329,6 +1397,11 @@ export class EntityManager {
 		entityStore.archetypeLastNonFullChunkId[archetypeId] = newChunkId
 		this.queryManager.registerChunk(archetypeId, newChunkId)
 
+		// Fire hook for subscribers like entityMaskManager
+		for (const callback of this.onChunkCreated) {
+			callback(newChunkId, archetypeId)
+		}
+
 		// Track this new chunk for delta-syncing.
 		this.newlyCreatedChunks.push(newChunkId)
 		return newChunkId
@@ -1389,26 +1462,11 @@ export class EntityManager {
 
 		// The chunkArchetypeDirtyTicks buffer is size-dependent, so it must always be recreated.
 		entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined // De-reference old one for GC
+		// Also clear the structural change logs. Although their size is constant,
+		// this ensures we get fresh buffers from the allocation call.
+		entityStore.chunkAddedComponentMasks[chunkId] = undefined
+		entityStore.chunkRemovedComponentMasks[chunkId] = undefined
 		this._allocateChunkSharedMetadata(chunkId, capacity, newComponentIds)
-		// --- Link the recycled chunk into its new archetype's list ---
-
-		// TEMPORARY DEBUG ASSERTION: Verify metadata was correctly allocated
-		const damageBufferId = this.componentManager.getTypeIDs().damageCollisionBuffer
-		const physicsBufferId = this.componentManager.getTypeIDs().physicsCollisionBuffer
-		const hasExpectedTrackedComponent =
-			newComponentIds.includes(damageBufferId) || newComponentIds.includes(physicsBufferId)
-		// The debug assertion below checks for `isTrackable` components.
-		if (
-			hasExpectedTrackedComponent &&
-			(!entityStore.chunkMetadata[chunkId] ||
-				(!entityStore.chunkMetadata[chunkId][damageBufferId] && !entityStore.chunkMetadata[chunkId][physicsBufferId]))
-		) {
-			console.error(
-				`[EntityManager Debug] CRITICAL ERROR: Chunk ${chunkId} re-initialized for archetype ${archetypeId} (components: ${newComponentIds.join(',')}) but metadata for damage/physics buffer is missing!`,
-			)
-			// To halt execution immediately for debugging, uncomment the line below:
-			// throw new Error("Chunk metadata missing expected tracked component entry after re-initialization!");
-		}
 
 		const tailId = entityStore.archetypeTailChunkIds[archetypeId]
 		if (tailId !== NULL_CHUNK_ID) {
@@ -1424,6 +1482,11 @@ export class EntityManager {
 		entityStore.archetypeLastNonFullChunkId[archetypeId] = chunkId
 		this.queryManager.registerChunk(archetypeId, chunkId)
 
+		// Fire hook for subscribers
+		for (const callback of this.onChunkCreated) {
+			callback(chunkId, archetypeId)
+		}
+
 		this.newlyCreatedChunks.push(chunkId)
 		return chunkId
 	}
@@ -1434,6 +1497,11 @@ export class EntityManager {
 	 * @private
 	 */
 	_destroyChunk(chunkId, archetypeId) {
+		// Fire hook BEFORE unlinking and adding to free pool.
+		for (const callback of this.onChunkDestroyed) {
+			callback(chunkId)
+		}
+
 		// --- Unlink the chunk from the archetype's list ---
 		const prevId = entityStore.chunkPrevInArchetype[chunkId]
 		const nextId = entityStore.chunkNextInArchetype[chunkId]
@@ -1471,37 +1539,37 @@ export class EntityManager {
 	}
 
 	_writeComponentDataFromBuffer(chunkId, indexInChunk, typeID, sourceView, componentBaseOffset, resolutionMap = null) {
-		const info = Schema.componentInfo[typeID];
-		const destSoaArrays = entityStore.chunkComponentData[chunkId][typeID];
+		const info = Schema.componentInfo[typeID]
+		const destSoaArrays = entityStore.chunkComponentData[chunkId][typeID]
 
 		// Iterate through flattened properties to write data.
 		for (const propKey of info.propertyKeys) {
-			const propInfo = info.properties[propKey];
-			if (!propInfo) continue;
+			const propInfo = info.properties[propKey]
+			if (!propInfo) continue
 
-			const readOffset = componentBaseOffset + propInfo.offset;
-			let value;
+			const readOffset = componentBaseOffset + propInfo.offset
+			let value
 
 			// If a resolution map is provided and this property is an entity, resolve placeholders.
 			if (resolutionMap && propInfo.type === 'entity') {
-				const placeholderId = sourceView.getBigUint64(readOffset, true);
-				if ((placeholderId >> 63n) === 1n) {
+				const placeholderId = sourceView.getBigUint64(readOffset, true)
+				if (placeholderId >> 63n === 1n) {
 					// It's a placeholder, resolve it. Default to 0n if not found.
-					value = resolutionMap.get(placeholderId) ?? 0n;
+					value = resolutionMap.get(placeholderId) ?? 0n
 				} else {
 					// It's a regular entity ID.
-					value = placeholderId;
+					value = placeholderId
 				}
 			} else {
 				// Standard read logic for non-entity types or when no resolution is needed.
 				if (propInfo.arrayConstructor.name.startsWith('Big')) {
-					value = sourceView[propInfo.readMethod](readOffset, true); // For getBigInt64/getBigUint64
+					value = sourceView[propInfo.readMethod](readOffset, true) // For getBigInt64/getBigUint64
 				} else {
-					value = sourceView[propInfo.readMethod](readOffset, true); // For getFloat32, getInt32 etc.
+					value = sourceView[propInfo.readMethod](readOffset, true) // For getFloat32, getInt32 etc.
 				}
 			}
 
-			destSoaArrays[propKey][indexInChunk] = value;
+			destSoaArrays[propKey][indexInChunk] = value
 		}
 	}
 
@@ -1524,69 +1592,6 @@ export class EntityManager {
 		const removedMasksBuffer = new SharedArrayBuffer(structuralMasksSize)
 		entityStore.chunkAddedComponentMasks[chunkId] = new BigUint64Array(addedMasksBuffer)
 		entityStore.chunkRemovedComponentMasks[chunkId] = new BigUint64Array(removedMasksBuffer)
-
-		// Allocate enableable/tracked bitmask buffers.
-		const metadata = {}
-		for (const typeID of componentIdArray) {
-			const info = Schema.componentInfo[typeID]
-			if (!info) continue
-
-			if (info.isEnableable) {
-				const words = Math.ceil(capacity / 32)
-				const buffer = new SharedArrayBuffer(words * 4)
-				const mask = new Uint32Array(buffer)
-				mask.fill(0xffffffff) // Initialize all bits to 1 (enabled)
-				if (!metadata[typeID]) metadata[typeID] = {}
-				metadata[typeID].enabledMask = mask
-			}
-
-			if (info.isTrackable) {
-				const wordsPerFrame = Math.ceil(capacity / 32)
-				const totalWords = wordsPerFrame * Schema.DIRTY_HISTORY_LENGTH
-				const buffer = new SharedArrayBuffer(totalWords * 4)
-				if (!metadata[typeID]) metadata[typeID] = {}
-				metadata[typeID].dirtyMasks = new Uint32Array(buffer)
-			}
-		}
-		entityStore.chunkMetadata[chunkId] = Object.keys(metadata).length > 0 ? metadata : undefined
-	}
-
-	_markNarrowPhaseDirty(chunkId, indexInChunk, typeId, tick) {
-		const info = Schema.componentInfo[typeId]
-		if (!info?.isTrackable) return
-
-		const componentMetadata = entityStore.chunkMetadata[chunkId]?.[typeId]
-		const dirtyMasks = componentMetadata?.dirtyMasks
-
-		if (dirtyMasks) {
-			const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
-			const frameIndex = tick % Schema.DIRTY_HISTORY_LENGTH
-			const wordIndexInFrame = indexInChunk >>> 5
-			const bitMask = 1 << (indexInChunk & 31)
-			const finalWordIndex = frameIndex * wordsPerFrame + wordIndexInFrame
-
-			Atomics.or(dirtyMasks, finalWordIndex, bitMask)
-		}
-	}
-
-	_markNarrowPhaseDirtyForBatch(chunkId, startIndex, count, typeId, tick) {
-		const info = Schema.componentInfo[typeId]
-		if (!info?.isTrackable) return
-
-		const componentMetadata = entityStore.chunkMetadata[chunkId]?.[typeId]
-		const dirtyMasks = componentMetadata?.dirtyMasks
-		if (!dirtyMasks) return
-
-		const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
-		const frameIndex = tick % Schema.DIRTY_HISTORY_LENGTH
-
-		for (let i = 0; i < count; i++) {
-			const indexInChunk = startIndex + i
-			const wordIndexInFrame = indexInChunk >>> 5
-			const bitMask = 1 << (indexInChunk & 31)
-			const finalWordIndex = frameIndex * wordsPerFrame + wordIndexInFrame
-			Atomics.or(dirtyMasks, finalWordIndex, bitMask)
-		}
 	}
 
 	/**

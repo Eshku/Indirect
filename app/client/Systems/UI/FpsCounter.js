@@ -1,6 +1,20 @@
 const { engine } = await import(`@client/Engine.js`)
 const { gameManager, layerManager } = engine.getManagers()
 
+/**
+ * Calculates and displays average Frames Per Second (FPS).
+ *
+ * --- How it Works ---
+ * This counter measures time between rendered frames (`deltaTime`)
+ * and averages frame count over a 1-second interval.
+ *
+ * It's common to see display show 59 FPS instead of a perfect 60,
+ * as `requestAnimationFrame` (and vsync) can have minor timing delay,
+ * causing total time for 60 frames to be slightly over 1000ms. When this happens,
+ * our calculation (`frames / elapsed_time`) correctly results in an average just
+ * below 60, which is then rounded.
+ */
+
 export class FpsCounter {
 	constructor() {
 		this.app = null // Will be set in init
@@ -20,7 +34,7 @@ export class FpsCounter {
 		}
 		this.BACKGROUND_COLOR = 0x000000
 		this.BACKGROUND_ALPHA = 0.5
-		this.PADDING = 10 // Padding inside the background
+		this.PADDING = 10 // Padding inside background
 		this.MARGIN = 10 // Margin from screen edges
 	}
 
@@ -33,11 +47,12 @@ export class FpsCounter {
 	update({ deltaTime }) {
 		// Manual FPS calculation over 1-second intervals
 		this.frames++
-		this.elapsedTime += deltaTime // deltaTime is in seconds
+		this.elapsedTime += deltaTime // deltaTime is in seconds, representing total frame time
 
 		if (this.elapsedTime >= 1.0) {
-			const fps = Math.round(this.frames / this.elapsedTime)
-			const newFpsText = `FPS: ${fps}`
+			const avgFps = Math.round(this.frames / this.elapsedTime)
+			const newFpsText = `FPS: ${avgFps}`
+
 			if (this.fpsText.text !== newFpsText) {
 				this.fpsText.text = newFpsText
 				// If the text has changed, the layout needs to be recalculated
@@ -45,7 +60,7 @@ export class FpsCounter {
 				this.onResize()
 			}
 			this.frames = 0
-			this.elapsedTime = 0 // Reset completely for an accurate measurement next time
+			this.elapsedTime -= 1.0 // Carry over the remainder for a more accurate rolling average
 		}
 	}
 

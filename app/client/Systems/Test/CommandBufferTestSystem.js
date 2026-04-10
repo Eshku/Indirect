@@ -1,9 +1,8 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, testManager } = engine.getManagers()
 
-const { entityManager, queryManager, prefabManager, systemManager } = ecs
+const { entityManager, prefabManager, systemManager, entityMaskManager } = ecs
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
-const { ChunkView } = await import(`@managers/QueryManager/ChunkView.js`)
 
 const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`)
 
@@ -17,7 +16,8 @@ const {
 	// Import component IDs needed for the new metadata test.
 	enableableTestComponent,
 	trackedTestComponent,
-	damageCollisionBuffer
+	damageCollisionBuffer,
+	destroyByQueryTag,
 } = ecs.getComponentIDs()
 
 /**
@@ -73,14 +73,10 @@ export class CommandBufferTestSystem {
 					testEntityTag: {},
 				})
 				this.createEntity(payload)
+
 				flush()
 
-				let createdEntity
-				for (const chunk of this.creationQuery.iter()) {
-					createdEntity = chunk.entities[0]
-					break
-				}
-
+				const createdEntity = this.creationQuery.getSingleEntity()
 				expect(createdEntity).not.toBe(undefined)
 
 				const pos = ECS.getComponent(createdEntity, 'position')
@@ -127,15 +123,15 @@ export class CommandBufferTestSystem {
 				expect(ECS.hasComponent(entity, `velocity`)).toBe(false)
 			})
 
-			// --- Test 5: setComponentData ---
-			it('should set component data on an entity via setComponentData', () => {
+			// --- Test 5: setComponent ---
+			it('should set component data on an entity via setComponent', () => {
 				cleanup()
 				const entity = ECS.createEntity({
 					position: { x: 50, y: 50 },
 					testEntityTag: {},
 				})
 
-				this.setComponentData(entity, this.setPositionPayload)
+				this.setComponent(entity, this.setPositionPayload)
 				flush()
 				const pos = ECS.getComponent(entity, 'position')
 				expect(pos).toEqual({ x: 100, y: 100 })
@@ -164,6 +160,66 @@ export class CommandBufferTestSystem {
 				expect(ECS.getComponent(entity, 'rotation')).toEqual({ angle: 1.57 })
 			})
 
+			// --- Test: setComponents for pooling reset ---
+			it('should reset an entity to schema defaults using a defaults payload', () => {
+				cleanup()
+
+				// 1. Create an entity and modify its state
+				const entity = ECS.createEntity({
+					position: { x: 123, y: 456 },
+					velocity: { x: 10, y: 10 },
+					testEntityTag: {},
+				})
+				expect(ECS.getComponent(entity, 'position')).toEqual({ x: 123, y: 456 })
+
+				// 2. Compile a defaults payload for the entity's archetype
+				// Position defaults to {x:0, y:0}, Velocity defaults to {x:0, y:0}
+				const { payload: defaultsPayload } = this.compileDefaults({
+					position: {},
+					velocity: {},
+				})
+
+				// 3. Use setComponents to apply the defaults
+				this.setComponents(entity, defaultsPayload)
+				flush()
+
+				// 4. Verification - The components should now have their schema default values
+				expect(ECS.getComponent(entity, 'position')).toEqual({ x: 0, y: 0 })
+				expect(ECS.getComponent(entity, 'velocity')).toEqual({ x: 0, y: 0 })
+			})
+
+			it('should reset an entity to defaults with overrides using a defaults payload', () => {
+				cleanup()
+
+				// 1. Create an entity and modify its state
+				const entity = ECS.createEntity({
+					position: { x: 123, y: 456 },
+					velocity: { x: 10, y: 10 },
+					testEntityTag: {},
+				})
+				expect(ECS.getComponent(entity, 'position')).toEqual({ x: 123, y: 456 })
+
+				// 2. Compile a defaults payload, but this time provide an override for position.
+				const { payload: defaultsPayload } = this.compileDefaults(
+					{
+						position: {},
+						velocity: {},
+					},
+					{
+						// Override the default for position
+						position: { x: -1, y: -1 },
+					},
+				)
+
+				// 3. Use setComponents to apply the defaults
+				this.setComponents(entity, defaultsPayload)
+				flush()
+
+				// 4. Verification - Position should be the override, Velocity should be the schema default.
+				expect(ECS.getComponent(entity, 'position')).toEqual({ x: -1, y: -1 })
+				expect(ECS.getComponent(entity, 'velocity')).toEqual({ x: 0, y: 0 })
+			})
+
 			// --- Test 6: instantiate ---
 			it('should instantiate an entity from a prefab with overrides', () => {
 				cleanup()
@@ -184,11 +240,14 @@ export class CommandBufferTestSystem {
 				flush()
 
 				let instantiatedEntity
-				for (const chunk of this.instantiateQuery.iter()) {
-					for (let i = 0; i < chunk.size; i++) {
-						const pos = ECS.getComponent(chunk.entities[i], 'position')
-						if (pos.x === 123 && pos.y === 456) {
-							instantiatedEntity = chunk.entities[i]
+				const chunkIds = this.instantiateQuery.getChunks()
+				for (const chunkId of chunkIds) {
+					const entities = this.getEntities(chunkId)
+					const positions = this.getComponentData(chunkId, position)
+					const size = this.getChunkSize(chunkId)
+					for (let i = 0; i < size; i++) {
+						if (positions.x[i] === 123 && positions.y[i] === 456) {
+							instantiatedEntity = entities[i]
 							break
 						}
 					}
@@ -236,13 +295,13 @@ export class CommandBufferTestSystem {
 		})
 
 		describe('Command Buffer (Generational IDs - Advanced Scenarios)', () => {
-			it('should ignore a stale setComponentData command', () => {
+			it('should ignore a stale setComponent command', () => {
 				cleanup()
 				// --- 1. Setup ---
 				const entityA_ID = ECS.createEntity({ position: { x: 1, y: 1 }, testEntityTag: {} })
 
 				// --- 2. Defer Commands ---
-				this.setComponentData(entityA_ID, this.setPositionPayload)
+				this.setComponent(entityA_ID, this.setPositionPayload)
 				this.destroyEntity(entityA_ID)
 
 				// --- 3. Flush & Recycle ---
@@ -328,17 +387,12 @@ export class CommandBufferTestSystem {
 				flush()
 
 				// --- 2. Get the chunk to be destroyed ---
-				// Use the pre-defined query that matches the created entities.
-				// NOTE: `getQuery({ with: [archetypeId] })` is incorrect as `with` expects component type IDs, not archetype IDs.
-				const chunkId = this.creationQuery.matchingChunkIds[0]
+				const chunkId = this.creationQuery.getChunks()[0]
 				expect(chunkId).toBeDefined()
 				expect(entityStore.chunkSizes[chunkId]).toBe(entitiesPerChunk)
 
-				const chunkView = new ChunkView(entityStore)
-				chunkView.setChunk(chunkId)
-
 				// --- 3. The Test: Destroy all entities in the chunk ---
-				this.destroyEntitiesInChunk(chunkView)
+				this.destroyEntitiesInChunk(chunkId)
 				flush()
 
 				// --- 4. Assertions ---
@@ -356,19 +410,77 @@ export class CommandBufferTestSystem {
 				let currentChunkId = entityStore.archetypeHeadChunkIds[archetypeId]
 				while (currentChunkId !== 0) {
 					// NULL_CHUNK_ID
-					if (currentChunkId === chunkId) { isStillLinked = true; break; }
+					if (currentChunkId === chunkId) {
+						isStillLinked = true
+						break
+					}
 					currentChunkId = entityStore.chunkNextInArchetype[currentChunkId]
 				}
 				expect(isStillLinked).toBe(false, 'Destroyed chunk should be unlinked from its archetype')
 			})
 
+			it('should correctly re-initialize metadata when recycling a chunk for a different archetype', () => {
+				cleanup()
+
+				// --- 1. Create and fill a chunk with Archetype A ---
+				const { payload: creationPayload } = this.compile({
+					position: {}, // Has 2 components
+					testEntityTag: {},
+				})
+				const archetypeId = creationPayload.archetypeId
+				const componentsInA = entityManager.getComponentTypeIDsForArchetype(archetypeId).length
+				const bytesPerEntity = entityManager.getBytesPerEntityInArchetype(archetypeId)
+				const entitiesPerChunk = Math.max(16, Math.floor(16384 / bytesPerEntity))
+
+				for (let i = 0; i < entitiesPerChunk; i++) {
+					this.createEntity(creationPayload)
+				}
+				flush()
+
+				// --- 2. Get the chunk to be destroyed and verify its initial state ---
+				const queryA = this.getQuery({ with: [position, testEntityTag] })
+				const chunkToRecycleId = queryA.getChunks()[0]
+				expect(chunkToRecycleId).toBeDefined()
+
+				// The metadata we are checking is the dirty tick buffer, which is sized based on component count.
+				expect(entityStore.chunkArchetypeDirtyTicks[chunkToRecycleId]).toBeInstanceOf(Uint32Array)
+				expect(entityStore.chunkArchetypeDirtyTicks[chunkToRecycleId].length).toBe(componentsInA)
+
+				// --- 3. Destroy the chunk and create a new entity with a DIFFERENT archetype (B) ---
+				this.destroyEntitiesInChunk(chunkToRecycleId)
+
+				const { payload: payloadB } = this.compile({
+					velocity: {}, // Has 3 components
+					rotation: {},
+					testEntityTag: {},
+				})
+				const archetypeB_Id = payloadB.archetypeId
+				const componentsInB = entityManager.getComponentTypeIDsForArchetype(archetypeB_Id).length
+				expect(componentsInB).not.toBe(componentsInA) // Ensure archetypes are different
+
+				this.createEntity(payloadB)
+				flush()
+
+				// --- 4. Verification ---
+				const queryB = this.getQuery({ with: [velocity, rotation, testEntityTag] })
+				expect(queryB.count).toBe(1, 'One entity with Archetype B should exist')
+
+				const recycledChunkId = queryB.getChunks()[0]
+				expect(recycledChunkId).toBe(chunkToRecycleId, 'The new entity should be in the recycled chunk')
+
+				// The crucial check: the recycled chunk must have valid, re-initialized metadata.
+				expect(entityStore.chunkArchetypeDirtyTicks[recycledChunkId]).toBeInstanceOf(Uint32Array)
+				// The length of the dirty tick buffer should now match the new archetype.
+				expect(entityStore.chunkArchetypeDirtyTicks[recycledChunkId].length).toBe(componentsInB)
+			})
+
 			it('should correctly recycle a chunk in the same frame it was freed', () => {
 				cleanup()
 
-				// --- 1. Setup: Create a full chunk to be destroyed ---
+				// --- 1. Setup: Create and fill a chunk with a specific archetype ---
 				const { payload: creationPayload } = this.compile({
-					position: {},
-					testEntityTag: {}, // This ensures it matches creationQuery
+					position: {}, // Use components that match `this.creationQuery` for simplicity
+					testEntityTag: {},
 				})
 				const archetypeId = creationPayload.archetypeId
 				const bytesPerEntity = entityManager.getBytesPerEntityInArchetype(archetypeId)
@@ -379,22 +491,21 @@ export class CommandBufferTestSystem {
 				}
 				flush()
 
-				// Use the correct query to find the chunk.
-				const chunkToDestroyId = this.creationQuery.matchingChunkIds[0]
-				const chunkView = new ChunkView(entityStore)
-				chunkView.setChunk(chunkToDestroyId)
+				// --- 2. Get the chunk to be destroyed. This query is defined in init() and matches the payload.
+				const chunkToDestroyId = this.creationQuery.getChunks()[0]
+				expect(chunkToDestroyId).toBeDefined('Chunk to be destroyed must be found')
 
-				// --- 2. The Test: In a single command buffer, destroy the chunk and create a new entity ---
+				// --- 3. The Test: In a single command buffer, destroy the chunk and create a new entity ---
 				// This forces the engine to free the chunk ID and then immediately try to recycle it.
-				this.destroyEntitiesInChunk(chunkView)
-				this.createEntity(creationPayload)
+				this.destroyEntitiesInChunk(chunkToDestroyId)
+				this.createEntity(creationPayload) // Use the same payload
 				flush()
 
-				// --- 3. Verification ---
+				// --- 4. Verification ---
 				// The new entity should have been placed in the recycled chunk.
-				// Use the same query again to find the new entity's chunk.
+				// Use the same `creationQuery` again to find the new entity's chunk.
 				expect(this.creationQuery.count).toBe(1)
-				const newChunkId = this.creationQuery.matchingChunkIds[0]
+				const newChunkId = this.creationQuery.getChunks()[0]
 				expect(newChunkId).toBe(chunkToDestroyId, 'The new entity should be in the recycled chunk')
 
 				// The crucial check: the recycled chunk must have valid metadata.
@@ -402,67 +513,9 @@ export class CommandBufferTestSystem {
 				// unlike `chunkMetadata` which is conditional on the archetype's components.
 				// A valid, re-initialized chunk must have this array.
 				expect(entityStore.chunkArchetypeDirtyTicks[newChunkId]).toBeInstanceOf(Uint32Array)
-				const newChunkView = new ChunkView(entityStore)
-				newChunkView.setChunk(newChunkId)
-				expect(newChunkView.size).toBe(1, 'Recycled chunk should contain the new entity')
+				expect(this.getChunkSize(newChunkId)).toBe(1, 'Recycled chunk should contain the new entity')
 			})
-
-			it('should correctly re-initialize metadata when recycling a chunk for a different archetype', () => {
-				cleanup()
-
-				// --- 1. Create and fill a chunk with Archetype A (which has an enableable component) ---
-				const { payload: payloadA } = this.compile({
-					enableableTestComponent: { value: 1 },
-					testEntityTag: {},
-				})
-				const archetypeA_Id = payloadA.archetypeId
-				const bytesPerEntityA = entityManager.getBytesPerEntityInArchetype(archetypeA_Id)
-				const entitiesPerChunkA = Math.max(16, Math.floor(16384 / bytesPerEntityA))
-
-				for (let i = 0; i < entitiesPerChunkA; i++) {
-					this.createEntity(payloadA)
-				}
-				flush()
-
-				// --- 2. Get the chunk to be destroyed and verify its initial state ---
-				const queryA = this.getQuery({ with: [enableableTestComponent, testEntityTag] })
-				const chunkToRecycleId = queryA.matchingChunkIds[0]
-				expect(chunkToRecycleId).toBeDefined()
-
-				const chunkViewA = new ChunkView(entityStore)
-				chunkViewA.setChunk(chunkToRecycleId)
-				expect(chunkViewA.metadata).toBeDefined('Initial chunk metadata should be defined')
-				expect(chunkViewA.metadata[enableableTestComponent]).toBeDefined('Initial chunk should have metadata for enableableTestComponent')
-				expect(chunkViewA.metadata[trackedTestComponent]).toBeUndefined('Initial chunk should NOT have metadata for trackedTestComponent')
-
-				// --- 3. Destroy the chunk and create a new entity with a DIFFERENT archetype (B) ---
-				this.destroyEntitiesInChunk(chunkViewA)
-
-				const { payload: payloadB } = this.compile({
-					trackedTestComponent: { value: 2 },
-					testEntityTag: {},
-				})
-				this.createEntity(payloadB)
-				flush()
-
-				// --- 4. Verification ---
-				const queryB = this.getQuery({ with: [trackedTestComponent, testEntityTag] })
-				expect(queryB.count).toBe(1, 'One entity with Archetype B should exist')
-
-				const recycledChunkId = queryB.matchingChunkIds[0]
-				expect(recycledChunkId).toBe(chunkToRecycleId, 'The new entity should be in the recycled chunk')
-
-				const chunkViewB = new ChunkView(entityStore)
-				chunkViewB.setChunk(recycledChunkId)
-				expect(chunkViewB.metadata).toBeDefined('Recycled chunk metadata should be defined')
-				expect(chunkViewB.metadata[trackedTestComponent]).toBeDefined('Recycled chunk should have metadata for trackedTestComponent')
-				expect(chunkViewB.metadata[enableableTestComponent]).toBeUndefined('Recycled chunk should NOT have stale metadata for enableableTestComponent')
-			})
-
-
 		})
-
-
 
 		describe('Command Buffer (Placeholder Entities)', () => {
 			/**
@@ -543,18 +596,8 @@ export class CommandBufferTestSystem {
 				// 4. Verification
 				const parentQuery = this.getQuery({ with: [parent, testEntityTag] })
 
-				let foundChildId
-				let foundParentId
-				for (const chunk of parentQuery.iter()) {
-					for (let i = 0; i < chunk.size; i++) {
-						const parentComponent = ECS.getComponent(chunk.entities[i], 'Parent')
-						foundChildId = chunk.entities[i]
-						foundParentId = parentComponent.entityId
-						break
-					}
-					if (foundChildId) break
-				}
-
+				const foundChildId = parentQuery.getSingleEntity()
+				const foundParentId = foundChildId ? ECS.getComponent(foundChildId, 'Parent').entityId : undefined
 				expect(foundChildId).not.toBe(undefined)
 				expect(foundParentId).not.toBe(undefined)
 				expect(ECS.isEntityActive(foundChildId)).toBe(true)
@@ -646,9 +689,11 @@ export class CommandBufferTestSystem {
 				// but not an 'EntityRefComponent'. The child has both.
 				const query = this.getQuery({ with: [parent, testEntityTag] })
 				let realParentId, realChildId
-				for (const chunk of query.iter()) {
-					for (let i = 0; i < chunk.size; i++) {
-						const entityId = chunk.entities[i]
+				const chunkIds = query.getChunks()
+				for (const chunkId of chunkIds) {
+					const entities = this.getEntities(chunkId)
+					for (let i = 0; i < this.getChunkSize(chunkId); i++) {
+						const entityId = entities[i]
 						if (ECS.hasComponent(entityId, 'EntityRefComponent')) {
 							realChildId = entityId
 						} else {
@@ -663,6 +708,47 @@ export class CommandBufferTestSystem {
 				expect(ECS.getComponent(realChildId, 'Parent').entityId).toBe(realParentId) // Child -> Parent
 				expect(ECS.getComponent(realChildId, 'EntityRefComponent').target).toBe(0n) // Child -> Doomed (null)
 				expect(ECS.getComponent(realParentId, 'Parent').entityId).toBe(realChildId) // Parent -> Child
+			})
+		})
+
+		describe('Command Buffer (Bulk Operations)', () => {
+			it('should destroy multiple entities via destroyByQuery', () => {
+				cleanup()
+
+				// 1. Setup
+				const queryToDestroy = this.getQuery({ with: [destroyByQueryTag] })
+				const controlQuery = this.getQuery({ with: [testEntityTag], without: [destroyByQueryTag] })
+
+				const { payload: destroyPayload } = this.compile({
+					destroyByQueryTag: {},
+					position: {},
+				})
+				const { payload: controlPayload } = this.compile({
+					testEntityTag: {},
+					position: {},
+				})
+
+				// Create 10 entities to be destroyed
+				for (let i = 0; i < 10; i++) {
+					this.createEntity(destroyPayload)
+				}
+				// Create 5 control entities that should not be destroyed
+				for (let i = 0; i < 5; i++) {
+					this.createEntity(controlPayload)
+				}
+				flush()
+
+				// 2. Assert initial state
+				expect(queryToDestroy.count).toBe(10)
+				expect(controlQuery.count).toBe(5)
+
+				// 3. Action
+				this.destroyByQuery(queryToDestroy)
+				flush()
+
+				// 4. Verification
+				expect(queryToDestroy.count).toBe(0, 'All entities matching the query should be destroyed')
+				expect(controlQuery.count).toBe(5, 'Control group entities should not be affected')
 			})
 		})
 

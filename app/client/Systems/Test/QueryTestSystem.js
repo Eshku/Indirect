@@ -31,9 +31,10 @@ export class QueryTestSystem {
 		const cleanup = () => {
 			// This query will find all entities created by this test system.
 			const query = this.getQuery({ with: [queryTestTag] })
-			for (const chunk of query.iter()) {
+			const chunkIds = query.getChunks()
+			for (let i = 0; i < chunkIds.length; i++) {
 				// Use the highly efficient chunk-based destruction command.
-				this.destroyEntitiesInChunk(chunk)
+				this.destroyEntitiesInChunk(chunkIds[i])
 			}
 			flush()
 		}

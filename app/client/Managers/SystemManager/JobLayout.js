@@ -31,7 +31,6 @@ export const JOB_TYPE = {
 	UPDATE: 0, // Main-thread job that runs before parallel work.
 	KERNEL: 1, // Parallel kernel job that can run on any thread.
 	PROCESS: 2, // Main-thread job that runs after parallel work.
-	MAINTENANCE: 3, // Parallel job for end-of-frame maintenance tasks.
 }
 
 /**

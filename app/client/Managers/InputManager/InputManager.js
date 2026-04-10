@@ -32,6 +32,14 @@ class InputManager {
 		this.controlSchemeLoader = new ControlSchemeLoader(this)
 	}
 
+	reset() {
+		this.inputStates.clear()
+		this.keySequenceBuffer.length = 0
+		this.disableInputSources.clear()
+		this.disabledActions.clear()
+		this.inputDisabled = false
+	}
+
 	async init() {
 		this.loadControlScheme()
 		this.setupInputListeners()

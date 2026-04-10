@@ -31,17 +31,20 @@ export class RWMBenchmark {
 	}
 
 	update({ deltaTime, currentTick }) {
-		for (const chunkView of this.query.iter()) {
-			const positions = chunkView.componentData[position]
-			const velocities = chunkView.componentData[velocity]
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			const positions = this.getComponentData(chunkId, position)
+			const velocities = this.getComponentData(chunkId, velocity)
+			const chunkSize = this.getChunkSize(chunkId)
 
-			for (let indexInChunk = 0; indexInChunk < chunkView.size; indexInChunk++) {
-				positions.x[indexInChunk] += velocities.x[indexInChunk] * deltaTime
-				positions.y[indexInChunk] += velocities.y[indexInChunk] * deltaTime
+			for (let j = 0; j < chunkSize; j++) {
+				positions.x[j] += velocities.x[j] * deltaTime
+				positions.y[j] += velocities.y[j] * deltaTime
 			}
 
 			// Since we modify every entity, mark the whole component type as dirty.
-			chunkView.markDirty(position, currentTick)
+			this.markComponentDirty(chunkId, position, currentTick)
 		}
 	}
 
@@ -53,8 +56,10 @@ export class RWMBenchmark {
 
 	destroy() {
 		console.log(`[RWMBenchmark] Cleaning up ${this.entityCount} entities...`)
-		for (const chunk of this.query.iter()) {
-			if (chunk.size > 0) this.destroyEntitiesInChunk(chunk)
+		const chunkIds = this.query.getChunks()
+		for (let i = 0; i < chunkIds.length; i++) {
+			const chunkId = chunkIds[i]
+			if (this.getChunkSize(chunkId) > 0) this.destroyEntitiesInChunk(chunkId)
 		}
 	}
 }

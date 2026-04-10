@@ -40,15 +40,19 @@ export class DebugInspectionSystem {
 		// Only inspect on key down/press.
 		if (!event.isActive) return
 
-		const cursorChunk = this.cursorQuery.getSingleChunk()
-		if (!cursorChunk) return
+		const cursorChunkIds = this.cursorQuery.getChunks()
 
-		const cursorX = cursorChunk.componentData[position].x[0]
-		const cursorY = cursorChunk.componentData[position].y[0]
+
+		const cursorPositions = this.getComponentData(cursorChunkIds[0], position)
+
+		const cursorX = cursorPositions.x[0]
+		const cursorY = cursorPositions.y[0]
 
 		this.grid.queryRadius(cursorX, cursorY, 5, this.queryResult)
 
-		console.log(`--- Inspecting ${this.queryResult.count} entities at (${cursorX.toFixed(2)}, ${cursorY.toFixed(2)}) ---`)
+		console.log(
+			`--- Inspecting ${this.queryResult.count} entities at (${cursorX.toFixed(2)}, ${cursorY.toFixed(2)}) ---`,
+		)
 		for (let i = 0; i < this.queryResult.count; i++) {
 			console.log(ecs.viewEntity(this.queryResult.entityIds[i]))
 		}

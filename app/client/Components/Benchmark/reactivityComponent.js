@@ -2,10 +2,8 @@
  * A component with a value that we can change to trigger reactivity.
  */
 export const reactivityComponent = {
-	isTrackable: true,
-	/**
-	 * The value to change for reactivity tests.
-	 */
+	meta: { isTrackable: true },
+
 	value: {
 		type: 'u32',
 		default: 0,

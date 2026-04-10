@@ -77,22 +77,17 @@ const { schemaCompiler } = await import('./SchemaCompiler.js')
 import * as Schema from './ComponentSchema.js'
 
 export class ComponentManager {
-	constructor() {
-		this.componentInfo = Schema.componentInfo
-		this.componentConstants = Schema.componentConstants
-		this.compiledDefaults = Schema.compiledDefaults
-
-
-		this.entityManager = null // self-reference after init
-		this._cachedComponentsObject = null
-		this.EMPTY_BITMASK = 0n
-	}
-
 	get nextComponentTypeID() {
 		return Schema.nextComponentTypeID
 	}
 
 	async init(ecs) {
+		this.componentInfo = Schema.componentInfo
+		this.componentConstants = Schema.componentConstants
+		this.compiledDefaults = Schema.compiledDefaults
+
+		this._cachedComponentsObject = null
+		this.EMPTY_BITMASK = 0n
 		const componentModules = await loadAllComponents()
 
 		this.entityManager = ecs.entityManager
@@ -101,7 +96,6 @@ export class ComponentManager {
 	}
 
 	async registerComponents(componentModules) {
-
 		for (const { moduleName, componentSchema } of componentModules) {
 			this.registerComponent(moduleName, componentSchema)
 		}

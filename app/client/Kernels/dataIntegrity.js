@@ -4,17 +4,18 @@
  * for that slot, detecting stale data from recycled chunks.
  * @param {number} payload - For this kernel, the payload is the chunkId to process.
  * @param {object} systemContext - A read-only object with properties from the main-thread System instance.
- * @param {object} kernelContext - An object with thread-specific helpers, like getChunkView.
+ * @param {object} kernelContext - An object with thread-specific helpers.
  */
 export function dataIntegrity(payload, systemContext, kernelContext) {
 	const { churnData, verification } = systemContext
 
-	const chunk = kernel.getChunkView(payload)
-	const entities = chunk.entities
-	const churnDataArr = chunk.componentData[churnData]
-	const verifications = chunk.componentData[verification]
+	const chunkId = payload
+	const entities = self.kernel.getEntities(chunkId)
+	const churnDataArr = self.kernel.getComponentData(chunkId, churnData)
+	const verifications = self.kernel.getComponentData(chunkId, verification)
+	const chunkSize = self.kernel.getChunkSize(chunkId)
 
-	for (let i = 0; i < chunk.size; i++) {
+	for (let i = 0; i < chunkSize; i++) {
 		// Only process entities that haven't already failed verification.
 		if (verifications.status[i] === -1) continue
 

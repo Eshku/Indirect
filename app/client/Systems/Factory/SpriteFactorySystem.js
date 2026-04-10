@@ -17,34 +17,59 @@ export class SpriteFactorySystem {
 	init() {
 		this.initializationQuery = this.getQuery({
 			with: [spriteDescriptor, viewable],
-			// React when an entity GAINS a spriteDescriptor, either on creation or via addComponent.
-			added: [spriteDescriptor],
+			// React when `spriteDescriptor` is marked dirty. This happens automatically
+			// on entity creation because it's a trackable component.
+			modified: [spriteDescriptor],
 		})
 
 		this.stringStorage = stringInterningTable.storage
+		this.scratchBuffer = this.createScratchBuffer()
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
-		// The query now only returns chunks that received entities with a new spriteDescriptor.
-		for (const chunk of this.initializationQuery.iter()) {
-			const descriptorArrays = chunk.componentData[spriteDescriptor]
-			const viewableArrays = chunk.componentData[viewable]
+		// Broad-phase: Get all chunks where `spriteDescriptor` was modified.
+		const changedChunkIds = this.initializationQuery.getChunks(lastTick, currentTick)
 
-			// Since the query is now precise ('added'), we can iterate over all entities in the returned chunk.
-			// The narrow-phase check is no longer needed.
-			for (let indexInChunk = 0; indexInChunk < chunk.size; indexInChunk++) {
-				// Only act if the sprite hasn't been created yet.
+		for (let i = 0; i < changedChunkIds.length; i++) {
+			const chunkId = changedChunkIds[i]
+			// Narrow-phase: Get the specific indices of entities whose `spriteDescriptor` was marked dirty.
+			const dirtyCount = this.getDirty(chunkId, spriteDescriptor, lastTick, currentTick, this.scratchBuffer)
+
+			const descriptorArrays = this.getComponentData(chunkId, spriteDescriptor)
+			const viewableArrays = this.getComponentData(chunkId, viewable)
+
+			let wasChunkModified = false
+
+			//! API limitation hit, can only mask dirty as modified
+			//! could implement different mask helpers to mirror query reactivity.
+			//todo yay another sidequest.
+
+			// Iterate only over the entities that were actually marked as dirty.
+			for (let j = 0; j < dirtyCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+
+				// Only act if the sprite hasn't been created yet. This prevents re-creating
+				// a sprite if the component is marked dirty for another reason, and ensures
+				// we only act once.
 				if (viewableArrays.spriteRef[indexInChunk] === UNINITIALIZED_REF) {
 					const assetName = this.stringStorage[descriptorArrays.assetName[indexInChunk]]
 
 					// Synchronously get a sprite reference from the asset manager.
 					const newSpriteRef = assetManager.acquireSpriteRefSync(assetName, { anchor: { x: 0.5, y: 0.5 } })
+					//all sprites are pre-loaded.
 
-					// Direct Write: Update the component data in-place.
 					viewableArrays.spriteRef[indexInChunk] = newSpriteRef
-					// Mark Dirty: Immediately notify the engine of the change for the current tick.
-					chunk.markEntityDirty(indexInChunk, viewable, currentTick)
+					// Mark this specific entity's `viewable` component as dirty again.
+					// This is crucial for downstream systems like LayerFactorySystem to react
+					// to the fact that a sprite has just been assigned.
+					this.markEntityDirty(chunkId, indexInChunk, viewable, currentTick)
+					wasChunkModified = true
 				}
+			}
+			// If we modified any `viewable` components in this chunk, we must perform a
+			// broad-phase mark so that other reactive systems see the change.
+			if (wasChunkModified) {
+				this.markComponentDirty(chunkId, viewable, currentTick)
 			}
 		}
 	}

@@ -197,6 +197,42 @@ export function expect(actual) {
 				throw new AssertionError(finalMessage, `instance of ${expectedName}`, `instance of ${actualName}`)
 			}
 		},
+		/**
+		 * Checks if a function throws an error.
+		 * @param {Function} [expectedErrorType] - Optional. An error constructor (e.g., TypeError) to check against.
+		 * @param {string} [customMessage] - An optional custom message for the failure.
+		 * @throws {AssertionError} If the assertion fails.
+		 * @example
+		 * expect(() => { throw new Error('boom') }).toThrow(); // Passes
+		 * expect(() => { throw new TypeError() }).toThrow(TypeError); // Passes
+		 * expect(() => {}).toThrow(); // Fails
+		 */
+		toThrow(expectedErrorType, customMessage) {
+			if (typeof actual !== 'function') {
+				throw new AssertionError(`expect() argument must be a function when using .toThrow()`, 'function', typeof actual)
+			}
+
+			let thrownError = null
+			try {
+				actual()
+			} catch (e) {
+				thrownError = e
+			}
+
+			const passed = thrownError !== null
+
+			if (passed === inverted) {
+				const baseMessage = `Expected function ${inverted ? 'not ' : ''}to throw.`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, `A function that ${inverted ? 'does not throw' : 'throws'}`, thrownError || 'did not throw')
+			}
+
+			if (passed && expectedErrorType) {
+				if (!(thrownError instanceof expectedErrorType)) {
+					throw new AssertionError(`Expected error to be an instance of ${expectedErrorType.name}, but was instance of ${thrownError.constructor.name}`, `instance of ${expectedErrorType.name}`, `instance of ${thrownError.constructor.name}`)
+				}
+			}
+		},
 	})
 
 	return {

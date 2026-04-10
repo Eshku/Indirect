@@ -12,14 +12,15 @@ export const OpCodes = Object.freeze({
 	// Component Modifications
 	ADD_COMPONENT: 10,
 	REMOVE_COMPONENT: 11,
-	SET_COMPONENT_DATA: 12,
+	SET_COMPONENT: 12,
 	ADD_COMPONENTS: 13, // Add multiple components to an entity
-	SET_COMPONENT_DATA_SILENT: 14, // Set single component data without marking dirty
-	SET_COMPONENTS_DATA: 15, // Set multiple components data
-	SET_COMPONENTS_DATA_SILENT: 16, // Set multiple components data silently
-	SET_COMPONENT_ENABLED: 17, // Enable/disable a single component
-	MARK_DIRTY: 18, // Mark a single component as dirty
+	SET_COMPONENT_SILENT: 14, // Set single component data without marking dirty
+	SET_COMPONENTS: 15, // Set multiple components data
+	SET_COMPONENTS_SILENT: 16, // Set multiple components data silently
 
 	// Batch Creation
 	CREATE_ENTITIES_IDENTICAL: 20,
+
+	// Bulk Query Operations
+	DESTROY_BY_QUERY: 30,
 })

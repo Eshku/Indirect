@@ -28,33 +28,35 @@ export class EnemyAISystem {
 			with: [playerTag, position],
 		})
 
-		// Find and cache the player's entity ID using the new convenience method.
 		this.playerId = this.playerQuery.getSingleEntity()
-
-		if (!this.playerId) {
-			console.error('EnemyAISystem: Could not find player entity during initialization.')
-		}
 	}
 
 	update({ currentTick }) {
-		let playerX = 0
-		let playerY = 0
+		let playerX
+		let playerY
 
-		// Get player position. This is a singleton query and will only run once.
-		for (const chunk of this.playerQuery.iter()) {
-			playerX = chunk.componentData[position].x[0]
-			playerY = chunk.componentData[position].y[0]
-		}
+		const playerChunkIds = this.playerQuery.getChunks()
 
-		for (const chunk of this.enemyQuery.iter()) {
-			const entities = chunk.entities
-			const enemyPositions = chunk.componentData[position]
-			const enemyIntents = chunk.componentData[movementIntent]
-			const enemyAIParams = chunk.componentData[aiParameters]
+		const playerChunkId = playerChunkIds[0]
 
-			for (let i = 0; i < chunk.size; i++) {
-				const seekX = playerX - enemyPositions.x[i]
-				const seekY = playerY - enemyPositions.y[i]
+		const playerPositions = this.getComponentData(playerChunkId, position)
+		
+		playerX = playerPositions.x[0]
+		playerY = playerPositions.y[0]
+
+		const enemyChunkIds = this.enemyQuery.getChunks()
+
+		for (let i = 0; i < enemyChunkIds.length; i++) {
+			const chunkId = enemyChunkIds[i]
+			const entities = this.getEntities(chunkId)
+			const enemyPositions = this.getComponentData(chunkId, position)
+			const enemyIntents = this.getComponentData(chunkId, movementIntent)
+			const enemyAIParams = this.getComponentData(chunkId, aiParameters)
+			const chunkSize = this.getChunkSize(chunkId)
+
+			for (let j = 0; j < chunkSize; j++) {
+				const seekX = playerX - enemyPositions.x[j]
+				const seekY = playerY - enemyPositions.y[j]
 
 				const length = Math.sqrt(seekX * seekX + seekY * seekY)
 
@@ -68,7 +70,7 @@ export class EnemyAISystem {
 				// This gives a deterministic but unique orbit direction per entity.
 				// If entityId is even, (... & 1n) is 0n -> 1 - 2 * 0 = 1
 				// If entityId is odd,  (... & 1n) is 1n -> 1 - 2 * 1 = -1
-				const orbitDirection = 1 - 2 * Number(entities[i] & 1n)
+				const orbitDirection = 1 - 2 * Number(entities[j] & 1n)
 
 				// Calculate the base perpendicular tangent vector (90-degree rotation)
 				const baseTangentX = -normalizedSeekY * orbitDirection
@@ -77,14 +79,14 @@ export class EnemyAISystem {
 				// Introduce angular spread for more organic movement.
 				// Use a deterministic seed from the entity ID for the angle.
 				// 1023n is used to get a value from 0 to 1023, then normalized to 0-1.
-				const angleSeed = Number(entities[i] & 1023n) / 1023
+				const angleSeed = Number(entities[j] & 1023n) / 1023
 
 				// Make the angle vary over time for a more dynamic "wobble".
-				const wobbleFrequency = enemyAIParams.orbitWobbleFrequency[i]
+				const wobbleFrequency = enemyAIParams.orbitWobbleFrequency[j]
 				const timePhase = currentTick * wobbleFrequency * 0.01 // 0.01 is a tuning constant
 
 				// Use a sine wave for smooth oscillation. The angleSeed provides a unique phase offset for each entity.
-				const orbitAngleSpread = enemyAIParams.orbitAngleSpread[i]
+				const orbitAngleSpread = enemyAIParams.orbitAngleSpread[j]
 				const angle = Math.sin(timePhase + angleSeed * Math.PI * 2) * orbitAngleSpread
 
 				const cosAngle = Math.cos(angle)
@@ -95,17 +97,17 @@ export class EnemyAISystem {
 				const variedTangentY = baseTangentX * sinAngle + baseTangentY * cosAngle
 
 				// Read the orbit bias from the component for this specific enemy.
-				const orbitBias = enemyAIParams.orbitBias[i]
+				const orbitBias = enemyAIParams.orbitBias[j]
 
 				// Combine seek and tangent vectors
 				const finalX = normalizedSeekX + variedTangentX * orbitBias
 				const finalY = normalizedSeekY + variedTangentY * orbitBias
 
-				// Optimization: Avoid the second sqrt by calculating the inverse length of the combined vector mathematically.
+				//inverse length of the combined vector mathematically.
 				// The length of (normalizedSeek + tangent * bias) is sqrt(1^2 + bias^2).
 				const invFinalLength = 1 / Math.sqrt(1 + orbitBias * orbitBias)
-				enemyIntents.desiredX[i] = finalX * invFinalLength
-				enemyIntents.desiredY[i] = finalY * invFinalLength
+				enemyIntents.desiredX[j] = finalX * invFinalLength
+				enemyIntents.desiredY[j] = finalY * invFinalLength
 			}
 		}
 	}

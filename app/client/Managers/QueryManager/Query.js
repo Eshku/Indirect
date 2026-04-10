@@ -1,4 +1,3 @@
-import { ChunkView } from './ChunkView.js'
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
 
@@ -47,9 +46,6 @@ export class Query {
 	) {
 		this.id = id
 		this.queryManager = queryManager
-		this.iterationLastTick = null
-		this.iterationCurrentTick = null
-		this._singleChunkView = null
 
 		// --- DX: Normalize single values to arrays ---
 		const normalize = comps => (comps ? (Array.isArray(comps) ? comps : [comps]) : [])
@@ -94,40 +90,86 @@ export class Query {
 		this._anyOfMaskIsNonZero = this._anyOfMask.some(part => part > 0n)
 
 		this.matchingChunkIds = []
-		this._chunkView = new ChunkView(entityStore)
 		this.matchingArchetypeIds = new Set()
 
 		if (this.isReactiveQuery) {
 			this._reactiveIndicesByArchetype = []
-		}
-
-		if (this.isReactiveQuery) {
-			this.iter = this._iterChangedArchetypes
+			// The main API change: getChunks becomes the smart method.
+			this.getChunks = this.getReactiveChunks
 		} else {
-			this.iter = this._iterAllArchetypes
+			this.getChunks = this.getAllChunks
 		}
+
+		// --- New properties for primed ticks ---
+		// These are "primed" by the Scheduler before a system group runs.
+		this.iterationLastTick = -1
+		this.iterationCurrentTick = 0
 	}
 
-	iter() {
-		throw new Error('Query iterator not initialized.')
-	}
-
-	*_iterAllArchetypes() {
-		for (let i = 0; i < this.matchingChunkIds.length; i++) {
-			const chunkId = this.matchingChunkIds[i]
+	/**
+	 * Gets the entity ID of the first entity that matches this query.
+	 * This is a convenience method for queries that are expected to match only one entity (e.g., singletons like a player or director).
+	 * @returns {bigint | undefined} The entity ID, or undefined if the query is empty.
+	 */
+	getSingleEntity() {
+		// Iterate through chunks directly.
+		for (const chunkId of this.matchingChunkIds) {
 			if (entityStore.chunkSizes[chunkId] > 0) {
-				this._chunkView.setChunk(chunkId)
-				yield this._chunkView
+				// Return the first entity from the first non-empty chunk.
+				return entityStore.chunkComponentData[chunkId].entities[0]
 			}
 		}
+		return undefined
 	}
 
-	*_iterChangedArchetypes() {
+	/**
+	 * Gets the total number of entities matching this query.
+	 * @returns {number}
+	 */
+	get count() {
+		let total = 0
+		for (const chunkId of this.matchingChunkIds) {
+			total += entityStore.chunkSizes[chunkId]
+		}
+		return total
+	}
+
+	/**
+	 * Gets a direct reference to the array of chunk IDs whose archetypes match this query.
+	 * This is the primary, high-performance method for accessing chunks that match a query's structural requirements.
+	 *
+	 * If the query is reactive, this method will automatically return only the chunks that have changed since the
+	 * last time the query was "primed" with tick data by the Scheduler. For non-reactive queries, it returns all
+	 * structurally matching chunks.
+	 *
+	 * @returns {number[]} A direct reference to the array of matching chunk IDs. Do not mutate this array.
+	 */
+	getChunks() {
+		// This method is a placeholder. The actual implementation is assigned in the constructor
+		// based on whether the query is reactive. This provides a clear JSDoc entry point.
+		return this.matchingChunkIds
+	}
+
+	/**
+	 * Gets all chunks that structurally match the query, bypassing any reactive filters.
+	 * This is useful if you have a reactive query but need to iterate over all of its
+	 * matching entities for a specific reason.
+	 * @returns {number[]} A direct reference to the array of all matching chunk IDs.
+	 */
+	getAllChunks() {
+		return this.matchingChunkIds
+	}
+
+	/**
+	 * For reactive queries, this method filters the query's chunks down to only those that have seen a relevant change.
+	 * It uses the `iterationLastTick` and `iterationCurrentTick` properties, which are "primed" by the Scheduler
+	 * before system execution. This is an explicit way to get reactive chunks, but using `getChunks()` is preferred for reactive queries.
+	 * @returns {number[]} An array of chunk IDs that have changed.
+	 */
+	getReactiveChunks() {
 		const lastTick = this.iterationLastTick
 		const currentTick = this.iterationCurrentTick
-
-		this._chunkView._setLastTick(currentTick)
-
+		const changedChunks = []
 		for (let i = 0; i < this.matchingChunkIds.length; i++) {
 			const chunkId = this.matchingChunkIds[i]
 			if (entityStore.chunkSizes[chunkId] > 0) {
@@ -140,12 +182,13 @@ export class Query {
 					const reactiveIndices = this._reactiveIndicesByArchetype[archetypeId]
 					if (reactiveIndices?.modified) {
 						for (const index of reactiveIndices.modified) {
-							// A component is considered modified for this query if its dirty tick
-							// is *greater than* the last tick this query ran.
 							const dirtyTick = Atomics.load(archetypeDirtyTicks, index)
+							if (this.id === 1 && chunkId === 1) { // Log only for a specific query/chunk to reduce spam
+								console.log(`[Query] Checking chunk ${chunkId}, component index ${index}. dirtyTick: ${dirtyTick}, lastTick: ${lastTick}. Condition: ${dirtyTick > lastTick}`)
+							}
 							if (dirtyTick > lastTick) {
 								isDirtyForQuery = true
-								break // Found a change, no need to check other components in this chunk.
+								break
 							}
 						}
 					}
@@ -155,10 +198,8 @@ export class Query {
 				if (!isDirtyForQuery) {
 					const addedMasksRing = entityStore.chunkAddedComponentMasks[chunkId]
 					if (addedMasksRing) {
-						// The window of ticks to check for structural changes is (lastTick, currentTick].
 						const startTick = lastTick + 1
 						const endTick = currentTick
-
 						for (let tick = startTick; tick <= endTick; tick++) {
 							const tickSlot = tick % DIRTY_HISTORY_LENGTH
 							const maskOffset = tickSlot * MASK_PARTS
@@ -179,7 +220,6 @@ export class Query {
 					if (removedMasksRing) {
 						const startTick = lastTick + 1
 						const endTick = currentTick
-
 						for (let tick = startTick; tick <= endTick; tick++) {
 							const tickSlot = tick % DIRTY_HISTORY_LENGTH
 							const maskOffset = tickSlot * MASK_PARTS
@@ -195,76 +235,11 @@ export class Query {
 				}
 
 				if (isDirtyForQuery) {
-					this._chunkView.setChunk(chunkId)
-					yield this._chunkView
+					changedChunks.push(chunkId)
 				}
 			}
 		}
-	}
-
-	/**
-	 * Gets the entity ID of the first entity that matches this query.
-	 * This is a convenience method for queries that are expected to match only one entity (e.g., singletons like a player or director).
-	 * @returns {bigint | undefined} The entity ID, or undefined if the query is empty.
-	 */
-	getSingleEntity() {
-		for (const chunk of this.iter()) {
-			if (chunk.size > 0) {
-				return chunk.entities[0]
-			}
-		}
-		return undefined
-	}
-
-	/**
-	 * Gets a reusable ChunkView pointing to the first non-empty chunk that matches this query.
-	 * This is a convenience method for queries that are expected to match only one entity (e.g., singletons).
-	 * The returned ChunkView is owned by the Query and its state will be overwritten on the next call to this method.
-	 * @returns {ChunkView | undefined} A ChunkView for the first chunk, or undefined if the query is empty.
-	 */
-	getSingleChunk() {
-		const iterator = this.iter()
-		const iteratorResult = iterator.next()
-
-		if (!iteratorResult.done) {
-			//  iterator yielded a chunk. Its internal state is currently set to that chunk.
-			const firstChunkFromIterator = iteratorResult.value
-
-			// Lazily create a dedicated ChunkView instance for this method.
-			if (!this._singleChunkView) {
-				// We can't just return `firstChunkFromIterator` because it's the same instance
-				// used by the main iterator and its state would be overwritten by other loops.
-				this._singleChunkView = new ChunkView(entityStore)
-			}
-
-			// Set our dedicated view to the same chunk found by the iterator and return it.
-			this._singleChunkView.setChunk(firstChunkFromIterator.chunkId)
-			return this._singleChunkView
-		}
-	}
-	/**
-	 * Gets the total number of entities matching this query.
-	 * @returns {number}
-	 */
-	get count() {
-		let total = 0
-		for (const chunkId of this.matchingChunkIds) {
-			total += entityStore.chunkSizes[chunkId]
-		}
-		return total
-	}
-
-	/**
-	 * Gets a direct reference to the array of chunk IDs whose archetypes match this query.
-	 * This is the primary, high-performance method for accessing chunks that match a query's structural requirements.
-	 *
-	 * For reactive queries, this list includes all chunks that *could* match. The reactive iterator (`.iter()`)
-	 * is responsible for filtering this list down to only the chunks with changes for the current frame.
-	 *
-	 * @returns {number[]} A direct reference to the array of matching chunk IDs. Do not mutate this array.
-	 */
-	getChunks() {
-		return this.matchingChunkIds
+		return changedChunks
 	}
 
 	/**

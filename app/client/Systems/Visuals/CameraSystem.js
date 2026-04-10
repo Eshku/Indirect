@@ -21,10 +21,13 @@ export class CameraSystem {
 		this.screenWidth = gameManager.getApp().screen.width
 		this.screenHeight = gameManager.getApp().screen.height
 
-		const playerChunk = this.playerQuery.getSingleChunk()
-
-		const positionArrays = playerChunk.componentData[position]
-		const initialPosition = { x: positionArrays.x[0], y: positionArrays.y[0] }
+		let initialPosition = { x: 0, y: 0 }
+		const playerChunkIds = this.playerQuery.getChunks()
+		if (playerChunkIds.length > 0) {
+			const playerChunkId = playerChunkIds[0]
+			const positionArrays = this.getComponentData(playerChunkId, position)
+			initialPosition = { x: positionArrays.x[0], y: positionArrays.y[0] }
+		}
 
 		const { desiredX, desiredY } = this.calculateTargetPosition(initialPosition)
 		this.camera.x = desiredX
@@ -42,12 +45,14 @@ export class CameraSystem {
 	update({ deltaTime, currentTick }) {
 		this.screenWidth = gameManager.getApp().screen.width
 		this.screenHeight = gameManager.getApp().screen.height
-		const playerChunk = this.playerQuery.getSingleChunk()
+		let playerPosition = { x: 0, y: 0 }
 
-		const positionArrays = playerChunk.componentData[position]
-		const playerPosition = {
-			x: positionArrays.x[0],
-			y: positionArrays.y[0],
+		const playerChunkIds = this.playerQuery.getChunks()
+		if (playerChunkIds.length > 0) {
+			const playerChunkId = playerChunkIds[0]
+			const positionArrays = this.getComponentData(playerChunkId, position)
+			playerPosition.x = positionArrays.x[0]
+			playerPosition.y = positionArrays.y[0]
 		}
 
 		const { desiredX, desiredY } = this.calculateTargetPosition(playerPosition)

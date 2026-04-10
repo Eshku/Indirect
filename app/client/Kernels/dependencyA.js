@@ -5,14 +5,14 @@
  * @param {object} kernelContext - Contains thread-specific helpers.
  */
 export function dependencyA(payload, systemContext, kernelContext) {
+	const chunkId = payload
 	const { velocity } = systemContext
 	const { currentTick } = frameContext
 
-	const chunk = kernel.getChunkView(payload)
-	const velocities = chunk.componentData[velocity]
-	for (let i = 0; i < chunk.size; i++) {
+	const velocities = self.kernel.getComponentData(chunkId, velocity)
+	const chunkSize = self.kernel.getChunkSize(chunkId)
+	for (let i = 0; i < chunkSize; i++) {
 		// Write a specific, known value.
 		velocities.x[i] = 123
 	}
-	chunk.markDirty(velocity, currentTick)
 }

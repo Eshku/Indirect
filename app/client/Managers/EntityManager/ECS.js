@@ -4,8 +4,6 @@ const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 const { reconstruct } = await import(`@managers/ComponentManager/ComponentInterpreter.js`)
 const { getConstantsFor, getConstantsForProperty } = await import(`@managers/ComponentManager/ComponentConstants.js`)
 
-const { payloadCompiler } = await import(`@managers/SystemManager/PayloadCompiler.js`)
-
 const { sharedDataManager } = await import(`@managers/SharedDataManager/SharedDataManager.js`)
 
 /**
@@ -27,13 +25,13 @@ export class ECS {
 
 		this.sharedDataManager = sharedDataManager
 
-		this.payloadCompiler = payloadCompiler
+		this.payloadCompiler = engine.payloadCompiler
 
-		const { componentManager, entityManager, systemManager, prefabManager } = this.engine.getManagers()
-		Object.assign(this, { componentManager, entityManager, systemManager, prefabManager })
-		// Finally, initialize the payload compiler which depends on our managers.
-		this.payloadCompiler.init(this)
-		this.engine = engine
+		this.componentManager = engine.componentManager
+		this.entityManager = engine.entityManager
+		this.systemManager = engine.systemManager
+		this.prefabManager = engine.prefabManager
+		this.entityMaskManager = engine.entityMaskManager
 	}
 
 	/**
@@ -60,7 +58,6 @@ export class ECS {
 		return {
 			id: entityID,
 			archetypeId: archetypeId,
-			components: components,
 			data: data,
 		}
 	}
@@ -78,7 +75,9 @@ export class ECS {
 	 * Before the game loop starts, this is 0. During the loop, it's the current tick.
 	 * @private
 	 */
-	_getImmediateTick() {
+	getTick() {
+		//! return real tick goddamnit, +1 should be done manually only if needed.
+
 		// The game loop is not available during the initial manager init phase.
 		if (!this.systemManager?.gameLoop) return 0
 		// For pre-loop setup (frame 0), use tick 0.
@@ -98,11 +97,13 @@ export class ECS {
 		// Binary path as the command buffer,
 		// but executes immediately. This ensures all entity creation is consistent. We use the SoA path for single entity creation as it's the most efficient.
 		const { payload } = this.payloadCompiler.compile(componentsInput)
-		const entityID = this.entityManager.createEntityFromAosPayload(
-			payload.archetypeId,
-			payload.data,
-			this._getImmediateTick(),
-		)
+		const tick = this.getTick()
+		const entityID = this.entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, tick)
+		// Manually trigger the narrow-phase dirty mask for trackable components,
+		// mirroring the behavior of the CommandBufferExecutor for deferred creation.
+		if (payload.trackableComponentIds.length > 0) {
+			this.entityMaskManager.markEntitiesDirtyById(entityID, payload.trackableComponentIds, tick)
+		}
 		return entityID
 	}
 
@@ -110,6 +111,16 @@ export class ECS {
 	 */
 	destroyEntity(entityId) {
 		return this.entityManager.destroyEntity(entityId)
+	}
+
+	destroyAllEntities() {
+		// This is a full world reset. It must clear the state of all managers
+		// that hold world data to ensure true test isolation.
+		this.entityManager.destroyAllEntities()
+		// Clear all existing mask data and re-run the declarative registration
+		// to build a clean state for the next test.
+		this.entityMaskManager.clear()
+		this.entityMaskManager.registerAllSchemaMasks()
 	}
 
 	/**
@@ -122,11 +133,12 @@ export class ECS {
 
 		// Use the compiler to handle prefab logic and all overrides consistently.
 		const { payload } = this.payloadCompiler.compile(prefabName, finalOverrides)
-		const entityID = this.entityManager.createEntityFromAosPayload(
-			payload.archetypeId,
-			payload.data,
-			this._getImmediateTick(),
-		)
+		const tick = this.getTick()
+		const entityID = this.entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, tick)
+		// Manually trigger the narrow-phase dirty mask for trackable components.
+		if (payload.trackableComponentIds.length > 0) {
+			this.entityMaskManager.markEntitiesDirtyById(entityID, payload.trackableComponentIds, tick)
+		}
 		return entityID
 	}
 
@@ -141,13 +153,11 @@ export class ECS {
 	 */
 	addComponent(entityId, componentName, data = {}) {
 		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
-		if (componentTypeId === undefined) {
-			console.warn(`ECS.addComponent: Component "${componentName}" not registered.`)
-			return false
-		}
-		// Use the payload compiler to create the minimal binary payload for the new component.
+
 		const { payload } = this.payloadCompiler.compile(componentTypeId, data)
-		return this.entityManager.addComponent(entityId, componentTypeId, payload.data, this._getImmediateTick())
+
+		//! todo this needs to mask
+		return this.entityManager.addComponent(entityId, componentTypeId, payload.data, this.getTick())
 	}
 
 	/**
@@ -155,11 +165,9 @@ export class ECS {
 	 */
 	removeComponent(entityId, componentName) {
 		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
-		if (componentTypeId === undefined) {
-			// No need to warn, the component isn't even registered in the system.
-			return false
-		}
-		return this.entityManager.removeComponent(entityId, componentTypeId, this._getImmediateTick())
+
+		//! todo mask removal once API is there
+		return this.entityManager.removeComponent(entityId, componentTypeId, this.getTick())
 	}
 
 	/**
@@ -167,18 +175,9 @@ export class ECS {
 	 */
 	getComponent(entityId, componentName) {
 		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
-		if (componentTypeId === undefined) {
-			// Component isn't registered, so no entity can have it.
-			return undefined
-		}
 
 		const location = this.entityManager.getEntityLocation(entityId)
-		if (!location) return undefined
 
-		// The location object now contains the archetypeId. We can check component existence here.
-		if (!this.entityManager.hasComponentType(location.archetypeId, componentTypeId)) {
-			return undefined
-		}
 		const { chunkId, indexInChunk } = location
 
 		const rawData = {}

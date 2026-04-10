@@ -4,7 +4,7 @@
  * This is implemented as a fixed-size array to be cache-friendly and avoid dynamic allocations.
  */
 export const damageCollisionBuffer = {
-	isTrackable: true,
+	meta: { isTrackable: true },
 
 
 

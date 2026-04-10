@@ -51,54 +51,50 @@ export const systemSchedule = {
 		{ name: 'BackgroundSystem', frequency: 'none' },
 	],
 
-	Cursor: [{ name: 'CursorSystem', frequency: 'input' }],
+	Input: [
+		{ name: 'CursorSystem', frequency: 'input' }, // pixi cursor has to be there to avoid latency
+		{ name: 'PlayerInputSystem', frequency: 'input' },
+		
+	],
 
-	Input: [{ name: 'PlayerInputSystem', frequency: 'input' }],
-
-	// Runs on a fixed timestep for deterministic gameplay logic and physics.
-	Logic: [
-		// This system ticks down the timer on active hit flash effects.
-		// It's separate from the visual system for clarity.
-		{ name: 'HitFlashTimerSystem', frequency: 'logic' },
-		// Ticks down the timer for active immunity effects.
-		{ name: 'ImmunityTimerSystem', frequency: 'logic' },
-		{ name: 'CooldownSystem', frequency: 'logic' },
-
-		{ name: 'EnemyAISystem', frequency: 'logic' },
-
-		{ name: 'PlayerWeaponSystem', frequency: 'logic' },
-
-		{ name: 'ProjectileLifetimeSystem', frequency: 'logic' },
+	
+ 	Logic: [
+		{ name: 'EnemyAISystem', frequency: 'logic' }, 
+		
+		{ name: 'SpawnDirectorSystem', frequency: 'logic' },
 
 		{ name: 'MovementSystem', frequency: 'logic' },
-
-		{ name: 'SpatialHashingSystem', frequency: 'logic' },
 
 		{ name: 'CollisionDetectionSystem', frequency: 'logic' },
 
 		{ name: `ApplyVelocity`, frequency: `logic` },
 
+		{ name: 'SpatialHashingSystem', frequency: 'logic' },
+
+		{ name: 'PlayerWeaponSystem', frequency: 'logic' },
+
 		{ name: 'DamageSystem', frequency: 'logic' },
 
 		{ name: 'HealthSystem', frequency: 'logic' },
 
-		{ name: 'PoolingSystem', frequency: 'logic' },
+		{ name: 'ImmunityTimerSystem', frequency: 'logic' },
 
-		{ name: 'EventEntityCleanupSystem', frequency: 'logic' },
-	],
+		{ name: 'HitFlashTimerSystem', frequency: 'logic' },
+
+		{ name: 'CooldownSystem', frequency: 'logic' },
+
+		{ name: 'ProjectileLifetimeSystem', frequency: 'logic' }, 
+		{ name: 'PoolingSystem', frequency: 'logic' }, 
+	], 
 
 	// Infrequent UI updates. Runs on a timer, not every frame.
-	Timed: [
-		{ name: 'SpawnDirectorSystem', frequency: 2 },
-		{ name: 'OffscreenCleanupSystem', frequency: 1 },
-	], // Runs once per rendered frame for smooth visuals, interpolation, and UI.
+	Timed: [{ name: 'OffscreenCleanupSystem', frequency: 1 }],
+
+	// Runs once per rendered frame for smooth visuals, interpolation, and UI.
 	Visuals: [
 		{ name: 'SpriteFactorySystem', frequency: 'visuals' },
+		{ name: 'LayerFactorySystem', frequency: 'visuals' },
 
-		// This system places the newly created visual objects onto their correct rendering layers.
-		{ name: 'RenderLayerSystem', frequency: 'visuals' },
-
-		// This system hides/shows sprites based on their lifecycle state (active, dying, pooled).
 		{ name: 'HitFlashSystem', frequency: 'visuals' },
 
 		{ name: 'LifecycleVisualSystem', frequency: 'visuals' },
@@ -110,12 +106,12 @@ export const systemSchedule = {
 		{ name: 'SpinningSystem', frequency: 'visuals' },
 
 		{ name: 'CameraSystem', frequency: 'visuals' },
-	],
+	], 
 
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
-		/* { name: 'DebugInspectionSystem', frequency: 'input' }, */
+		{ name: 'DebugInspectionSystem', frequency: 'input' },
 		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
 	],
 
@@ -123,14 +119,14 @@ export const systemSchedule = {
 
 	Benchmark: [
 		/* { name: 'CPUBenchmark', frequency: 'visuals' }, */
-		/* { name: 'ParallelCPUBenchmark', frequency: 'logic' }, */
-		/* { name: 'RWMBenchmark', frequency: 'visuals' },  */
 		/* { name: 'MemoryBenchmark', frequency: 'visuals' }, */
+		
+		/* { name: 'RWMBenchmark', frequency: 'visuals' },  */
 		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
 	Test: [
-		//{ name: 'QueryApiTestSystem', frequency: 'logic' },
+		/* { name: 'QueryApiTestSystem', frequency: 'logic' }, */
 		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
@@ -139,7 +135,6 @@ export const systemSchedule = {
 		/* 				{ name: 'DependencySystemA', frequency: 'visuals' },
 		{ name: 'DependencySystemB', frequency: 'visuals' },
 		{ name: 'DependencySystemC', frequency: 'visuals' }, */
-		/* { name: 'BitmaskTestSystem', frequency: 'none' }, */
 	],
 
 	CoreTests: [
@@ -147,8 +142,13 @@ export const systemSchedule = {
 		/* { name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
 		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
 		/* { name: 'QueryTestSystem', frequency: 'none' }, */
-		/* { name: 'SharedArchetypeHashMapTestSystem', frequency: 'none' }, */
 		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */
+		/* { name: 'EntityMaskManagerTestSystem', frequency: 'none' }, */
+	],
+
+	SideQuests: [
+		//! do not run together with tests, as they perform cleanup.
+		/* { name: `MaskAPIExampleSystem`, frequency: `logic` }, */
 	],
 
 	TickTests: [
