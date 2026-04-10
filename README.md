@@ -114,15 +114,15 @@ const enemyChunkIds = this.enemyQuery.getChunks()
 
 for (let i = 0; i < enemyChunkIds.length; i++) {
 	const chunkId = enemyChunkIds[i]
-	const entities = this.getEntities(chunkId)
-	const positions = this.getComponentData(chunkId, position)
-	const intents = this.getComponentData(chunkId, movementIntent)
+	// Get typed array access to component data for this chunk.
+	const enemyPositions = this.getComponentData(chunkId, position)
+	const enemyIntents = this.getComponentData(chunkId, movementIntent)
 	const chunkSize = this.getChunkSize(chunkId)
 
 	for (let j = 0; j < chunkSize; j++) {
-		// Access component data for the entity at index j
-		const entityId = entities[j]
-		const posX = positions.x[j]
+		// Directly read from and write to component data arrays.
+		enemyIntents.desiredX[j] = playerX - enemyPositions.x[j]
+		enemyIntents.desiredY[j] = playerY - enemyPositions.y[j]
 	}
 }
 ```
@@ -163,42 +163,39 @@ System declares its data access patterns and dependencies in a `static dependenc
 
 **System & Kernel Example:**
 
-This example shows a `PhysicsSystem` that schedules a kernel to apply gravity.
-
 **1. Kernel (`/app/client/Kernels/`)**
 
-A kernel is a pure function that runs on a worker, receiving all its data via arguments. Frame-specific data is available on `self.frameContext`, and thread-safe helpers are on the global `parallel` object.
+Kernel is a function that runs on a worker, receiving all its data via arguments. Frame-specific data is available on `self.frameContext`, and thread-safe helpers are on the global `parallel` object.
 
 ```javascript
 /**
- * A "kernel" function that applies gravity and updates position.
- * @param {number} payload - chunkId to process, passed from the job definition.
+ * A "kernel" function which runs in parallel on worker threads.
+ * @param {number} chunkId - The chunkId to process, passed from the job definition.
  * @param {object} systemContext - Read-only data from system's static dependencies `context` block.
  * @param {object} kernelContext - Thread-local helpers, like getScratchBuffer.
  */
-export function applyGravityAndMove(chunkId, systemContext, kernelContext) {
-	// Frame-specific data is available on self.frameContext.
-	const { deltaTime } = self.frameContext
+export function heavyCpuWork(chunkId, systemContext, kernelContext) {
 	// System-specific static data is passed in.
-	const { gravity, position, velocity } = systemContext
+	const { position, velocity } = systemContext
 
 	// Get direct access to component data arrays for the chunk.
 	const positions = self.kernel.getComponentData(chunkId, position)
 	const velocities = self.kernel.getComponentData(chunkId, velocity)
 	const chunkSize = self.kernel.getChunkSize(chunkId)
 
+	// Iterate over all entities in the chunk.
 	for (let i = 0; i < chunkSize; i++) {
-		// Apply gravity to velocity and velocity to position.
-		velocities.y[i] += gravity * deltaTime
-		positions.x[i] += velocities.x[i] * deltaTime
-		positions.y[i] += velocities.y[i] * deltaTime
+		let x = positions.x[i]
+		let y = velocities.y[i]
+
+		// do something heavy here
 	}
 }
 ```
 
 **2. System (`/app/client/Systems/`)**
 
-The System class orchestrates work from main thread.
+The System class orchestrates work from the main thread.
 
 ```javascript
 const { engine } = await import(`@client/Engine.js`)
@@ -206,33 +203,28 @@ const { ecs } = engine.getManagers()
 
 // Get numeric IDs for components and kernels at initialization.
 const { position, velocity } = ecs.getComponentIDs()
-const { applyGravityAndMove } = ecs.getKernelIDs()
+const { heavyCpuWork } = ecs.getKernelIDs()
 
-export class PhysicsSystem {
+export class ParallelSystem {
 	// Declare all data access and execution dependencies statically.
 	static dependencies = {
-		// The key 'applyGravityAndMove' must match the kernel function name.
-		applyGravityAndMove: {
+		// The key 'heavyCpuWork' must match the kernel function name.
+		heavyCpuWork: {
 			reads: [velocity],
-			writes: [position, velocity],
-			// Pass a gravity constant and component IDs to the kernel's `systemContext`.
-			context: {
-				gravity: -9.81,
-				position: position,
-				velocity: velocity,
-			},
+			writes: [position],
+			// Pass component IDs to the kernel's `systemContext`.
+			context: { position, velocity },
 		},
 	}
 
 	init() {
-		// Use the injected getQuery method to create a query.
 		this.query = this.getQuery({ with: [position, velocity] })
 	}
 
 	// Runs on the main thread to schedule concurrent jobs for the frame.
 	schedule(jobWriter, frameContext) {
-		// Runs applyGravityAndMove function for every chunk on this.query in parallel.
-		jobWriter.scheduleForEachChunk(this.query, applyGravityAndMove)
+		// Runs heavyCpuWork function for every chunk in this.query in parallel.
+		jobWriter.scheduleForEachChunk(this.query, heavyCpuWork)
 	}
 }
 ```
@@ -265,8 +257,6 @@ this.markComponentDirty(chunkId, position, frameContext.currentTick)
 
 For more granular tracking, a component can be declared with `meta: { isTrackable: true },` in its schema. This allocates a bitmask for each entity, allowing systems to identify exactly which entities have been marked as dirty.
 
-**[added] and [removed] reactive queries are not fully implemented \ tested yet.**
-
 ```javascript
 // Mark a specific entity's component as dirty.
 this.markEntityDirty(chunkId, entityIndex, componentTypeId, frameContext.currentTick)
@@ -275,13 +265,39 @@ this.markEntityDirty(chunkId, entityIndex, componentTypeId, frameContext.current
 const dirtyCount = this.getDirty(chunkId, componentTypeId, lastTick, currentTick, scratchBuffer)
 ```
 
+**[added] and [removed] reactive queries are not fully implemented \ tested yet.**
+
 **Until there is a proper doc - information on masking in (`/app/client/Managers/EntityMaskManager.js`)**
 
-### Deferred Structural Changes
+### Frame Lifecycle & Deferred Commands
+
+Engine executes systems in distinct groups within a single frame, each with a specific purpose and timing. A system's `frequency` in `systemConfig.js` determines which group it belongs to.
+
+The frame lifecycle proceeds in this fixed order:
+
+1.  **Input Group (`frequency: 'input'`)**
+    - **When:** Runs once at the very beginning of the frame.
+    - **Context:** Receives a variable `deltaTime` based on the actual time since the last frame.
+    - **Purpose:** Ideal for low-latency input processing that needs to happen before any game logic.
+
+2.  **Timed Groups (`frequency: <number>`)**
+    - **When:** Runs on a timer (e.g., `frequency: 10` runs 10 times per second).
+    - **Context:** Receives a variable `deltaTime`.
+    - **Purpose:** For infrequent logic that doesn't need to run every frame.
+
+3.  **Logic Group (`frequency: 'logic'`)**
+    - **When:** Runs on a fixed, deterministic timestep (e.g., 60 times per second), independent of the frame rate. If the game lags, this group may run multiple times in a single frame to catch up.
+    - **Context:** Receives a constant `deltaTime` (e.g., `1/60`).
+    - **Purpose:** All core gameplay logic (physics, AI, state changes) should be here to ensure deterministic and frame-rate-independent behavior.
+
+4.  **Visuals Group (`frequency: 'visuals'`)**
+    - **When:** Runs once at the end of the frame, just before rendering.
+    - **Context:** Receives a variable `deltaTime` and an `alpha` value (0.0 to 1.0) for interpolating between logic ticks, ensuring smooth motion.
+    - **Purpose:** For any logic tied to rendering, such as camera movement, animations, and synchronizing game state to visual representations.
+
+#### Command Buffer Execution
 
 All structural changes (creating/destroying entities, adding/removing components) are deferred. When system calls a method like `createEntity`, it records a command in a `CommandBuffer` to be executed before visual group.
-
-All dirty tracking handled automatically if run through command buffer.
 
 ### Prefab Definitions
 
@@ -307,7 +323,7 @@ _Note: The immediate-mode API is subject to change as thread-safe and console-sp
 const { position, velocity } = ecs.getComponentIDs()
 
 // Get a map of kernel function names to their numeric IDs.
-const { applyGravityAndMove } = ecs.getKernelIDs()
+const { pathfindingKernel } = ecs.getKernelIDs()
 ```
 
 **Immediate-Mode Commands**
