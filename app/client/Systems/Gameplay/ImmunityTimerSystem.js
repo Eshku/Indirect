@@ -37,7 +37,7 @@ export class ImmunityTimerSystem {
 				const newTime = Math.max(0, immunities.timer[indexInChunk] - deltaTime)
 				immunities.timer[indexInChunk] = newTime
 
-				if (newTime === 0) {
+				if (newTime <= 0) {
 					this.disableComponent(chunkId, indexInChunk, immunity)
 				}
 			}

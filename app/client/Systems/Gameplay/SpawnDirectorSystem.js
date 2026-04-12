@@ -3,6 +3,7 @@ const { ecs, entityManager, gameManager, physicsManager, prefabManager } = engin
 
 const { SpriteFactorySystem, RenderLayerSystem } = ecs.getSystemIDs()
 
+
 const {
 	spawnDirector,
 	playerTag,
@@ -18,6 +19,9 @@ const {
 } = ecs.getComponentIDs()
 
 const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
+
+// A fixed radius around the player considered the "safe zone". Enemies will spawn outside this radius.
+const SAFE_SPAWN_RADIUS = 1200
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 
@@ -80,12 +84,23 @@ export class SpawnDirectorSystem {
 		// Filter out any enemies that failed to compile.
 		this.spawnableEnemies = this.spawnableEnemies.filter(e => e.payload)
 
+		// Payload for setting dynamic properties on a newly created enemy.
+		const { payload: createOverridesPayload, mutators: createOverridesMutators } = this.compile({
+			position: {},
+			threatCost: {},
+			aiParameters: {}, // Include to set the random seed.
+		})
+		this.createOverridesPayload = createOverridesPayload
+		this.createOverridesMutators = createOverridesMutators
+
+		// Payload for resetting and reusing a pooled enemy.
 		const { payload: reuseEnemyPayload, mutators: reuseEnemyMutators } = this.compile({
 			lifecycleState: { flags: LIFECYCLE.ACTIVE },
 			velocity: { x: 0, y: 0 },
 			tint: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
 			hitFlash: { timer: 0.0 },
 			// These components have dynamic data that will be set by mutators.
+			aiParameters: {}, // Include to set the random seed.
 			position: {},
 			health: {},
 			threatCost: {},
@@ -197,12 +212,10 @@ export class SpawnDirectorSystem {
 		playerX = playerPositions.x[0]
 		playerY = playerPositions.y[0]
 
-		const screen = gameManager.getApp().screen
-
 		const MAX_SPAWN_ATTEMPTS = 10
 		const WAVE_CLUSTER_RADIUS = 200 // The radius of the area we need to be empty.
-		// The distance from the player to search for a spawn point, ensuring it's off-screen.
-		const searchRadius = Math.sqrt(screen.width ** 2 + screen.height ** 2) / 2 + WAVE_CLUSTER_RADIUS
+		// The distance from the player to search for a spawn point, ensuring it's outside the safe zone.
+		const searchRadius = SAFE_SPAWN_RADIUS + WAVE_CLUSTER_RADIUS
 
 		for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
 			const randomAngle = Math.random() * 2 * Math.PI
@@ -283,21 +296,23 @@ export class SpawnDirectorSystem {
 		}
 	}
 	_createNewEnemy(enemyInfo, location, index, separation, phi, currentTick) {
-		// Use a Fibonacci spiral (sunflower) pattern for natural-looking distribution.
 		const radius = Math.sqrt(index + 0.5) * separation
 		const angle = 2 * Math.PI * index * phi
-
 		const enemyX = location.x + radius * Math.cos(angle)
 		const enemyY = location.y + radius * Math.sin(angle)
 
-		enemyInfo.mutators.position.x[0] = enemyX
-		enemyInfo.mutators.position.y[0] = enemyY
-		// Stamp the threat cost onto the new enemy.
-		enemyInfo.mutators.threatCost.value[0] = enemyInfo.cost
-		// The command buffer automatically marks the SpriteDescriptor as dirty on creation,
-		// so the SpriteFactorySystem will process this entity correctly.
+		// Create the entity from its base prefab payload. This returns a placeholder ID.
+		const placeholderId = this.createEntity(enemyInfo.payload)
 
-		this.createEntity(enemyInfo.payload)
+		// Use a separate, pre-compiled payload to set the unique, per-instance properties.
+		// This is the correct way to apply dynamic data without re-compiling the whole prefab.
+		this.createOverridesMutators.position.x[0] = enemyX
+		this.createOverridesMutators.position.y[0] = enemyY
+		this.createOverridesMutators.threatCost.value[0] = enemyInfo.cost
+		this.createOverridesMutators.aiParameters.randomSeed[0] = Math.random()
+
+		// Issue a command to set these overrides on the newly created entity.
+		this.setComponents(placeholderId, this.createOverridesPayload)
 	}
 
 	_reuseEnemy(entityId, enemyInfo, location, index, separation, phi, currentTick, maxHealth) {
@@ -313,6 +328,7 @@ export class SpawnDirectorSystem {
 		this.reuseEnemyMutators.health.current[0] = maxHealth
 		this.reuseEnemyMutators.health.max[0] = maxHealth
 		this.reuseEnemyMutators.threatCost.value[0] = enemyInfo.cost
+		this.reuseEnemyMutators.aiParameters.randomSeed[0] = Math.random()
 
 		// --- 3. Issue commands to reactivate and reset the entity's state ---
 		// This is a structural change that brings the entity back into the "active" world.

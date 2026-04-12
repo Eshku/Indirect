@@ -151,7 +151,7 @@ class InputManager {
 		window.addEventListener('keyup', handleKeyUp)
 		window.addEventListener('mousedown', handleMouseDown)
 		window.addEventListener('mouseup', handleMouseUp)
-		window.addEventListener('wheel', handleMouseWheel)
+		window.addEventListener('wheel', handleMouseWheel, { passive: true })
 		window.addEventListener('blur', handleBlur)
 	}
 
@@ -198,7 +198,11 @@ class InputManager {
 		return combination.every(key => this.inputStates.get(key))
 	}
 
-	handleMouseWheelEvent(direction, value) {}
+	handleMouseWheelEvent(direction, value) {
+		// This is a generic hook. We can emit a zoom event from here.
+		// 'value' is event.deltaY. Positive for scroll down, negative for scroll up.
+		eventEmitter.emit('InputZoom', { delta: value })
+	}
 
 	sendEvent(actionName, isActive) {
 		const sources = this.disabledActions.get(actionName)

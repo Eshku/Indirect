@@ -2,7 +2,7 @@
 	"components": {
 		"health": { "current": 10, "max": 10 },
 		"damage": { "value": 10 },
-		"speed": { "value": 100 },
+		"speed": { "value": 200 },
 		"position": {},
 		"rotation": {},
 		"scale": { "x": 1, "y": 1 },

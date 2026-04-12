@@ -721,6 +721,10 @@ export class SystemManager {
 		systemInstance.commands = this.commandBuffer
 		await systemInstance.init?.()
 
+		// Let the performance monitor know about the new system.
+		const perfMon = systemRegistry.getSystem('PerformanceMonitor')
+		perfMon?.trackSystem(systemName)
+
 		// 3. Configure its update frequency.
 		this.setUpdateFrequency(systemName, frequency)
 
@@ -1004,6 +1008,14 @@ export class SystemManager {
 		await newInstance.init?.()
 
 		// --- HMR Context Update ---
+		// Let the performance monitor know about the new system.
+		const perfMon = systemRegistry.getSystem('PerformanceMonitor')
+		if (perfMon) {
+			// On HMR, reset the system's performance history to get clean data.
+			perfMon.resetSystem(systemName)
+			perfMon.trackSystem(systemName)
+		}
+
 		// Re-calculate the context for the swapped system and broadcast it to workers.
 		const systemId = this.getSystemId(systemName)
 		const metadata = this.systemMetadataCache.get(systemId)

@@ -38,7 +38,7 @@ export class HitFlashTimerSystem {
 				const newTime = Math.max(0, flashes.timer[indexInChunk] - deltaTime)
 				flashes.timer[indexInChunk] = newTime
 
-				if (newTime === 0) {
+				if (newTime <= 0) {
 					// The effect has expired. Disable the component.
 					this.disableComponent(chunkId, indexInChunk, hitFlash)
 

@@ -5,9 +5,9 @@ const { systemManager } = ecs
 // --- Constants for Configuration ---
 const PANEL_UPDATE_INTERVAL_S = 1 // Seconds
 const STATS_WINDOW_DURATION_S = 3.0 // Calculate stats over the last 3 seconds.
-const BREACHING_THRESHOLD_MS = 15.0 // Threshold for a system time to be colored red.
+const BREACHING_THRESHOLD_MS = 8.0 // Threshold for a single system time to be colored red.
 const LIST_REFRESH_INTERVAL_S = 1.0 // How often to re-sort and select the top systems.
-const WARNING_THRESHOLD_MS = 16.6 // ms, ~1 frame at 60fps. Log a console warning if breached.
+const FRAME_TIME_WARNING_THRESHOLD_MS = 15.0 // ms. Log a console warning if total frame time is breached.
 const TOP_SYSTEMS_COUNT = 5 // How many of the slowest systems to show by default.
 
 /**
@@ -75,21 +75,40 @@ export class PerformanceMonitor {
 		this.timeAccumulator = 0
 		this.listUpdateAccumulator = 0
 		this.history = {}
-		this.warnedSystems = new Set() // Track systems that have triggered a console warning.
+		this.currentFrameSystems = [] // Pre-allocate for warnings
+		this.loggableWarningSystems = [] // Pre-allocate for logging warnings
 		this.untrackedSystems = new Set() // Systems to permanently ignore.
 	}
 
 	init() {
 		this.systemManager = systemManager
 		this._createPanel()
-		// @ts-ignore
+
+		// Pre-track all existing systems from the canonical list
+		for (const systemName of this.systemManager._systemList) {
+			this.trackSystem(systemName)
+		}
+		// Also pre-track special "pseudo-systems"
+		this.trackSystem('Render')
+		this.trackSystem('Command Buffer')
+		this.trackSystem('Total Frame Time')
+
 		window.performanceMonitor = this
 	}
 
-	// This is now a regular system job. It just accumulates history.
-	// The display update is handled separately by the GameLoop after all jobs are done.
-	update() {
-		//Still can run something every frame as it is still a system.
+	resetSystem(systemName) {
+		if (this.history[systemName]) {
+			// Clear the history for the system to ensure fresh stats after HMR.
+			this.history[systemName].length = 0
+		}
+		// Pinned and expanded states are preserved as they are keyed by name, which is desirable.
+		// The UI row will be updated on the next display update. If history is empty, it will temporarily disappear.
+	}
+
+	trackSystem(systemName) {
+		if (!this.history[systemName]) {
+			this.history[systemName] = []
+		}
 	}
 
 	/**
@@ -98,6 +117,11 @@ export class PerformanceMonitor {
 	updateTimings(deltaTime) {
 		this.listUpdateAccumulator += deltaTime
 		const now = performance.now()
+
+		// --- New logic for frame time warning ---
+		this.currentFrameSystems.length = 0 // Clear without re-allocating
+		let currentFrameTotalTime = 0
+
 		// The systemTimings object is now keyed by numeric system ID for real systems,
 		// and by string name for pseudo-systems like 'Render' and 'Command Buffer'.
 		for (const key in this.systemManager.systemTimings) {
@@ -115,12 +139,37 @@ export class PerformanceMonitor {
 			}
 			const timingData = this.systemManager.systemTimings[key]
 
-			if (!this.history[systemName]) {
-				this.history[systemName] = []
-			}
+			// --- Accumulate for frame time warning ---
+			currentFrameTotalTime += timingData.total
+			// This still allocates a small object, but that's unavoidable if we want to sort.
+			this.currentFrameSystems.push({ name: systemName, time: timingData.total })
+
 			// Store the full timing object in history
 			this.history[systemName].push({ time: timingData.total, details: timingData, timestamp: now })
 		}
+
+		// --- Check and log frame time warning ---
+		if (currentFrameTotalTime >= FRAME_TIME_WARNING_THRESHOLD_MS) {
+			this.currentFrameSystems.sort((a, b) => b.time - a.time)
+
+			console.warn(
+				`%cPerformance Warning:%c Frame time breached ${FRAME_TIME_WARNING_THRESHOLD_MS.toFixed(
+					1,
+				)}ms threshold. Total: ${currentFrameTotalTime.toFixed(3)}ms. Top 5 systems:`,
+				'color: #e67e22; font-weight: bold;',
+				'color: white;',
+			)
+
+			this.loggableWarningSystems.length = 0
+			const count = Math.min(this.currentFrameSystems.length, TOP_SYSTEMS_COUNT)
+			for (let i = 0; i < count; i++) {
+				const s = this.currentFrameSystems[i]
+				this.loggableWarningSystems.push({ System: s.name, 'Time (ms)': s.time.toFixed(3) })
+			}
+			console.table(this.loggableWarningSystems)
+		}
+
+		this.history['Total Frame Time'].push({ time: currentFrameTotalTime, details: {}, timestamp: now })
 	}
 
 	/**
@@ -134,15 +183,15 @@ export class PerformanceMonitor {
 		if (this.timeAccumulator < PANEL_UPDATE_INTERVAL_S) return
 
 		// 3. Process history and render all panels
-		this._processAndUpdate()
+		this._processAndUpdate() // This now uses the new 'Total Frame Time' metric
 
 		// 4. Reset for the next interval.
 		this.timeAccumulator -= PANEL_UPDATE_INTERVAL_S
 	}
 
 	/**
-	 * Injects a <style> block into the document head for the monitor's CSS.
-	 * This keeps the component self-contained.
+	 * Injects a <style> block into the document head for the monitor's CSS. This keeps the component
+	 * self-contained.
 	 * @private
 	 */
 	_injectStyles() {
@@ -254,7 +303,6 @@ export class PerformanceMonitor {
 
 		delete this.history[systemName]
 		this.pinnedSystems.delete(systemName)
-		this.warnedSystems.delete(systemName)
 
 		const row = this.systemRowElements.get(systemName)
 		if (row) {
@@ -294,8 +342,7 @@ export class PerformanceMonitor {
 	}
 
 	_processAndUpdate() {
-		const { rendererStats, commandBufferStats, otherSystemsStats, totalFrameTime, sumOfMaxes } =
-			this._calculateCurrentStats()
+		const { rendererStats, commandBufferStats, otherSystemsStats, totalFrameTimeStats } = this._calculateCurrentStats()
 
 		// Cache the stats needed for immediate re-rendering on UI interaction (pinning, toggling).
 		this.lastProcessedStats = otherSystemsStats
@@ -304,7 +351,7 @@ export class PerformanceMonitor {
 		this._renderSystemsList(otherSystemsStats)
 		this._renderSpecialRow(rendererStats, this.rendererElements, 'Render', false)
 		this._renderSpecialRow(commandBufferStats, this.commandBufferElements, 'Command Buffer', false)
-		this._renderSummary(totalFrameTime, sumOfMaxes)
+		this._renderSummary(totalFrameTimeStats)
 	}
 
 	/**
@@ -374,23 +421,16 @@ export class PerformanceMonitor {
 			}
 		}
 
-		// Calculate summary stats. This includes the command buffer.
-		let totalFrameTime = 0
-		let sumOfMaxes = 0
-		for (const systemName in processedStats) {
-			const stats = processedStats[systemName]
-			totalFrameTime += stats.avg
-			sumOfMaxes += stats.max // This is a sum of maxes, not a true max, but useful for a rough upper bound.
-		}
-
 		const rendererStats = processedStats['Render']
 		const commandBufferStats = processedStats['Command Buffer']
+		const totalFrameTimeStats = processedStats['Total Frame Time']
 
 		const otherSystemsStats = { ...processedStats }
 		delete otherSystemsStats['Render']
 		delete otherSystemsStats['Command Buffer']
+		delete otherSystemsStats['Total Frame Time']
 
-		return { rendererStats, commandBufferStats, otherSystemsStats, totalFrameTime, sumOfMaxes }
+		return { rendererStats, commandBufferStats, otherSystemsStats, totalFrameTimeStats }
 	}
 
 	/**
@@ -417,22 +457,6 @@ export class PerformanceMonitor {
 		const breachValue = isSingleValue ? data.avg : data.max
 
 		const isBreaching = breachValue >= BREACHING_THRESHOLD_MS
-		const isWarning = breachValue >= WARNING_THRESHOLD_MS
-
-		if (isWarning) {
-			if (!this.warnedSystems.has(systemName)) {
-				console.warn(
-					`%cPerformance Warning:%c System '${systemName}' breached ${WARNING_THRESHOLD_MS.toFixed(
-						1,
-					)}ms threshold. Max time: ${data.max.toFixed(3)}ms`,
-					'color: #e67e22; font-weight: bold;',
-					'color: white;',
-				)
-				this.warnedSystems.add(systemName)
-			}
-		} else if (this.warnedSystems.has(systemName)) {
-			this.warnedSystems.delete(systemName)
-		}
 
 		container.classList.toggle('breaching', isBreaching)
 		if (isSingleValue) {
@@ -449,25 +473,8 @@ export class PerformanceMonitor {
 		const { container, name: nameEl, avg: avgEl, max: maxEl, detailRows } = rowElements
 
 		const isBreaching = max >= BREACHING_THRESHOLD_MS
-		const isWarning = max >= WARNING_THRESHOLD_MS
 		const isPinned = this.pinnedSystems.has(name)
 		const isExpanded = this.expandedSystems.has(name)
-
-		if (isWarning) {
-			if (!this.warnedSystems.has(name)) {
-				console.warn(
-					`%cPerformance Warning:%c System '${name}' breached ${WARNING_THRESHOLD_MS.toFixed(
-						1,
-					)}ms threshold. Max time: ${max.toFixed(3)}ms`,
-					'color: #e67e22; font-weight: bold;',
-					'color: white;',
-				)
-				this.warnedSystems.add(name)
-			}
-		} else if (this.warnedSystems.has(name)) {
-			// If the system is no longer breaching, remove it so it can warn again if it spikes later.
-			this.warnedSystems.delete(name)
-		}
 
 		container.dataset.systemName = name
 		container.title = `${name} (L-Click to expand, R-Click to ${isPinned ? 'unpin' : 'pin'})`
@@ -640,26 +647,26 @@ export class PerformanceMonitor {
 		}
 	}
 
-	_renderSummary(totalFrameTime, sumOfMaxes) {
+	_renderSummary(totalFrameTimeStats) {
 		const { container, avg, max, hr } = this.summaryElements
 		if (!container) return
 
-		// The total average time is a good indicator of overall frame cost.
-		// If this breaches our threshold, it's a significant performance issue.
-		const isBreaching = totalFrameTime >= BREACHING_THRESHOLD_MS
-
-		if (totalFrameTime === 0 && sumOfMaxes === 0) {
+		if (!totalFrameTimeStats || totalFrameTimeStats.count === 0) {
 			container.style.display = 'none'
 			hr.style.display = 'none'
 			return
 		}
 
+		// The total average time is a good indicator of overall frame cost. If this breaches our threshold, it's a
+		// significant performance issue.
+		const isBreaching = totalFrameTimeStats.max >= FRAME_TIME_WARNING_THRESHOLD_MS
+
 		container.style.display = 'flex'
 		hr.style.display = 'block'
 
 		container.classList.toggle('breaching', isBreaching)
-		avg.textContent = totalFrameTime.toFixed(3) // Sum of avgs is the total frame time
-		max.textContent = sumOfMaxes.toFixed(3) // Sum of maxes
+		avg.textContent = totalFrameTimeStats.avg.toFixed(3)
+		max.textContent = totalFrameTimeStats.max.toFixed(3)
 	}
 
 	_createPanel() {
@@ -910,7 +917,6 @@ export class PerformanceMonitor {
 		this.pinnedSeparator = null
 		this.pinnedSystems.clear()
 		this.expandedSystems.clear()
-		this.warnedSystems.clear()
 		this.history = {}
 		this.untrackedSystems.clear()
 	}

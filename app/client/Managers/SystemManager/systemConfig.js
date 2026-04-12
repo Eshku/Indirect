@@ -54,22 +54,22 @@ export const systemSchedule = {
 	Input: [
 		{ name: 'CursorSystem', frequency: 'input' }, // pixi cursor has to be there to avoid latency
 		{ name: 'PlayerInputSystem', frequency: 'input' },
-		
 	],
 
-	
- 	Logic: [
-		{ name: 'EnemyAISystem', frequency: 'logic' }, 
-		
+	Logic: [
 		{ name: 'SpawnDirectorSystem', frequency: 'logic' },
+
+		{ name: 'EnemyAISystem', frequency: 'logic' },
 
 		{ name: 'MovementSystem', frequency: 'logic' },
 
-		{ name: 'CollisionDetectionSystem', frequency: 'logic' },
+		{ name: 'SpinningSystem', frequency: 'logic' },
 
-		{ name: `ApplyVelocity`, frequency: `logic` },
+		{ name: `ApplyVelocity`, frequency: `logic` }, 
 
-		{ name: 'SpatialHashingSystem', frequency: 'logic' },
+		{ name: 'SpatialHashingSystem', frequency: 'logic' }, 
+
+		{ name: 'CollisionDetectionSystem', frequency: 'logic' }, 
 
 		{ name: 'PlayerWeaponSystem', frequency: 'logic' },
 
@@ -83,14 +83,14 @@ export const systemSchedule = {
 
 		{ name: 'CooldownSystem', frequency: 'logic' },
 
-		{ name: 'ProjectileLifetimeSystem', frequency: 'logic' }, 
-		{ name: 'PoolingSystem', frequency: 'logic' }, 
-	], 
+		{ name: 'ProjectileLifetimeSystem', frequency: 'logic' },
+		{ name: 'PoolingSystem', frequency: 'logic' },
+	],
 
 	// Infrequent UI updates. Runs on a timer, not every frame.
 	Timed: [{ name: 'OffscreenCleanupSystem', frequency: 1 }],
 
-	// Runs once per rendered frame for smooth visuals, interpolation, and UI.
+	// Runs once per rendered frame for visuals, interpolation, and UI.
 	Visuals: [
 		{ name: 'SpriteFactorySystem', frequency: 'visuals' },
 		{ name: 'LayerFactorySystem', frequency: 'visuals' },
@@ -103,16 +103,14 @@ export const systemSchedule = {
 
 		{ name: 'SyncTransforms', frequency: 'visuals' },
 
-		{ name: 'SpinningSystem', frequency: 'visuals' },
-
 		{ name: 'CameraSystem', frequency: 'visuals' },
-	], 
+	],
 
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
 		{ name: 'DebugInspectionSystem', frequency: 'input' },
-		//{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
+		/* { name: 'SpatialHashDebugSystem', frequency: 'visuals' }, */
 	],
 
 	//! Do not run benchmark \ test systems with other systems together, high query overlap potential.
@@ -120,13 +118,11 @@ export const systemSchedule = {
 	Benchmark: [
 		/* { name: 'CPUBenchmark', frequency: 'visuals' }, */
 		/* { name: 'MemoryBenchmark', frequency: 'visuals' }, */
-		
 		/* { name: 'RWMBenchmark', frequency: 'visuals' },  */
 		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
 	Test: [
-		/* { name: 'QueryApiTestSystem', frequency: 'logic' }, */
 		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */

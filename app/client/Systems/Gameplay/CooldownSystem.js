@@ -32,7 +32,7 @@ export class CooldownSystem {
 				const indexInChunk = this.scratchBuffer[j]
 
 				timers[indexInChunk] = Math.max(0, timers[indexInChunk] - deltaTime)
-				if (timers[indexInChunk] === 0) {
+				if (timers[indexInChunk] <= 0) {
 					// The cooldown has finished. Disable the component so we don't
 					// process it again until it's reset.
 					this.disableComponent(chunkId, indexInChunk, weaponCooldown)

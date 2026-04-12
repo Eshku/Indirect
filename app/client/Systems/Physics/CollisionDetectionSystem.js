@@ -133,6 +133,7 @@ export class CollisionDetectionSystem {
 				// The queryBox method now resets the count internally.
 				this.grid.queryBox(aabbsA.minX[i], aabbsA.minY[i], aabbsA.maxX[i], aabbsA.maxY[i], this.spatialQueryResult)
 
+
 				// Narrow-phase: Check each potential pair.
 				for (let j = 0; j < this.spatialQueryResult.count; j++) {
 					const chunkIdB = this.spatialQueryResult.chunkIds[j]

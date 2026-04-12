@@ -7,14 +7,23 @@ export class BackgroundSystem {
 
 		this.app.renderer.background.color = 0x0c0c1a // Fallback color
 
-		// Define multiple layers for a parallax/depth effect
+		// Define multiple layers for a depth effect.
+		// The texture size is increased to 2048x2048 to make the repeating pattern
+		// much less noticeable when zoomed out. The star counts are increased
+		// proportionally to maintain the same visual density.
+		const textureSize = 2048
+		const densityMultiplier = (textureSize * textureSize) / (512 * 512)
+
 		const starLayers = [
-			{ count: 200, minRadius: 0.2, maxRadius: 0.7, minAlpha: 0.3, maxAlpha: 0.6 }, // Dim, distant stars
-			{ count: 100, minRadius: 0.5, maxRadius: 1.1, minAlpha: 0.5, maxAlpha: 0.8 }, // Mid-ground stars
-			{ count: 50, minRadius: 0.8, maxRadius: 1.5, minAlpha: 0.7, maxAlpha: 1.0 }, // Bright, closer stars
+			// Dim, distant stars
+			{ count: 200 * densityMultiplier, minRadius: 0.2, maxRadius: 0.7, minAlpha: 0.3, maxAlpha: 0.6 },
+			// Mid-ground stars
+			{ count: 100 * densityMultiplier, minRadius: 0.5, maxRadius: 1.1, minAlpha: 0.5, maxAlpha: 0.8 },
+			// Bright, closer stars
+			{ count: 50 * densityMultiplier, minRadius: 0.8, maxRadius: 1.5, minAlpha: 0.7, maxAlpha: 1.0 },
 		]
 
-		const starfieldTexture = this.createStarfieldTexture(this.app, 512, 512, starLayers)
+		const starfieldTexture = this.createStarfieldTexture(this.app, textureSize, textureSize, starLayers)
 
 		this.tilingSprite = new PIXI.TilingSprite({
 			texture: starfieldTexture,

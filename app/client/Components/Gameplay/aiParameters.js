@@ -19,4 +19,9 @@ export const aiParameters = {
 	 * A value of 0 results in a static path. Higher values create faster oscillation.
 	 */
 	orbitWobbleFrequency: { type: 'f32', default: 0.0 },
+	/**
+	 * A per-entity random seed generated at spawn time, used to derive all movement variations.
+	 * This is more performant than calculating hashes every frame.
+	 */
+	randomSeed: { type: 'f32', default: 0.0 },
 }

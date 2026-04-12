@@ -123,18 +123,13 @@ export class EntityManager {
 		this.systemManager = ecs.systemManager
 		this.prefabManager = ecs.prefabManager
 		this.workerManager = ecs.workerManager
-
-		// --- Lifecycle Hooks ---
-		// External managers can subscribe to these to stay in sync with the world state.
-		this.onChunkCreated = new Set()
-		this.onChunkDestroyed = new Set()
-		this.onEntitiesMoved = new Set()
-		this.onEntitiesSwapped = new Set()
+		this.entityMaskManager = ecs.entityMaskManager
 
 		// Tracks chunk IDs created within a single frame for delta-syncing to workers.
 		this.newlyCreatedChunks = []
 		this.destroyedChunks = []
 		this.newlyCreatedArchetypePages = []
+
 
 		// Initialize the shared archetype map
 		entityStore.archetypeLookup = new SharedArchetypeHashMap(
@@ -450,9 +445,7 @@ export class EntityManager {
 				entityStore.entityLocations[swappedEntityIndex * 2 + 1] = newIndex
 			}
 			if (swappedMappings.size > 0) {
-				for (const callback of this.onEntitiesSwapped) {
-					callback({ chunkId, swappedMappings })
-				}
+				this.entityMaskManager.handleEntitiesSwapped({ chunkId, swappedMappings })
 			}
 
 			// Proactively update the non-full chunk pointer or destroy the chunk if it's now empty.
@@ -857,7 +850,7 @@ export class EntityManager {
 		// EntityMaskManager to clean up their own state and avoid stale references.
 		for (let i = 1; i < entityStore.nextChunkId; i++) {
 			if (entityStore.chunkArchetypeIds[i] !== 0 && !entityStore.freeChunkIds.includes(i)) {
-				for (const callback of this.onChunkDestroyed) callback(i)
+				this.entityMaskManager.handleChunkDestroyed(i)
 			}
 		}
 
@@ -1009,9 +1002,7 @@ export class EntityManager {
 	_fireMoveHook(entityIds, sourceLocations, newLocationsMap) {
 		const moveBatch = { entityIds: [], oldLocations: [], newLocations: [] }
 		for (let i = 0; i < entityIds.length; i++) {
-			const entityId = entityIds[i]
-			const oldLocation = sourceLocations[i]
-			const newLocation = newLocationsMap.get(entityId)
+			const entityId = entityIds[i], oldLocation = sourceLocations[i], newLocation = newLocationsMap.get(entityId)
 			if (newLocation) {
 				moveBatch.entityIds.push(entityId)
 				moveBatch.oldLocations.push(oldLocation)
@@ -1019,7 +1010,7 @@ export class EntityManager {
 			}
 		}
 		if (moveBatch.entityIds.length > 0) {
-			for (const callback of this.onEntitiesMoved) callback(moveBatch)
+			this.entityMaskManager.handleEntitiesMoved(moveBatch)
 		}
 	}
 
@@ -1195,9 +1186,7 @@ export class EntityManager {
 			}
 
 			if (swappedMappings.size > 0) {
-				for (const callback of this.onEntitiesSwapped) {
-					callback({ chunkId, swappedMappings })
-				}
+				this.entityMaskManager.handleEntitiesSwapped({ chunkId, swappedMappings })
 			}
 
 			// Proactively update the non-full chunk pointer if this chunk just gained space.
@@ -1288,9 +1277,7 @@ export class EntityManager {
 		}
 
 		if (swappedMappings.size > 0) {
-			for (const callback of this.onEntitiesSwapped) {
-				callback({ chunkId, swappedMappings })
-			}
+			this.entityMaskManager.handleEntitiesSwapped({ chunkId, swappedMappings })
 		}
 
 		if (entityStore.chunkCapacities[chunkId] === oldSize && entityStore.chunkSizes[chunkId] < oldSize) {
@@ -1398,9 +1385,7 @@ export class EntityManager {
 		this.queryManager.registerChunk(archetypeId, newChunkId)
 
 		// Fire hook for subscribers like entityMaskManager
-		for (const callback of this.onChunkCreated) {
-			callback(newChunkId, archetypeId)
-		}
+		this.entityMaskManager.handleChunkCreated(newChunkId, archetypeId)
 
 		// Track this new chunk for delta-syncing.
 		this.newlyCreatedChunks.push(newChunkId)
@@ -1483,9 +1468,7 @@ export class EntityManager {
 		this.queryManager.registerChunk(archetypeId, chunkId)
 
 		// Fire hook for subscribers
-		for (const callback of this.onChunkCreated) {
-			callback(chunkId, archetypeId)
-		}
+		this.entityMaskManager.handleChunkCreated(chunkId, archetypeId)
 
 		this.newlyCreatedChunks.push(chunkId)
 		return chunkId
@@ -1497,10 +1480,8 @@ export class EntityManager {
 	 * @private
 	 */
 	_destroyChunk(chunkId, archetypeId) {
-		// Fire hook BEFORE unlinking and adding to free pool.
-		for (const callback of this.onChunkDestroyed) {
-			callback(chunkId)
-		}
+		// Notify the mask manager BEFORE unlinking and adding to free pool.
+		this.entityMaskManager.handleChunkDestroyed(chunkId)
 
 		// --- Unlink the chunk from the archetype's list ---
 		const prevId = entityStore.chunkPrevInArchetype[chunkId]

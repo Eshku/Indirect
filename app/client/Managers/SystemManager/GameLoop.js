@@ -375,6 +375,12 @@ export class GameLoop {
 			this.systemManager.updateGroups.visuals.lastTick = this.currentTick
 		}
 
+		// --- Manual Render Call ---
+		const renderStartTime = performance.now()
+		this.renderer.render(this.app.stage)
+		const renderEndTime = performance.now()
+		this.systemManager.recordSystemTiming('Render', 'total', renderEndTime - renderStartTime)
+
 		// --- 5. Post-Execution Frame Finalization ---
 
 		// The PerformanceMonitor's own `update` job has run. Now we call its special methods
@@ -395,13 +401,6 @@ export class GameLoop {
 		for (const chunkId of chunksToMaintain) {
 			this.entityMaskManager.performMaintenance(chunkId, this.currentTick)
 		}
-
-		// --- Manual Render Call ---
-		const renderStartTime = performance.now()
-
-		this.renderer.render(this.app.stage)
-		const renderEndTime = performance.now()
-		this.systemManager.recordSystemTiming('Render', 'total', renderEndTime - renderStartTime)
 
 		// --- Advance Tick ---
 		// The main logic tick is advanced inside the fixed logic loop. This section

@@ -38,13 +38,6 @@ export class EntityMaskManager {
 	init(engine) {
 		this.entityManager = engine.entityManager
 
-		// Subscribe to EntityManager lifecycle hooks
-		this.entityManager.onChunkCreated.add(this.handleChunkCreated)
-		this.entityManager.onChunkDestroyed.add(this.handleChunkDestroyed)
-		this.entityManager.onEntitiesMoved.add(this.handleEntitiesMoved)
-		this.entityManager.onEntitiesSwapped.add(this.handleEntitiesSwapped)
-
-		// Perform the initial registration of masks defined in component schemas.
 		this.registerAllSchemaMasks()
 	}
 
@@ -247,14 +240,10 @@ export class EntityMaskManager {
 		}
 
 		const mask = maskSet.masksByChunk[chunkId]
-		// If `mask` is undefined, the mask was not allocated for this chunk. This can happen
-		// with stale chunk IDs. Instead of crashing, warn and return.
-		if (!mask) {
-			console.warn(
-				`[EntityMaskManager] setBit: Mask "${maskSet.name}" (ID: ${maskSetId}) not found for chunk ${chunkId}. The chunk may be stale or recycled.`,
-			)
-			return
-		}
+		// If `mask` is undefined, it means this mask was not allocated for this chunk.
+		// This is a developer error, either because the allocation rule is wrong, or a stale
+		// chunkId is being used. The following line will intentionally throw a TypeError,
+		// which is the desired behavior to catch such errors. A silent failure would hide bugs.
 
 		const wordIndex = indexInChunk >>> 5
 		const bitInWord = 1 << (indexInChunk & 31)
@@ -278,14 +267,10 @@ export class EntityMaskManager {
 		}
 
 		const mask = maskSet.masksByChunk[chunkId]
-		// If `mask` is undefined, the mask was not allocated for this chunk. This can happen
-		// with stale chunk IDs. Instead of crashing, warn and return.
-		if (!mask) {
-			console.warn(
-				`[EntityMaskManager] clearBit: Mask "${maskSet.name}" (ID: ${maskSetId}) not found for chunk ${chunkId}. The chunk may be stale or recycled.`,
-			)
-			return
-		}
+		// If `mask` is undefined, it means this mask was not allocated for this chunk.
+		// This is a developer error, either because the allocation rule is wrong, or a stale
+		// chunkId is being used. The following line will intentionally throw a TypeError,
+		// which is the desired behavior to catch such errors. A silent failure would hide bugs.
 
 		const wordIndex = indexInChunk >>> 5
 		const bitInWord = 1 << (indexInChunk & 31)
@@ -311,14 +296,10 @@ export class EntityMaskManager {
 		const eventMasks = maskSet.masksByChunk[chunkId]
 		// If `eventMasks` is undefined, it means the mask was not allocated for this chunk.
 		// This can happen if we are operating on a stale chunkId that has been destroyed
-		// and possibly recycled for an archetype that doesn't match the mask's allocation rule.
-		// Instead of crashing, we'll log a warning and return.
-		if (!eventMasks) {
-			console.warn(
-				`[EntityMaskManager] fireEvent: Mask "${maskSet.name}" (ID: ${maskSetId}) not found for chunk ${chunkId}. The chunk may be stale or recycled.`,
-			)
-			return
-		}
+		// and recycled for an archetype that doesn't match the mask's allocation rule. This is
+		// a developer error. The following line will intentionally throw a TypeError, which is
+		// the desired behavior to catch such errors. A silent failure would hide bugs.
+
 		const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
 		const frameIndex = ((tick % maskSet.historyLength) + maskSet.historyLength) % maskSet.historyLength
 		const wordIndexInFrame = indexInChunk >>> 5
@@ -345,13 +326,10 @@ export class EntityMaskManager {
 		}
 
 		const mask = maskSet.masksByChunk[chunkId]
-		// If `mask` is undefined, the mask was not allocated for this chunk. This can happen
-		// with stale chunk IDs. Instead of crashing, we can return false as the bit is not set.
-		if (!mask) {
-			// We don't warn here as this can be a valid query path (e.g., checking a bit
-			// on an entity that just moved out of a chunk that had the mask).
-			return false
-		}
+		// If `mask` is undefined, it means this mask was not allocated for this chunk.
+		// This is a developer error. The following line will intentionally throw a TypeError.
+		// A silent `return false` was removed because it can hide bugs where a system
+		// operates on a stale entity location.
 
 		const wordIndex = indexInChunk >>> 5
 		const bitInWord = 1 << (indexInChunk & 31)
@@ -369,7 +347,9 @@ export class EntityMaskManager {
 		// declared as `isEnableable` in its schema. The following line will then throw
 		// a native TypeError, which is the desired behavior to signal a developer error.
 		const mask = maskSet.masksByChunk[chunkId]
-		if (!mask) return 0
+		// If `mask` is undefined, it means this mask was not allocated for this chunk.
+		// This is a developer error. The following line will intentionally throw a TypeError.
+		// A silent `return 0` was removed because it can hide bugs.
 
 		const size = entityStore.chunkSizes[chunkId]
 		let count = 0
@@ -401,8 +381,10 @@ export class EntityMaskManager {
 		// declared as `isTrackable` in its schema. The following line will then throw
 		// a native TypeError, which is the desired behavior to signal a developer error.
 		const eventMasks = maskSet.masksByChunk[chunkId]
-		if (!eventMasks) return 0
-
+		// If `eventMasks` is undefined, it means this mask was not allocated for this chunk.
+		// This is a developer error. The following line will intentionally throw a TypeError.
+		// A silent `return 0` was removed because it can hide bugs.
+		
 		const size = entityStore.chunkSizes[chunkId]
 		const capacity = entityStore.chunkCapacities[chunkId]
 		const numWords = Math.ceil(capacity / 32)
@@ -625,60 +607,73 @@ export class EntityMaskManager {
 			for (let maskSetId = 0; maskSetId < this.maskSetIdCounter; maskSetId++) {
 				const maskSet = this.maskSets[maskSetId]
 				const oldMask = maskSet.masksByChunk[oldChunkId]
-
-				// If the source chunk didn't have this mask, there's nothing to copy.
-				if (!oldMask) continue
-
 				const newMask = maskSet.masksByChunk[newChunkId]
+
+				// If the destination chunk doesn't have this mask, there's nothing to do.
+				if (!newMask) continue
 
 				if (maskSet.type === MASK_TYPE.STATE) {
 					for (let i = 0; i < oldIndices.length; i++) {
 						const oldIndex = oldIndices[i]
 						const newIndex = newIndices[i]
 
-						const oldWordIndex = oldIndex >>> 5
-						const oldBitInWord = 1 << (oldIndex & 31)
-						const isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
+						let isSet = false
+						// Only read from oldMask if it exists.
+						if (oldMask) {
+							const oldWordIndex = oldIndex >>> 5
+							const oldBitInWord = 1 << (oldIndex & 31)
+							isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
+						}
+						// If oldMask doesn't exist, isSet remains false. This is correct, as the
+						// entity is moving into an archetype that has the mask, so its state for
+						// this mask should be initialized to 0 (cleared).
 
-						// Clear the bit from the old location.
-						Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
-
-						// If the bit was set and the new chunk has a mask, set it there.
-						if (isSet && newMask) {
-							const newWordIndex = newIndex >>> 5
-							const newBitInWord = 1 << (newIndex & 31)
+						// Now, write the correct state to the new location.
+						const newWordIndex = newIndex >>> 5
+						const newBitInWord = 1 << (newIndex & 31)
+						if (isSet) {
 							Atomics.or(newMask, newWordIndex, newBitInWord)
+						} else {
+							Atomics.and(newMask, newWordIndex, ~newBitInWord)
 						}
 					}
 				} else if (maskSet.type === MASK_TYPE.EVENT) {
-					const oldCapacity = entityStore.chunkCapacities[oldChunkId]
 					const newCapacity = entityStore.chunkCapacities[newChunkId]
-					const oldWordsPerFrame = Math.ceil(oldCapacity / 32)
-					const newWordsPerFrame = newMask ? Math.ceil(newCapacity / 32) : 0
+					const newWordsPerFrame = Math.ceil(newCapacity / 32)
 
 					for (let i = 0; i < oldIndices.length; i++) {
 						const oldIndex = oldIndices[i]
 						const newIndex = newIndices[i]
 
-						const oldWordIndexInFrame = oldIndex >>> 5
-						const oldBitInWord = 1 << (oldIndex & 31)
 						const newWordIndexInFrame = newIndex >>> 5
 						const newBitInWord = 1 << (newIndex & 31)
 
-						for (let frame = 0; frame < maskSet.historyLength; frame++) {
-							const oldFrameOffset = frame * oldWordsPerFrame
-							const oldFinalWordIndex = oldFrameOffset + oldWordIndexInFrame
-							const isSetInFrame = (Atomics.load(oldMask, oldFinalWordIndex) & oldBitInWord) !== 0
+						if (oldMask) {
+							const oldCapacity = entityStore.chunkCapacities[oldChunkId]
+							const oldWordsPerFrame = Math.ceil(oldCapacity / 32)
+							const oldWordIndexInFrame = oldIndex >>> 5
+							const oldBitInWord = 1 << (oldIndex & 31)
 
-							if (isSetInFrame) {
-								// Copy to new location if it exists
-								if (newMask) {
-									const newFrameOffset = frame * newWordsPerFrame
-									const newFinalWordIndex = newFrameOffset + newWordIndexInFrame
+							for (let frame = 0; frame < maskSet.historyLength; frame++) {
+								const oldFrameOffset = frame * oldWordsPerFrame
+								const oldFinalWordIndex = oldFrameOffset + oldWordIndexInFrame
+								const isSetInFrame = (Atomics.load(oldMask, oldFinalWordIndex) & oldBitInWord) !== 0
+
+								const newFrameOffset = frame * newWordsPerFrame
+								const newFinalWordIndex = newFrameOffset + newWordIndexInFrame
+								if (isSetInFrame) {
 									Atomics.or(newMask, newFinalWordIndex, newBitInWord)
+								} else {
+									Atomics.and(newMask, newFinalWordIndex, ~newBitInWord)
 								}
-								// Clear from old location
-								Atomics.and(oldMask, oldFinalWordIndex, ~oldBitInWord)
+							}
+						} else {
+							// If oldMask doesn't exist, the event state is implicitly 0.
+							// We need to clear the bits at the new location for all history frames.
+							for (let frame = 0; frame < maskSet.historyLength; frame++) {
+								const newFrameOffset = frame * newWordsPerFrame
+								const newFinalWordIndex = newFrameOffset + newWordIndexInFrame
+								Atomics.and(newMask, newFinalWordIndex, ~newBitInWord)
 							}
 						}
 					}
@@ -687,6 +682,10 @@ export class EntityMaskManager {
 		}
 	}
 
+	/**
+	 * Handles mask updates when entities are swapped within a chunk to fill holes from removals.
+	 * This is a critical hook for maintaining mask integrity during `destroyEntity` operations.
+	 */
 	handleEntitiesSwapped = ({ chunkId, swappedMappings }) => {
 		if (swappedMappings.size === 0) return
 
@@ -706,8 +705,9 @@ export class EntityMaskManager {
 					const newBitInWord = 1 << (newIndex & 31)
 					if (isSet) Atomics.or(mask, newWordIndex, newBitInWord)
 					else Atomics.and(mask, newWordIndex, ~newBitInWord)
-
-					// After copying, always clear the bit from the old location to prevent stale data.
+					// The old location at `oldIndex` is now inaccessible because the chunk size has
+					// been reduced. However, if a new entity is added to the chunk, it can occupy
+					// this slot. We must clear the bit to prevent the new entity from inheriting a stale state.
 					Atomics.and(mask, oldWordIndex, ~oldBitInWord)
 				}
 			} else if (maskSet.type === MASK_TYPE.EVENT) {
@@ -728,8 +728,7 @@ export class EntityMaskManager {
 						const newFinalWordIndex = frameOffset + newWordIndexInFrame
 						if (isSetInFrame) Atomics.or(mask, newFinalWordIndex, newBitInWord)
 						else Atomics.and(mask, newFinalWordIndex, ~newBitInWord)
-
-						// After copying, always clear the bit from the old location to prevent stale data.
+						// As with state masks, we must clear the old location to prevent stale data inheritance.
 						Atomics.and(mask, oldFinalWordIndex, ~oldBitInWord)
 					}
 				}

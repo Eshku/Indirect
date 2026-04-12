@@ -1,7 +1,7 @@
 {
 	"components": {
-		"health": { "current": 25, "max": 25 },
-		"speed": 25,
+		"health": { "current": 1, "max": 1 },
+		"speed": 100,
 		"damage": { "value": 10 },
 		"position": { "x": 150, "y": 150 },
 		"rotation": {},
@@ -24,5 +24,6 @@
 		"enemyTag": {},
 
 		"aiParameters": { "orbitBias": 0.8, "orbitAngleSpread": 0.5, "orbitWobbleFrequency": 2.0 }
+
 	}
 }
