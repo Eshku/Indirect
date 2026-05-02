@@ -59,6 +59,8 @@ function createMainWindow() {
 		autoHideMenuBar: true,
 		show: false,
 	})
+	
+	//! v41.x.x electron messes up full screen on windows.
 
 	mainWindow.loadFile(path.join(__dirname, 'client', 'index.html'))
 

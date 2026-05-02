@@ -37,6 +37,7 @@ export const componentNames = [] // Indexed by typeID
 export const componentNameToTypeID = new Map() // Maps lowercase name to typeID
 
 export const MAX_COMPONENTS = 256
+export const MASK_PARTS = Math.ceil(MAX_COMPONENTS / 64)
 export const EMPTY_BITMASK = 0n
 export const DIRTY_HISTORY_LENGTH = 64
 

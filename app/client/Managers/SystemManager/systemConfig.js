@@ -124,7 +124,7 @@ export const systemSchedule = {
 		/* { name: 'MemoryBenchmark', frequency: 'logic' }, */
 		/* { name: 'RWMBenchmark', frequency: 'visuals' },  */
 
-		/* { name: 'HashingBenchmarkSystem', frequency: 'none' }, */
+
 		/* { name: 'EntityCommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 

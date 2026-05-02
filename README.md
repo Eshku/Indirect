@@ -32,7 +32,7 @@ Long-term vision is to build a high-performance, **data-oriented**, and **parall
 
 1.  **Performance Over "Comfort"**: Design decisions always prioritize raw performance and efficient data access patterns over comfy API.
 
-2.  **Maximum Developer Control**: Goal is to provide as many tools and much control to developers as possible.
+2.  **Maximum Developer Control**: Provide as many tools and much control to developers as possible.
 
 3.  **Zero-Cost Abstractions (Pay Only For What You Use)**: Actively avoiding adding features to the core engine if they impose runtime performance penalty on _all_ users, regardless of whether they use the feature. New abstractions are only acceptable if they have a negligible or zero-cost runtime cost for those who don't opt into them.
 
@@ -230,9 +230,9 @@ export class ParallelSystem {
 }
 ```
 
-### System API: The "Compile-Then-Command" Workflow
+### System API
 
-All structural changes to entities (creation, deletion, adding/removing components) are deferred and batched for performance using an `EntityCommandBuffer`. 
+All structural changes to entities (creation, deletion, adding/removing components) are deferred using an `EntityCommandBuffer`. 
 
 A set of common methods are injected into every system instance. These provide direct access to the command buffer and the payload compiler.
 
@@ -240,13 +240,13 @@ A set of common methods are injected into every system instance. These provide d
 - **`instantiate()`**: Queues the creation of one or more entities from a compiled payload. This is the "Command" step.
 - **`addComponent()` / `addComponents()`**: Queues the addition of one or more components to an entity, using a compiled payload.
 - **`setComponent()` / `setComponents()`**: Queues a change to an entity's component data, using a compiled payload.
-- **`removeComponent()`**: Queues the removal of a component.
+- **`removeComponent()` / `removeComponents()`**: Queues removal of components.
 - **`destroyEntity()`**: Queues an entity to be destroyed.
 - **`getQuery()`**: Retrieves a cached query.
 
-#### The Workflow in Practice
+#### Workflow in Practice
 
-The core idea is to perform the expensive work of interpreting and laying out data **once** during initialization, and then reuse that compiled "template" many times during execution.
+Core idea is to perform the expensive work of interpreting and laying out data **once** during initialization, and then reuse that compiled "template" during execution.
 
 **1. "Compile" Payloads in `init()`**
 

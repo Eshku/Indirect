@@ -33,8 +33,6 @@ class WorkerEntry {
 		this.localDeque = null
 		this.mainThreadInbox = null
 		this.allDeques = []
-		this.importFromString = null
-		this.hashFn = null // To store the h64 function
 		this.archetypeMap = null
 		this.spatialHashGrid = null
 
@@ -98,6 +96,9 @@ class WorkerEntry {
 		self.id = payload.workerId
 
 		// These are the raw, empty container arrays. They will be populated by syncChunks.
+		// --- Entity Store (Mirrors main thread's shared data) ---
+		entityStore.entityPackedLocations = new Uint32Array(sharedData.entityPackedLocations)
+		entityStore.entityIndicesInChunk = new Uint32Array(sharedData.entityIndicesInChunk)
 		entityStore.archetypeMasks = new BigUint64Array(sharedData.archetypeMasks)
 		entityStore.archetypeComponentCounts = new Uint16Array(sharedData.archetypeComponentCounts)
 		entityStore.archetypeChunkCounts = new Uint16Array(sharedData.archetypeChunkCounts)
@@ -105,7 +106,10 @@ class WorkerEntry {
 		entityStore.archetypeTailChunkIds = new Uint16Array(sharedData.archetypeTailChunkIds)
 		entityStore.archetypeLastNonFullChunkId = new Uint16Array(sharedData.archetypeLastNonFullChunkId)
 		entityStore.archetypeComponentListStartIndices = new Uint32Array(sharedData.archetypeComponentListStartIndices)
-		entityStore.packedComponentIdPages = sharedData.packedComponentIdPageSABs.map(sab => new Uint16Array(sab))
+		// The paged component ID list is no longer needed on workers.
+		// It has been replaced by the flat archetypeComponentIndexMapData for O(1) lookups.
+		entityStore.archetypeComponentIndexMapData = new Uint16Array(sharedData.archetypeComponentIndexMapData)
+		entityStore.packedComponentIdPages = [] // Keep the property for consistency, but it's unused.
 
 		entityStore.chunkComponentData = new Array(sharedData.MAX_CHUNKS)
 		entityStore.chunkDirtyTicks = new Array(sharedData.MAX_CHUNKS)
@@ -142,8 +146,6 @@ class WorkerEntry {
 			const mpscQueueModuleUrl = new URL('../../Core/Algorithms/MPSCQueue.js', baseUrl)
 			const dequeModuleUrl = new URL('../../Core/Algorithms/WorkStealingDeque.js', baseUrl)
 			const componentSchemaModuleUrl = new URL('../../Managers/ComponentManager/ComponentSchema.js', baseUrl)
-			const archetypeHashMapModuleUrl = new URL('../../Core/DataStructures/SharedArchetypeHashMap.js', baseUrl)
-			const xxhashWasmModuleUrl = new URL('../../../../node_modules/xxhash-wasm/esm/xxhash-wasm.js', baseUrl)
 			const kernelAPIModuleUrl = new URL('./Kernel.js', baseUrl)
 			const spatialHashGridModuleUrl = new URL('../../Core/DataStructures/SpatialHashGrid.js', baseUrl)
 
@@ -155,8 +157,6 @@ class WorkerEntry {
 				frameStateLayoutModule,
 				spatialHashGridModule,
 				componentSchemaModule,
-				archetypeHashMapModule,
-				xxhashModule,
 				kernelAPIModule,
 			] = await Promise.all([
 				import(blobUtilModuleUrl.href),
@@ -166,8 +166,6 @@ class WorkerEntry {
 				import(frameStateLayoutModuleUrl.href),
 				import(spatialHashGridModuleUrl.href),
 				import(componentSchemaModuleUrl.href),
-				import(archetypeHashMapModuleUrl.href),
-				import(xxhashWasmModuleUrl.href),
 				import(kernelAPIModuleUrl.href),
 			])
 
@@ -184,20 +182,14 @@ class WorkerEntry {
 			}
 
 			const { importFromString } = blobUtilModule
+			this.importFromString = importFromString
+
 			const { MPSCQueue } = mpscQueueModule
 			const { WorkStealingDeque, NO_JOB_AVAILABLE } = dequeModule
 			const { SpatialHashGrid } = spatialHashGridModule
-			const { SharedArchetypeHashMap } = archetypeHashMapModule
-			const xxhashDefault = xxhashModule.default
-			const { h64Raw } = await xxhashDefault()
-			this.hashFn = h64Raw
-
-			this.importFromString = importFromString
 
 			this.NO_JOB_AVAILABLE = NO_JOB_AVAILABLE
 			this.DIRTY_HISTORY_LENGTH = componentSchemaModule.DIRTY_HISTORY_LENGTH
-
-			this.archetypeMap = new SharedArchetypeHashMap(sharedData.archetypeMapBuffer, this.hashFn)
 
 			// Load all kernel modules.
 			for (const moduleName in kernelCode) {
@@ -302,15 +294,6 @@ class WorkerEntry {
 					return
 				case 'sync-chunk-deltas':
 					this.syncChunkDeltas(payload)
-					return
-				case 'sync-archetype-store-pages':
-					for (const pageSAB of payload.pages) {
-						entityStore.packedComponentIdPages.push(new Uint16Array(pageSAB))
-					}
-					return
-				case 'archetype-map-resize':
-					// The main thread has resized the map. We just need to point our instance to the new buffer.
-					this.archetypeMap = new this.archetypeMap.constructor(payload.archetypeMapBuffer, this.hashFn)
 					return
 				default:
 					throw new Error(`[Worker] Unknown job type: ${type}`)

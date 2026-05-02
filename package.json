@@ -1,6 +1,6 @@
 {
   "name": "indirect-engine",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "main": "./app/app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -18,11 +18,10 @@
     "@babel/traverse": "^7.28.4",
     "@babel/types": "^7.28.4",
     "chokidar": "^4.0.3",
-    "electron": "^35.1.1",
+    "electron": "^40.9.3",
     "electron-builder": "^26.0.12"
   },
   "dependencies": {
-    "pixi.js": "^8.9.1",
-    "xxhash-wasm": "^1.1.0"
+    "pixi.js": "^8.9.1"
   }
 }

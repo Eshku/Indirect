@@ -172,14 +172,9 @@ export class WorkerManager {
 	 */
 	broadcastDeltas() {
 		const chunkDeltas = this.entityManager.getAndClearChunkDeltas()
-		const archetypePageDeltas = this.entityManager.getAndClearArchetypePageDeltas()
 
 		if (chunkDeltas.newChunks || chunkDeltas.destroyedChunks) {
 			this.broadcast('sync-chunk-deltas', chunkDeltas)
-		}
-
-		if (archetypePageDeltas) {
-			this.broadcast('sync-archetype-store-pages', { pages: archetypePageDeltas })
 		}
 	}
 

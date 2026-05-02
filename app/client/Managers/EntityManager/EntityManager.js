@@ -1,23 +1,7 @@
 import * as Schema from '../ComponentManager/ComponentSchema.js'
-const { SharedArchetypeHashMap } = await import(`@core/DataStructures/SharedArchetypeHashMap.js`)
 import { radixSort } from '../../Core/Algorithms/RadixSorter.js'
 import { RawCommandBuffer } from '../SystemManager/RawCommandBuffer.js'
 import { CommandBufferReader } from '../SystemManager/CommandBufferReader.js'
-
-const { h64Raw } = await xxhash()
-
-// non-cryptographic 64-bit hash function (FNV-1a) implemented in JS.
-// This avoids the overhead of calling into WASM for the archetype hash map.
-const FNV_OFFSET_BASIS = 0xcbf29ce484222325n
-const FNV_PRIME = 0x100000001b3n
-function fnv1a64(data) {
-	let hash = FNV_OFFSET_BASIS
-	for (let i = 0; i < data.length; i++) {
-		hash ^= BigInt(data[i])
-		hash = (hash * FNV_PRIME) & 0xffffffffffffffffn
-	}
-	return hash
-}
 /**
  * Manages all entities, archetypes, and their component data.
  * This class is the heart of the ECS, owning the core data structures that track every entity.
@@ -50,10 +34,9 @@ function fnv1a64(data) {
  *         optimized for fast structural changes (e.g., adding/removing components) and efficient memory pooling.
  */
 
+import { MAX_COMPONENTS, MASK_PARTS } from '../ComponentManager/ComponentSchema.js'
 export const MAX_ARCHETYPES = 4096 // Maximum number of unique archetypes
 export const MAX_CHUNKS = 65536 // Maximum number of chunks
-export const MAX_COMPONENTS = 256 // A practical limit for component types
-export const MASK_PARTS = Math.ceil(MAX_COMPONENTS / 64) // = 4 for 256 components
 const INITIAL_ENTITY_CAPACITY = 8192 // Initial capacity for entity-indexed arrays
 
 const TARGET_CHUNK_SIZE_BYTES = 16384 // 16KB
@@ -61,6 +44,7 @@ const TARGET_CHUNK_SIZE_BYTES = 16384 // 16KB
 // theoretical maximum number of entities a chunk can hold.
 // This is derived from the target chunk size (16KB) and the smallest possible entity size
 // (an entity with no components, which is just its 8-byte ID): 16384 / 8 = 2048.
+export { MAX_COMPONENTS, MASK_PARTS }
 export const MAX_CHUNK_CAPACITY = 2048
 
 const CACHE_LINE_SIZE = 64 // Common CPU cache line size in bytes
@@ -227,16 +211,7 @@ export class EntityManager {
 		this.newlyCreatedArchetypePages = []
 
 		// Initialize shared archetype map
-		entityStore.archetypeLookup = new SharedArchetypeHashMap(
-			{
-				// initial capacity of shared hash map.
-				// This should be a power of two and large enough to minimize collisions for expected number of archetypes.
-				// A resize is expensive as it requires re-hashing all entries and re-syncing with workers.
-				initialCapacity: 512, // A reasonable starting capacity. If a resize ever triggers, capacity will double.
-				workerManager: this.workerManager,
-			},
-			fnv1a64,
-		)
+		entityStore.archetypeLookup = new Map()
 
 		// Initialize the first page for the packed component ID buffer.
 		// Initialize the component index map with a sentinel value.
@@ -284,9 +259,7 @@ export class EntityManager {
 			archetypeLastNonFullChunkId: entityStore.archetypeLastNonFullChunkId.buffer,
 			archetypeComponentListStartIndices: entityStore.archetypeComponentListStartIndices.buffer,
 			archetypeByteSizes: entityStore.archetypeByteSizes.buffer,
-			packedComponentIdPageSABs: entityStore.packedComponentIdPages.map(p => p.buffer),
 			archetypeComponentIndexMapData: entityStore.archetypeComponentIndexMapData.buffer,
-			archetypeMapBuffer: entityStore.archetypeLookup.buffer,
 
 			// --- Chunk Metadata ---
 			chunkArchetypeIds: entityStore.chunkArchetypeIds.buffer,
@@ -758,34 +731,25 @@ export class EntityManager {
 	}
 
 	getArchetypeByMask(archetypeMask, sortedTypeIDs) {
+		// Generate a string key from the BigUint64Array mask for use in the Map.
+		// This is faster than JSON.stringify and guaranteed to be unique.
+		const key = `${archetypeMask[0]}-${archetypeMask[1]}-${archetypeMask[2]}-${archetypeMask[3]}`
+
 		// 1. Look up the mask in the shared hash map.
-		const existingId = entityStore.archetypeLookup.lookup(archetypeMask)
+		const existingId = entityStore.archetypeLookup.get(key)
 
 		// 2. If an ID is found, verify it's not a hash collision.
 		if (existingId !== undefined) {
-			const existingMaskOffset = existingId * MASK_PARTS
-			let isMatch = true
-			for (let i = 0; i < MASK_PARTS; i++) {
-				// Direct comparison on the shared buffer, no subarray allocation.
-				if (entityStore.archetypeMasks[existingMaskOffset + i] !== archetypeMask[i]) {
-					isMatch = false
-					break
-				}
-			}
-			// 3. If it's a true match, return the existing ID.
-			if (isMatch) {
-				return existingId
-			}
-			// If it's not a match, it's a hash collision. We fall through to create a new archetype.
-			// The new archetype will not be findable via the hash map, which is a limitation of
-			// this simple hash map implementation, but it's correct behavior.
+			// With a string key from the full mask, collisions are impossible.
+			// We can directly return the ID.
+			return existingId
 		}
 
 		// 4. If we're here, it's a cache miss or a collision. Create a new archetype.
-		return this._createArchetype(archetypeMask, sortedTypeIDs, existingId !== undefined)
+		return this._createArchetype(key, archetypeMask, sortedTypeIDs)
 	}
 
-	_createArchetype(archetypeMask, sortedTypeIDs, isCollision) {
+	_createArchetype(key, archetypeMask, sortedTypeIDs) {
 		const id = Atomics.add(entityStore.nextArchetypeId, 0, 1)
 		if (id >= MAX_ARCHETYPES) {
 			throw new Error(`EntityManager: Maximum number of archetypes (${MAX_ARCHETYPES}) reached.`)
@@ -858,9 +822,7 @@ export class EntityManager {
 
 		// Only insert into the hash map if it was a true "miss". On collision, we don't
 		// insert, making the new archetype uncached (slower to find, but correct).
-		if (!isCollision) {
-			entityStore.archetypeLookup.insert(archetypeMask, id)
-		}
+		entityStore.archetypeLookup.set(key, id)
 
 		this.queryManager.registerArchetype(id)
 		return id
