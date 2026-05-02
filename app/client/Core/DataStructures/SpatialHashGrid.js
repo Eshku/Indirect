@@ -18,9 +18,9 @@ export const SPATIAL_GRID_CONFIG = {
 // - Bytes 12-13: `chunkId` (Uint16)
 // - Bytes 14-15: `entityIndex` (Uint16)
 export const NODE_BYTE_STRIDE = 16
-const NODE_STRIDE_U64 = 2 // 16 / 8
-const NODE_STRIDE_I32 = 4 // 16 / 4
-const NODE_STRIDE_U16 = 8 // 16 / 2
+export const NODE_STRIDE_U64 = 2 // 16 / 8
+export const NODE_STRIDE_I32 = 4 // 16 / 4
+export const NODE_STRIDE_U16 = 8 // 16 / 2
 
 /**
  * A thread-safe, sliding spatial hash grid built on SharedArrayBuffers.

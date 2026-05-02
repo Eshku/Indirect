@@ -1,5 +1,6 @@
 import { entityStore, MAX_CHUNKS, MASK_PARTS } from '../EntityManager/EntityManager.js'
 import { DIRTY_HISTORY_LENGTH, componentInfo } from '../ComponentManager/ComponentSchema.js'
+import { radixSort } from '../../Core/Algorithms/RadixSorter.js'
 
 const MASK_TYPE = {
 	STATE: 0,
@@ -32,6 +33,16 @@ export class EntityMaskManager {
 		// --- Pre-allocated structures for performance ---
 		this._movesByChunkPair = new Map()
 		this._moveBatchPool = []
+
+		// --- Pre-allocated structures for batch moves ---
+		this._batchMoveCapacity = 256
+		this._batchMoveSortKeys = new BigUint64Array(this._batchMoveCapacity)
+		this._batchMoveOldIndices = new Uint32Array(this._batchMoveCapacity)
+		this._batchMoveNewIndices = new Uint32Array(this._batchMoveCapacity)
+		this._tempBatchMoveSortKeys = new BigUint64Array(this._batchMoveCapacity)
+		this._tempBatchMoveOldIndices = new Uint32Array(this._batchMoveCapacity)
+		this._tempBatchMoveNewIndices = new Uint32Array(this._batchMoveCapacity)
+
 		this._poolIndex = 0
 	}
 
@@ -39,6 +50,29 @@ export class EntityMaskManager {
 		this.entityManager = engine.entityManager
 
 		this.registerAllSchemaMasks()
+	}
+
+	_resizeBatchMoveArrays(requiredCapacity) {
+		const oldCapacity = this._batchMoveCapacity
+		const newCapacity = Math.max(oldCapacity * 2, requiredCapacity)
+		console.warn(`[EntityMaskManager] Resizing batch move arrays from ${oldCapacity} to ${newCapacity}.`)
+		this._batchMoveCapacity = newCapacity
+
+		const newSortKeys = new BigUint64Array(newCapacity)
+		newSortKeys.set(this._batchMoveSortKeys)
+		this._batchMoveSortKeys = newSortKeys
+
+		const newOldIndices = new Uint32Array(newCapacity)
+		newOldIndices.set(this._batchMoveOldIndices)
+		this._batchMoveOldIndices = newOldIndices
+
+		const newNewIndices = new Uint32Array(newCapacity)
+		newNewIndices.set(this._batchMoveNewIndices)
+		this._batchMoveNewIndices = newNewIndices
+
+		this._tempBatchMoveSortKeys = new BigUint64Array(newCapacity)
+		this._tempBatchMoveOldIndices = new Uint32Array(newCapacity)
+		this._tempBatchMoveNewIndices = new Uint32Array(newCapacity)
 	}
 
 	registerAllSchemaMasks() {
@@ -152,9 +186,53 @@ export class EntityMaskManager {
 	}
 
 	markEntitiesDirtyById(entityId, componentTypeIds, tick) {
-		const location = this.entityManager.getEntityLocation(entityId)
+		if (Array.isArray(entityId)) {
+			for (const id of entityId) {
+				this.markEntitiesDirtyById(id, componentTypeIds, tick)
+			}
+		} else {
+			const location = this.entityManager.getEntityLocation(entityId)
+			this.markEntitiesDirty(location.chunkId, location.indexInChunk, componentTypeIds, tick)
+		}
+	}
 
-		this.markEntitiesDirty(location.chunkId, location.indexInChunk, componentTypeIds, tick)
+	markEntitiesDirtyBatch(entityIds, trackableIds, tick) {
+		for (let i = 0; i < entityIds.length; i++) {
+			const entityId = entityIds[i]
+			const ids = trackableIds[i] // Assuming trackableIds is an array of arrays
+			const location = this.entityManager.getEntityLocation(entityId)
+			if (!location) continue
+
+			for (const componentTypeId of ids) {
+				const maskId = this.getDirtyMask(componentTypeId)
+				if (maskId !== undefined) {
+					this.fireEvent(maskId, location.chunkId, location.indexInChunk, tick)
+				}
+			}
+		}
+	}
+
+	markEntitiesDirtyBatchSoA(entityIds, packedIdsAndCounts, tick) {
+		let packedIndex = 0
+		for (let i = 0; i < entityIds.length; i++) {
+			const entityId = entityIds[i]
+			const location = this.entityManager.getEntityLocation(entityId)
+			if (!location) {
+				// Skip the trackable IDs for this entity
+				const count = packedIdsAndCounts[packedIndex]
+				packedIndex += count + 1
+				continue
+			}
+			const trackableCount = packedIdsAndCounts[packedIndex++]
+
+			for (let j = 0; j < trackableCount; j++) {
+				const componentTypeId = packedIdsAndCounts[packedIndex++]
+				const maskId = this.getDirtyMask(componentTypeId)
+				if (maskId !== undefined) {
+					this.fireEvent(maskId, location.chunkId, location.indexInChunk, tick)
+				}
+			}
+		}
 	}
 
 	getDirty(chunkId, componentTypeId, lastTick, currentTick, outBuffer) {
@@ -296,17 +374,13 @@ export class EntityMaskManager {
 		const eventMasks = maskSet.masksByChunk[chunkId]
 		// If `eventMasks` is undefined, it means the mask was not allocated for this chunk.
 		// This can happen if we are operating on a stale chunkId that has been destroyed
-		// and recycled for an archetype that doesn't match the mask's allocation rule. This is
+		// and recycled for an archetype that doesn't match the mask's allocation rule. This is a
 		// a developer error. The following line will intentionally throw a TypeError, which is
 		// the desired behavior to catch such errors. A silent failure would hide bugs.
 
-		const wordsPerFrame = Math.ceil(entityStore.chunkCapacities[chunkId] / 32)
-		const frameIndex = ((tick % maskSet.historyLength) + maskSet.historyLength) % maskSet.historyLength
-		const wordIndexInFrame = indexInChunk >>> 5
-		const bitInWord = 1 << (indexInChunk & 31)
-		const finalWordIndex = frameIndex * wordsPerFrame + wordIndexInFrame
-
-		Atomics.or(eventMasks, finalWordIndex, bitInWord)
+		// NEW "Entity-Major" Logic: Atomically OR the bit for the given tick into the entity's history integer.
+		const historyBit = 1n << BigInt(tick % maskSet.historyLength)
+		Atomics.or(eventMasks, indexInChunk, historyBit)
 	}
 
 	fireEventById(maskSetId, entityId, tick) {
@@ -385,44 +459,27 @@ export class EntityMaskManager {
 		// This is a developer error. The following line will intentionally throw a TypeError.
 		// A silent `return 0` was removed because it can hide bugs.
 		
-		const size = entityStore.chunkSizes[chunkId]
-		const capacity = entityStore.chunkCapacities[chunkId]
-		const numWords = Math.ceil(capacity / 32)
+		// NEW "Entity-Major" Logic
+		const size = entityStore.chunkSizes[chunkId];
 		const historyLength = maskSet.historyLength
-
-		const tickDelta = currentTick - lastTick
-		let startTick
-		if (tickDelta >= historyLength) {
-			startTick = currentTick - historyLength + 1
-		} else {
-			startTick = lastTick + 1
-		}
-		const endTick = currentTick
-
-		if (startTick > endTick) return 0
-
 		let count = 0
-		for (let wordIndex = 0; wordIndex < numWords; wordIndex++) {
-			let effectiveMask = 0
 
-			for (let tick = startTick; tick <= endTick; tick++) {
-				const frameIndex = ((tick % historyLength) + historyLength) % historyLength
-				const finalWordIndex = frameIndex * numWords + wordIndex
-				effectiveMask |= Atomics.load(eventMasks, finalWordIndex)
-			}
+		// 1. Create a bitmask representing the tick range.
+		let tickMask = 0n
+		const tickDelta = currentTick - lastTick
+		const startTick = tickDelta >= historyLength ? currentTick - historyLength + 1 : lastTick + 1
 
-			if (effectiveMask === 0) continue
+		for (let tick = startTick; tick <= currentTick; tick++) {
+			tickMask |= 1n << BigInt(tick % historyLength)
+		}
 
-			const offset = wordIndex << 5
-			while (effectiveMask !== 0) {
-				const t = effectiveMask & -effectiveMask
-				const indexInWord = 31 - Math.clz32(t)
-				const entityIndex = offset | indexInWord
+		if (tickMask === 0n) return 0
 
-				if (entityIndex >= size) break
-
-				outBuffer[count++] = entityIndex
-				effectiveMask ^= t
+		// 2. Iterate through entities and check their history against the mask.
+		for (let i = 0; i < size; i++) {
+			const entityHistory = Atomics.load(eventMasks, i)
+			if ((entityHistory & tickMask) !== 0n) {
+				outBuffer[count++] = i
 			}
 		}
 		return count
@@ -461,33 +518,18 @@ export class EntityMaskManager {
 			const eventMasks = maskSet.masksByChunk[chunkId]
 			if (!eventMasks) continue
 
+			// NEW "Entity-Major" Logic: Clear the bit for the upcoming tick across all entities.
 			const maskHistoryLength = maskSet.historyLength
-			const capacity = entityStore.chunkCapacities[chunkId]
-			const wordsPerFrame = Math.ceil(capacity / 32)
-
-			// --- Saturated History Logic ---
-			// This ensures that events from very old ticks are not lost, but are "saturated"
-			// into the next frame, preserving the fact that a change occurred.
-			const oldestTickToOverwrite = currentTick + 1 - maskHistoryLength
-			const saturatingTick = oldestTickToOverwrite + 1
-
-			const oldestFrameIndex = ((oldestTickToOverwrite % maskHistoryLength) + maskHistoryLength) % maskHistoryLength
-			const saturatingFrameIndex = ((saturatingTick % maskHistoryLength) + maskHistoryLength) % maskHistoryLength
-			const oldestSliceStart = oldestFrameIndex * wordsPerFrame
-			const saturatingSliceStart = saturatingFrameIndex * wordsPerFrame
-
-			for (let i = 0; i < wordsPerFrame; i++) {
-				const oldValue = Atomics.load(eventMasks, oldestSliceStart + i)
-				if (oldValue !== 0) Atomics.or(eventMasks, saturatingSliceStart + i, oldValue)
-			}
-
-			// The slot for the *next* tick needs to be cleared before it's used.
 			const tickToClear = currentTick + 1
-			const clearFrameIndex = ((tickToClear % maskHistoryLength) + maskHistoryLength) % maskHistoryLength
-			const clearSliceStart = clearFrameIndex * wordsPerFrame
+			const bitToClear = 1n << BigInt(tickToClear % maskHistoryLength)
+			const clearMask = ~bitToClear
 
-			// Clear: Zero out the slot for the upcoming frame
-			eventMasks.fill(0, clearSliceStart, clearSliceStart + wordsPerFrame)
+			// Iterate through all entities in the chunk and clear the bit.
+			// This is a fast, linear operation.
+			const size = entityStore.chunkSizes[chunkId]
+			for (let i = 0; i < size; i++) {
+				Atomics.and(eventMasks, i, clearMask)
+			}
 		}
 	}
 
@@ -555,10 +597,9 @@ export class EntityMaskManager {
 			const buffer = new SharedArrayBuffer(words * 4)
 			maskSet.masksByChunk[chunkId] = new Uint32Array(buffer)
 		} else if (maskSet.type === MASK_TYPE.EVENT) {
-			const wordsPerFrame = Math.ceil(capacity / 32)
-			const totalWords = wordsPerFrame * maskSet.historyLength
-			const buffer = new SharedArrayBuffer(totalWords * 4)
-			maskSet.masksByChunk[chunkId] = new Uint32Array(buffer)
+			// NEW "Entity-Major" Layout: One u64 per entity to hold its history.
+			const buffer = new SharedArrayBuffer(capacity * BigUint64Array.BYTES_PER_ELEMENT)
+			maskSet.masksByChunk[chunkId] = new BigUint64Array(buffer)
 			this.chunksWithEventMasks.add(chunkId)
 		}
 	}
@@ -569,6 +610,152 @@ export class EntityMaskManager {
 			this.maskSets[maskSetId].masksByChunk[chunkId] = undefined
 		}
 		this.chunksWithEventMasks.delete(chunkId)
+	}
+
+	/**
+	 * Handles mask updates when a single entity moves between chunks.
+	 * This is the non-batching, allocation-free version for single entity moves.
+	 * @param {object} oldLocation The entity's old location { chunkId, indexInChunk }.
+	 * @param {object} newLocation The entity's new location { chunkId, indexInChunk }.
+	 */
+	handleEntityMoved(oldLocation, newLocation) {
+		const oldChunkId = oldLocation.chunkId
+		const newChunkId = newLocation.chunkId
+		const oldIndex = oldLocation.indexInChunk
+		const newIndex = newLocation.indexInChunk
+
+		for (let maskSetId = 0; maskSetId < this.maskSetIdCounter; maskSetId++) {
+			const maskSet = this.maskSets[maskSetId]
+			const oldMask = maskSet.masksByChunk[oldChunkId]
+			const newMask = maskSet.masksByChunk[newChunkId]
+
+			if (!newMask) continue
+
+			if (maskSet.type === MASK_TYPE.STATE) {
+				let isSet = false
+				if (oldMask) {
+					const oldWordIndex = oldIndex >>> 5
+					const oldBitInWord = 1 << (oldIndex & 31)
+					isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
+					Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
+				}
+
+				const newWordIndex = newIndex >>> 5
+				const newBitInWord = 1 << (newIndex & 31)
+				if (isSet) {
+					Atomics.or(newMask, newWordIndex, newBitInWord)
+				} else {
+					Atomics.and(newMask, newWordIndex, ~newBitInWord)
+				}
+			} else if (maskSet.type === MASK_TYPE.EVENT) {
+				// NEW "Entity-Major" Logic: Simple history copy.
+				let history = 0n
+				if (oldMask) {
+					// Load the entire 64-bit history for the entity.
+					history = Atomics.load(oldMask, oldIndex)
+					// Clear the history at the old location.
+					Atomics.store(oldMask, oldIndex, 0n)
+				} else {
+					// If there was no old mask, history is implicitly 0.
+				}
+				// Store the (potentially zero) history at the new location.
+				Atomics.store(newMask, newIndex, history)
+			}
+		}
+	}
+
+	/**
+	 * Handles mask updates when a batch of entities moves between chunks.
+	 * @param {Uint32Array} oldPackedLocations
+	 * @param {Uint32Array} oldIndices
+	 * @param {Uint32Array} newPackedLocations
+	 * @param {Uint32Array} newIndices
+	 * @param {number} count
+	 * @private
+	 */
+	handleEntitiesMovedInBatch(oldPackedLocations, oldIndicesInChunk, newPackedLocations, newIndicesInChunk, count) {
+		if (count === 0) return
+		if (count > this._batchMoveCapacity) this._resizeBatchMoveArrays(count)
+
+		// 1. Populate sortable scratch arrays.
+		for (let i = 0; i < count; i++) {
+			const oldChunkId = oldPackedLocations[i] & 0xffff
+			const newChunkId = newPackedLocations[i] & 0xffff
+			const sortKey = (BigInt(oldChunkId) << 32n) | BigInt(newChunkId)
+
+			this._batchMoveSortKeys[i] = sortKey
+			this._batchMoveOldIndices[i] = oldIndicesInChunk[i]
+			this._batchMoveNewIndices[i] = newIndicesInChunk[i]
+		}
+
+		// 2. Radix sort all scratch arrays based on the composite sort key.
+		radixSort(
+			this._batchMoveSortKeys.subarray(0, count),
+			this._batchMoveOldIndices.subarray(0, count),
+			this._batchMoveNewIndices.subarray(0, count),
+			null,
+			null,
+			this._tempBatchMoveSortKeys.subarray(0, count),
+			this._tempBatchMoveOldIndices.subarray(0, count),
+			this._tempBatchMoveNewIndices.subarray(0, count),
+			null,
+			null,
+		)
+
+		// 3. Iterate through the sorted arrays and process one chunk-pair-batch at a time.
+		let i = 0
+		while (i < count) {
+			const sortKey = this._batchMoveSortKeys[i]
+			const oldChunkId = Number(sortKey >> 32n)
+			const newChunkId = Number(sortKey & 0xffffffffn)
+
+			// Find the end of the current batch.
+			let batchEnd = i + 1
+			while (batchEnd < count && this._batchMoveSortKeys[batchEnd] === sortKey) {
+				batchEnd++
+			}
+
+			// Now, for this specific chunk-to-chunk move, iterate through all mask sets.
+			for (let maskSetId = 0; maskSetId < this.maskSetIdCounter; maskSetId++) {
+				const maskSet = this.maskSets[maskSetId]
+				const oldMask = maskSet.masksByChunk[oldChunkId]
+				const newMask = maskSet.masksByChunk[newChunkId]
+
+				if (!newMask) continue
+
+				if (maskSet.type === MASK_TYPE.STATE) {
+					for (let j = i; j < batchEnd; j++) {
+						const oldIndex = this._batchMoveOldIndices[j]
+						const newIndex = this._batchMoveNewIndices[j]
+						let isSet = false
+						if (oldMask) {
+							const oldWordIndex = oldIndex >>> 5, oldBitInWord = 1 << (oldIndex & 31)
+							isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
+							Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
+						}
+						const newWordIndex = newIndex >>> 5, newBitInWord = 1 << (newIndex & 31)
+						if (isSet) Atomics.or(newMask, newWordIndex, newBitInWord)
+						else Atomics.and(newMask, newWordIndex, ~newBitInWord)
+					}
+				} else if (maskSet.type === MASK_TYPE.EVENT) {
+					// NEW "Entity-Major" Bulk Copy: This is now a simple, fast loop.
+					for (let j = i; j < batchEnd; j++) {
+						const oldIndex = this._batchMoveOldIndices[j]
+						const newIndex = this._batchMoveNewIndices[j]
+						let history = 0n
+						if (oldMask) {
+							// Load the entire 64-bit history for the entity.
+							history = Atomics.load(oldMask, oldIndex)
+							// Clear the history at the old location.
+							Atomics.store(oldMask, oldIndex, 0n)
+						}
+						// Store the (potentially zero) history at the new location.
+						Atomics.store(newMask, newIndex, history)
+					}
+				}
+			}
+			i = batchEnd
+		}
 	}
 
 	handleEntitiesMoved = moveBatch => {
@@ -623,6 +810,9 @@ export class EntityMaskManager {
 							const oldWordIndex = oldIndex >>> 5
 							const oldBitInWord = 1 << (oldIndex & 31)
 							isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
+							// After reading, clear the bit at the old location. This is crucial to prevent
+							// stale state if the slot is reused by a swap or a new entity.
+							Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
 						}
 						// If oldMask doesn't exist, isSet remains false. This is correct, as the
 						// entity is moving into an archetype that has the mask, so its state for
@@ -638,44 +828,16 @@ export class EntityMaskManager {
 						}
 					}
 				} else if (maskSet.type === MASK_TYPE.EVENT) {
-					const newCapacity = entityStore.chunkCapacities[newChunkId]
-					const newWordsPerFrame = Math.ceil(newCapacity / 32)
-
+					// NEW "Entity-Major" Bulk Copy
 					for (let i = 0; i < oldIndices.length; i++) {
 						const oldIndex = oldIndices[i]
 						const newIndex = newIndices[i]
-
-						const newWordIndexInFrame = newIndex >>> 5
-						const newBitInWord = 1 << (newIndex & 31)
-
+						let history = 0n
 						if (oldMask) {
-							const oldCapacity = entityStore.chunkCapacities[oldChunkId]
-							const oldWordsPerFrame = Math.ceil(oldCapacity / 32)
-							const oldWordIndexInFrame = oldIndex >>> 5
-							const oldBitInWord = 1 << (oldIndex & 31)
-
-							for (let frame = 0; frame < maskSet.historyLength; frame++) {
-								const oldFrameOffset = frame * oldWordsPerFrame
-								const oldFinalWordIndex = oldFrameOffset + oldWordIndexInFrame
-								const isSetInFrame = (Atomics.load(oldMask, oldFinalWordIndex) & oldBitInWord) !== 0
-
-								const newFrameOffset = frame * newWordsPerFrame
-								const newFinalWordIndex = newFrameOffset + newWordIndexInFrame
-								if (isSetInFrame) {
-									Atomics.or(newMask, newFinalWordIndex, newBitInWord)
-								} else {
-									Atomics.and(newMask, newFinalWordIndex, ~newBitInWord)
-								}
-							}
-						} else {
-							// If oldMask doesn't exist, the event state is implicitly 0.
-							// We need to clear the bits at the new location for all history frames.
-							for (let frame = 0; frame < maskSet.historyLength; frame++) {
-								const newFrameOffset = frame * newWordsPerFrame
-								const newFinalWordIndex = newFrameOffset + newWordIndexInFrame
-								Atomics.and(newMask, newFinalWordIndex, ~newBitInWord)
-							}
+							history = Atomics.load(oldMask, oldIndex)
+							Atomics.store(oldMask, oldIndex, 0n)
 						}
+						Atomics.store(newMask, newIndex, history)
 					}
 				}
 			}
@@ -686,8 +848,8 @@ export class EntityMaskManager {
 	 * Handles mask updates when entities are swapped within a chunk to fill holes from removals.
 	 * This is a critical hook for maintaining mask integrity during `destroyEntity` operations.
 	 */
-	handleEntitiesSwapped = ({ chunkId, swappedMappings }) => {
-		if (swappedMappings.size === 0) return
+	handleEntitiesSwapped = (chunkId, swapCount, oldIndices, newIndices) => {
+		if (swapCount === 0) return
 
 		// By iterating through mask sets first, we reduce redundant lookups and improve cache coherency.
 		for (let maskSetId = 0; maskSetId < this.maskSetIdCounter; maskSetId++) {
@@ -696,13 +858,17 @@ export class EntityMaskManager {
 			if (!mask) continue
 
 			if (maskSet.type === MASK_TYPE.STATE) {
-				for (const [, { oldIndex, newIndex }] of swappedMappings.entries()) {
+				for (let i = 0; i < swapCount; i++) {
+					const oldIndex = oldIndices[i]
+					const newIndex = newIndices[i]
+
 					const oldWordIndex = oldIndex >>> 5
 					const oldBitInWord = 1 << (oldIndex & 31)
 					const isSet = (Atomics.load(mask, oldWordIndex) & oldBitInWord) !== 0
 
 					const newWordIndex = newIndex >>> 5
 					const newBitInWord = 1 << (newIndex & 31)
+
 					if (isSet) Atomics.or(mask, newWordIndex, newBitInWord)
 					else Atomics.and(mask, newWordIndex, ~newBitInWord)
 					// The old location at `oldIndex` is now inaccessible because the chunk size has
@@ -711,26 +877,17 @@ export class EntityMaskManager {
 					Atomics.and(mask, oldWordIndex, ~oldBitInWord)
 				}
 			} else if (maskSet.type === MASK_TYPE.EVENT) {
-				const capacity = entityStore.chunkCapacities[chunkId]
-				const wordsPerFrame = Math.ceil(capacity / 32)
+				// NEW "Entity-Major" Bulk Copy
+				for (let i = 0; i < swapCount; i++) {
+					const oldIndex = oldIndices[i]
+					const newIndex = newIndices[i]
 
-				for (const [, { oldIndex, newIndex }] of swappedMappings.entries()) {
-					const oldWordIndexInFrame = oldIndex >>> 5
-					const oldBitInWord = 1 << (oldIndex & 31)
-					const newWordIndexInFrame = newIndex >>> 5
-					const newBitInWord = 1 << (newIndex & 31)
-
-					for (let frame = 0; frame < maskSet.historyLength; frame++) {
-						const frameOffset = frame * wordsPerFrame
-						const oldFinalWordIndex = frameOffset + oldWordIndexInFrame
-						const isSetInFrame = (Atomics.load(mask, oldFinalWordIndex) & oldBitInWord) !== 0
-
-						const newFinalWordIndex = frameOffset + newWordIndexInFrame
-						if (isSetInFrame) Atomics.or(mask, newFinalWordIndex, newBitInWord)
-						else Atomics.and(mask, newFinalWordIndex, ~newBitInWord)
-						// As with state masks, we must clear the old location to prevent stale data inheritance.
-						Atomics.and(mask, oldFinalWordIndex, ~oldBitInWord)
-					}
+					// Load the history from the old (swapped-from) location.
+					const history = Atomics.load(mask, oldIndex)
+					// Store it at the new location.
+					Atomics.store(mask, newIndex, history)
+					// Clear the old location.
+					Atomics.store(mask, oldIndex, 0n)
 				}
 			}
 		}

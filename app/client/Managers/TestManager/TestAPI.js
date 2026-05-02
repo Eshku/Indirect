@@ -88,9 +88,9 @@ export function expect(actual) {
 		toBeDefined(customMessage) {
 			const passed = actual !== undefined
 			if (passed === inverted) {
-				const message = customMessage ? `Expected value ${inverted ? 'not ' : ''}to be defined (${customMessage})` : `Expected value ${inverted ? 'not ' : ''}to be defined`
-				const expectedValue = inverted ? undefined : 'a defined value'
-				throw new AssertionError(message, expectedValue, actual)
+				const baseMessage = `Expected value ${inverted ? 'not ' : ''}to be defined`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, inverted ? undefined : 'a defined value', actual)
 			}
 		},
 		/**
@@ -103,9 +103,9 @@ export function expect(actual) {
 		toBeUndefined(customMessage) {
 			const passed = actual === undefined
 			if (passed === inverted) {
-				const message = customMessage ? `Expected value ${inverted ? 'not ' : ''}to be undefined (${customMessage})` : `Expected value ${inverted ? 'not ' : ''}to be undefined`
-				const expectedValue = inverted ? 'a defined value' : undefined
-				throw new AssertionError(message, expectedValue, actual)
+				const baseMessage = `Expected value ${inverted ? 'not ' : ''}to be undefined`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, inverted ? 'a defined value' : undefined, actual)
 			}
 		},
 		/**
@@ -176,6 +176,26 @@ export function expect(actual) {
 				const baseMessage = `Expected ${actual} ${inverted ? 'not ' : ''}to be greater than or equal to ${expected}`
 				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
 				throw new AssertionError(finalMessage, `a value >= ${expected}`, actual)
+			}
+		},
+		/**
+		 * Checks if a floating-point number is close to an expected value.
+		 * @param {number} expected - The expected number.
+		 * @param {number} [precision=2] - The number of decimal places to check.
+		 * @throws {AssertionError} If the assertion fails.
+		 * @example
+		 * expect(0.1 + 0.2).toBeCloseTo(0.3); // Passes
+		 */
+		toBeCloseTo(expected, precision = 2, customMessage) {
+			if (typeof actual !== 'number' || typeof expected !== 'number') {
+				throw new AssertionError(`toBeCloseTo requires both actual and expected values to be numbers.`, 'number', typeof actual)
+			}
+
+			const passed = Math.abs(expected - actual) < Math.pow(10, -precision) / 2
+			if (passed === inverted) {
+				const baseMessage = `Expected ${actual} ${inverted ? 'not ' : ''}to be close to ${expected} (precision: ${precision})`
+				const finalMessage = customMessage ? `${baseMessage} (${customMessage})` : baseMessage
+				throw new AssertionError(finalMessage, `a value close to ${expected}`, actual)
 			}
 		},
 		/**

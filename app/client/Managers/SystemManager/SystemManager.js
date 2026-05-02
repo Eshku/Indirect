@@ -12,8 +12,9 @@ import { toCamelCase } from '../../Core/utils/stringUtils.js'
 
 import { systemSchedule } from './systemConfig.js'
 import { importFromString } from '../../Core/utils/blob.js'
-import { commandBuffer } from './CommandBuffer.js'
+import { entityCommandBuffer } from './EntityCommandBuffer.js'
 import { CommandBufferExecutor } from './CommandBufferExecutor.js'
+
 import { payloadCompiler } from './PayloadCompiler.js'
 
 const { Sequence } = await import(`@core/DataStructures/Sequence.js`)
@@ -30,18 +31,31 @@ const { Query } = await import(`@managers/QueryManager/Query.js`)
  * depend on other systems having been instantiated or initialized.
  */
 export class SystemManager {
-	constructor() {
-		this.app = null
-		this.ticker = null
-		this.renderer = null
+	get currentTick() {
+		return this.gameLoop.currentTick
+	}
 
-		this.componentManager = null
+	get lastTick() {
+		return this.gameLoop.lastTick
+	}
 
-		this.prefabManager = null
+	/**
+	 * Starts the main game loop.
+	 * This loop manages a fixed timestep for gameplay logic and variable updates for other systems.
+	 */
+	startLoop() {
+		this.gameLoop.start()
+	}
 
-		this.commandBuffer = commandBuffer
+	/**
+	 * Initializes the SystemManager.
+	 * 1. Dynamically loads all system modules.
+	 * 2. Registers system classes.
+	 * 3. Configures system execution order and frequencies.
+	 */
+	async init(engine) {
+		this.entityCommandBuffer = entityCommandBuffer
 
-		this.commandBufferExecutor = null
 		this.systemTimings = {}
 
 		// A flat list of all system names to be managed, derived from systemConfig.js.
@@ -77,31 +91,7 @@ export class SystemManager {
 
 			//placeholder, last tick will be synced with GameLoop
 		}
-	}
 
-	get currentTick() {
-		return this.gameLoop.currentTick
-	}
-
-	get lastTick() {
-		return this.gameLoop.lastTick
-	}
-
-	/**
-	 * Starts the main game loop.
-	 * This loop manages a fixed timestep for gameplay logic and variable updates for other systems.
-	 */
-	startLoop() {
-		this.gameLoop.start()
-	}
-
-	/**
-	 * Initializes the SystemManager.
-	 * 1. Dynamically loads all system modules.
-	 * 2. Registers system classes.
-	 * 3. Configures system execution order and frequencies.
-	 */
-	async init(engine) {
 		this.gameLoop = new GameLoop()
 
 		// Sync the initial lastTick for all predefined groups from the GameLoop.
@@ -112,28 +102,20 @@ export class SystemManager {
 			}
 		}
 
-		const { entityManager, componentManager, queryManager, prefabManager, workerManager, gameManager } =
-			engine.getManagers()
+		this.entityManager = engine.entityManager
+		this.componentManager = engine.componentManager
+		this.queryManager = engine.queryManager
+		this.prefabManager = engine.prefabManager
+		this.workerManager = engine.workerManager
+		this.entityMaskManager = engine.entityMaskManager
 
-		this.entityManager = entityManager
-		this.componentManager = componentManager
-		this.queryManager = queryManager
-		this.prefabManager = prefabManager
-		this.workerManager = workerManager
-
-		// Ensure we only ever have one listener attached, even if init() is called multiple times.
-		if (!this.hmrListenerId) {
-			this.hmrListenerId = eventEmitter.on('hmr:system-update', data => this.hotSwapModule(data.path, data.code))
-		}
-
-		this.app = gameManager.getApp()
+		this.app = engine.gameManager.getApp()
 		this.renderer = this.app.renderer
 		this.ticker = this.app.ticker
 
-		this.commandBufferExecutor = new CommandBufferExecutor(this.entityManager, this.prefabManager, this.queryManager)
+		this.entityCommandBuffer.init(engine)
 
-		// Initialize the command buffer with the executor and a reference to this manager.
-		commandBuffer.init(this.commandBufferExecutor, this)
+		this.commandBufferExecutor = new CommandBufferExecutor(this.entityManager, this.entityMaskManager)
 
 		// --- Phase 1: Discovery & ID Assignment (No Imports) ---
 		const [systemFileTree, kernelFileTree] = await Promise.all([
@@ -186,9 +168,7 @@ export class SystemManager {
 			const systemInstance = systemRegistry.instantiateSystem(systemName)
 			if (systemInstance) {
 				// Assign custom user-defined extensions from systemExtends.js.
-				for (const key in systemExtensions) {
-					systemInstance[key] = systemExtensions[key]
-				}
+				Object.assign(systemInstance, systemExtensions)
 
 				await systemInstance.init?.()
 			} else {
@@ -718,7 +698,7 @@ export class SystemManager {
 			this.gameLoop.resume() // Resume on failure.
 			return
 		}
-		systemInstance.commands = this.commandBuffer
+
 		await systemInstance.init?.()
 
 		// Let the performance monitor know about the new system.
@@ -1001,9 +981,7 @@ export class SystemManager {
 
 		// --- Extend New System Instance ---
 		// Assign core engine properties and custom user-defined extensions.
-		for (const key in systemExtensions) {
-			newInstance[key] = systemExtensions[key]
-		}
+		Object.assign(newInstance, systemExtensions)
 
 		await newInstance.init?.()
 

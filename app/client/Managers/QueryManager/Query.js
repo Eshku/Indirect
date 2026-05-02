@@ -182,11 +182,7 @@ export class Query {
 					const reactiveIndices = this._reactiveIndicesByArchetype[archetypeId]
 					if (reactiveIndices?.modified) {
 						for (const index of reactiveIndices.modified) {
-							const dirtyTick = Atomics.load(archetypeDirtyTicks, index)
-							if (this.id === 1 && chunkId === 1) { // Log only for a specific query/chunk to reduce spam
-								console.log(`[Query] Checking chunk ${chunkId}, component index ${index}. dirtyTick: ${dirtyTick}, lastTick: ${lastTick}. Condition: ${dirtyTick > lastTick}`)
-							}
-							if (dirtyTick > lastTick) {
+							if (Atomics.load(archetypeDirtyTicks, index) > lastTick) {
 								isDirtyForQuery = true
 								break
 							}
@@ -271,8 +267,10 @@ export class Query {
 			this.queryManager._addQueryToArchetypeIndex(this, archetype)
 
 			if (this.isReactiveQuery) {
-				const componentIdArray = this.queryManager.entityManager.getComponentTypeIDsForArchetype(archetype)
-				const count = componentIdArray.length
+				const scratch = this.queryManager.componentTypesScratch
+				const count = this.queryManager.entityManager.getComponentTypeIDsForArchetype(archetype, scratch)
+				const componentIdArray = scratch.subarray(0, count)
+
 				const indices = {
 					modified: [],
 				}

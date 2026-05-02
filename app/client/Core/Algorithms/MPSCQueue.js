@@ -123,7 +123,6 @@ export class MPSCQueue {
 
 		// 2. Perform one or two block copies depending on whether the data wraps around the buffer.
 		if (headIndex + count > this.capacity) {
-			// Data is in two parts (wraps around)
 			const firstPartCount = Number(this.capacity) - headIndex
 			const secondPartCount = count - firstPartCount
 

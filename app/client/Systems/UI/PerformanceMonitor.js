@@ -31,7 +31,7 @@ const TOP_SYSTEMS_COUNT = 5 // How many of the slowest systems to show by defaul
  * - **`Total`**: The sum of `Update`, `Schedule`, `Process`, and the execution time of any `KERNEL` jobs that
  *   happened to be executed by the main thread during its work-stealing loop.
  *
- * The `Render` and `Command Buffer` timings are also main-thread-only operations.
+ * The `Render` and `Entity Command Buffer` timings are also main-thread-only operations.
  *
  * ---
  *
@@ -90,7 +90,7 @@ export class PerformanceMonitor {
 		}
 		// Also pre-track special "pseudo-systems"
 		this.trackSystem('Render')
-		this.trackSystem('Command Buffer')
+		this.trackSystem('Entity Command Buffer')
 		this.trackSystem('Total Frame Time')
 
 		window.performanceMonitor = this
@@ -122,21 +122,35 @@ export class PerformanceMonitor {
 		this.currentFrameSystems.length = 0 // Clear without re-allocating
 		let currentFrameTotalTime = 0
 
-		// The systemTimings object is now keyed by numeric system ID for real systems,
-		// and by string name for pseudo-systems like 'Render' and 'Command Buffer'.
+
 		for (const key in this.systemManager.systemTimings) {
 			let systemName
 			const numericKey = Number(key)
 			if (Number.isNaN(numericKey)) {
-				systemName = key // 'Render', 'Command Buffer'
+				systemName = key // 'Render', 'Entity Command Buffer'
 			} else {
 				systemName = this.systemManager.getSystemNameById(numericKey)
+			}
+
+			// NEW: Add a guard to handle cases where a system ID might not resolve to a name.
+			if (!systemName) {
+				// This indicates a potential issue in the SystemManager's ID mapping.
+				// We'll log a warning but continue, to prevent the monitor from crashing the app.
+				console.warn(`PerformanceMonitor: Could not resolve system name for ID ${numericKey}. Skipping timing.`)
+				continue
 			}
 
 			// If the system has been explicitly untracked, ignore its timings.
 			if (this.untrackedSystems.has(systemName)) {
 				continue
 			}
+
+			// Ensure the history array exists before pushing to it.
+			// This handles systems that might be added dynamically or not present during init.
+			if (!this.history[systemName]) {
+				this.trackSystem(systemName)
+			}
+
 			const timingData = this.systemManager.systemTimings[key]
 
 			// --- Accumulate for frame time warning ---
@@ -152,13 +166,13 @@ export class PerformanceMonitor {
 		if (currentFrameTotalTime >= FRAME_TIME_WARNING_THRESHOLD_MS) {
 			this.currentFrameSystems.sort((a, b) => b.time - a.time)
 
-			console.warn(
+/* 			console.warn(
 				`%cPerformance Warning:%c Frame time breached ${FRAME_TIME_WARNING_THRESHOLD_MS.toFixed(
 					1,
 				)}ms threshold. Total: ${currentFrameTotalTime.toFixed(3)}ms. Top 5 systems:`,
 				'color: #e67e22; font-weight: bold;',
 				'color: white;',
-			)
+			) */
 
 			this.loggableWarningSystems.length = 0
 			const count = Math.min(this.currentFrameSystems.length, TOP_SYSTEMS_COUNT)
@@ -166,14 +180,14 @@ export class PerformanceMonitor {
 				const s = this.currentFrameSystems[i]
 				this.loggableWarningSystems.push({ System: s.name, 'Time (ms)': s.time.toFixed(3) })
 			}
-			console.table(this.loggableWarningSystems)
+			//console.table(this.loggableWarningSystems)
 		}
 
 		this.history['Total Frame Time'].push({ time: currentFrameTotalTime, details: {}, timestamp: now })
 	}
 
 	/**
-	 * This method is called by the GameLoop *after* all jobs and the command buffer have finished.
+	 * This method is called by the GameLoop *after* all jobs and entity command buffer have finished.
 	 * It processes the accumulated history and updates the DOM.
 	 * @param {number} deltaTime - The frame's delta time.
 	 */
@@ -318,7 +332,7 @@ export class PerformanceMonitor {
 	 */
 	untrackNotPinned() {
 		const systemsToUntrack = Object.keys(this.history).filter(
-			name => !this.pinnedSystems.has(name) && name !== 'Render' && name !== 'Command Buffer',
+			name => !this.pinnedSystems.has(name) && name !== 'Render' && name !== 'Entity Command Buffer',
 		)
 
 		if (systemsToUntrack.length === 0) {
@@ -350,7 +364,7 @@ export class PerformanceMonitor {
 		// Render all sections with the new data.
 		this._renderSystemsList(otherSystemsStats)
 		this._renderSpecialRow(rendererStats, this.rendererElements, 'Render', false)
-		this._renderSpecialRow(commandBufferStats, this.commandBufferElements, 'Command Buffer', false)
+		this._renderSpecialRow(commandBufferStats, this.commandBufferElements, 'Entity Command Buffer', false)
 		this._renderSummary(totalFrameTimeStats)
 	}
 
@@ -422,12 +436,12 @@ export class PerformanceMonitor {
 		}
 
 		const rendererStats = processedStats['Render']
-		const commandBufferStats = processedStats['Command Buffer']
+		const commandBufferStats = processedStats['Entity Command Buffer']
 		const totalFrameTimeStats = processedStats['Total Frame Time']
 
 		const otherSystemsStats = { ...processedStats }
 		delete otherSystemsStats['Render']
-		delete otherSystemsStats['Command Buffer']
+		delete otherSystemsStats['Entity Command Buffer']
 		delete otherSystemsStats['Total Frame Time']
 
 		return { rendererStats, commandBufferStats, otherSystemsStats, totalFrameTimeStats }
@@ -725,9 +739,9 @@ export class PerformanceMonitor {
 			marginBottom: '5px',
 			display: 'none',
 		})
-		const cbRow = this._createRowElements('<strong>Command Buffer</strong>')
+		const cbRow = this._createRowElements('<strong>Entity Command Buffer</strong>')
 		cbRow.container.classList.add('system-row')
-		cbRow.container.title = 'Command Buffer'
+		cbRow.container.title = 'Entity Command Buffer'
 		cbRow.container.style.display = 'none' // Initially hidden
 		this.commandBufferElements = { ...cbRow, hr: cbHr }
 

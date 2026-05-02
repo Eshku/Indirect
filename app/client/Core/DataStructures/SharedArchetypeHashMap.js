@@ -120,10 +120,59 @@ export class SharedArchetypeHashMap {
 	}
 
 	_hash(key) {
-		// The key is a BigUint64Array. We need a Uint8Array view of its buffer.
-		const keyView = new Uint8Array(key.buffer, key.byteOffset, key.byteLength)
-		// h64 returns a BigInt, which is what we need for modulo with large numbers.
-		return this.hashFn(keyView)
+		// The key is a BigUint64Array. The hash function is designed to take it directly.
+		return this.hashFn(key)
+	}
+
+	/**
+	 * Internal method to find the slot for a key.
+	 * This is the core of the open addressing logic.
+	 * @param {BigUint64Array} key The key to find.
+	 * @param {boolean} forInsert If true, finds a slot for insertion (can be a deleted slot).
+	 * @returns {{slotIndex: number, found: boolean}}
+	 * @private
+	 */
+	_findSlot(key, forInsert = false) {
+		const hash = this._hash(key)
+		const capacity = this.capacity
+		if (capacity === 0) return { slotIndex: -1, found: false }
+
+		let slotIndex = Number(hash % BigInt(capacity))
+		let firstDeleted = -1
+
+		const startIndex = slotIndex
+
+		while (true) {
+			const slotBase = this._getSlotBase(slotIndex)
+			const state = this.u8View[slotBase + SLOT_LAYOUT.STATE_OFFSET]
+
+			if (state === SLOT_STATE.EMPTY) {
+				return { slotIndex: forInsert && firstDeleted !== -1 ? firstDeleted : slotIndex, found: false }
+			}
+
+			if (state === SLOT_STATE.DELETED) {
+				if (forInsert && firstDeleted === -1) {
+					firstDeleted = slotIndex
+				}
+			} else if (state === SLOT_STATE.OCCUPIED) {
+				const existingKey = new BigUint64Array(this.buffer, slotBase + SLOT_LAYOUT.KEY_OFFSET, 4)
+				let keysMatch = true
+				for (let i = 0; i < 4; i++) {
+					if (key[i] !== existingKey[i]) {
+						keysMatch = false
+						break
+					}
+				}
+				if (keysMatch) {
+					return { slotIndex, found: true }
+				}
+			}
+
+			slotIndex = (slotIndex + 1) % capacity
+			if (slotIndex === startIndex) {
+				return { slotIndex: forInsert && firstDeleted !== -1 ? firstDeleted : -1, found: false }
+			}
+		}
 	}
 
 	insert(key, value) {
@@ -132,128 +181,44 @@ export class SharedArchetypeHashMap {
 			this._resize()
 		}
 
-		const hash = this._hash(key)
-		let slotIndex = Number(hash % BigInt(this.capacity))
-		const keyView = new Uint8Array(key.buffer, key.byteOffset, key.byteLength)
+		const { slotIndex, found } = this._findSlot(key, true)
 
-		while (true) {
-			const slotBase = this._getSlotBase(slotIndex)
-			const state = this.u8View[slotBase + SLOT_LAYOUT.STATE_OFFSET]
+		if (slotIndex === -1) {
+			this._resize()
+			return this.insert(key, value)
+		}
 
-			if (state === SLOT_STATE.EMPTY || state === SLOT_STATE.DELETED) {
-				// Found an empty slot, write the data.
-				this.u8View[slotBase + SLOT_LAYOUT.STATE_OFFSET] = SLOT_STATE.OCCUPIED
-				this.u16View[(slotBase + SLOT_LAYOUT.VALUE_OFFSET) / 2] = value
-				this.u8View.set(keyView, slotBase + SLOT_LAYOUT.KEY_OFFSET)
-				this.size++
-				return
-			}
+		const slotBase = this._getSlotBase(slotIndex)
 
-			// This slot is occupied, check if keys match (for updating, though plan doesn't mention it, it's good practice)
-			const existingKeyView = new Uint8Array(this.buffer, slotBase + SLOT_LAYOUT.KEY_OFFSET, 32)
-			let keysMatch = true
-			for (let i = 0; i < 32; i++) {
-				if (keyView[i] !== existingKeyView[i]) {
-					keysMatch = false
-					break
-				}
-			}
-
-			if (keysMatch) {
-				// Key already exists, update value.
-				this.u16View[(slotBase + SLOT_LAYOUT.VALUE_OFFSET) / 2] = value
-				return
-			}
-
-			// Collision, probe to the next slot.
-			slotIndex = (slotIndex + 1) % this.capacity
+		if (found) {
+			this.u16View[(slotBase + SLOT_LAYOUT.VALUE_OFFSET) / 2] = value
+		} else {
+			const keyView = new Uint8Array(key.buffer, key.byteOffset, key.byteLength)
+			this.u8View[slotBase + SLOT_LAYOUT.STATE_OFFSET] = SLOT_STATE.OCCUPIED
+			this.u16View[(slotBase + SLOT_LAYOUT.VALUE_OFFSET) / 2] = value
+			this.u8View.set(keyView, slotBase + SLOT_LAYOUT.KEY_OFFSET)
+			this.size++
 		}
 	}
 
 	lookup(key) {
-		const hash = this._hash(key)
-		const capacity = this.capacity
-		if (capacity === 0) return undefined
-		let slotIndex = Number(hash % BigInt(capacity))
-		const keyView = new Uint8Array(key.buffer, key.byteOffset, key.byteLength)
-
-		const startIndex = slotIndex
-
-		while (true) {
+		const { slotIndex, found } = this._findSlot(key)
+		if (found) {
 			const slotBase = this._getSlotBase(slotIndex)
-			const state = this.u8View[slotBase + SLOT_LAYOUT.STATE_OFFSET]
-
-			if (state === SLOT_STATE.EMPTY) {
-				return undefined
-			}
-
-			if (state === SLOT_STATE.OCCUPIED) {
-				const existingKeyView = new Uint8Array(this.buffer, slotBase + SLOT_LAYOUT.KEY_OFFSET, 32)
-				let keysMatch = true
-				for (let i = 0; i < 32; i++) {
-					if (keyView[i] !== existingKeyView[i]) {
-						keysMatch = false
-						break
-					}
-				}
-
-				if (keysMatch) {
-					return this.u16View[(slotBase + SLOT_LAYOUT.VALUE_OFFSET) / 2]
-				}
-			}
-
-			slotIndex = (slotIndex + 1) % capacity
-
-			if (slotIndex === startIndex) {
-				return undefined
-			}
+			return this.u16View[(slotBase + SLOT_LAYOUT.VALUE_OFFSET) / 2]
 		}
+		return undefined
 	}
 
 	delete(key) {
-		const hash = this._hash(key)
-		const capacity = this.capacity
-		if (capacity === 0) return false
-		let slotIndex = Number(hash % BigInt(capacity))
-		const keyView = new Uint8Array(key.buffer, key.byteOffset, key.byteLength)
-
-		const startIndex = slotIndex
-
-		while (true) {
+		const { slotIndex, found } = this._findSlot(key)
+		if (found) {
 			const slotBase = this._getSlotBase(slotIndex)
-			const state = this.u8View[slotBase + SLOT_LAYOUT.STATE_OFFSET]
-
-			if (state === SLOT_STATE.EMPTY) {
-				// Key not found
-				return false
-			}
-
-			if (state === SLOT_STATE.OCCUPIED) {
-				const existingKeyView = new Uint8Array(this.buffer, slotBase + SLOT_LAYOUT.KEY_OFFSET, 32)
-				let keysMatch = true
-				for (let i = 0; i < 32; i++) {
-					if (keyView[i] !== existingKeyView[i]) {
-						keysMatch = false
-						break
-					}
-				}
-
-				if (keysMatch) {
-					// Found the key, mark as deleted (tombstone)
-					this.u8View[slotBase + SLOT_LAYOUT.STATE_OFFSET] = SLOT_STATE.DELETED
-					this.size--
-					return true
-				}
-			}
-
-			// Continue probing if DELETED or if OCCUPIED but keys don't match
-			slotIndex = (slotIndex + 1) % capacity
-
-			if (slotIndex === startIndex) {
-				// Wrapped around, key not found
-				return false
-			}
+			this.u8View[slotBase + SLOT_LAYOUT.STATE_OFFSET] = SLOT_STATE.DELETED
+			this.size--
+			return true
 		}
+		return false
 	}
 
 	_resize() {

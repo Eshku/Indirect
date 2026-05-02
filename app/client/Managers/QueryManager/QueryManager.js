@@ -1,12 +1,16 @@
 const { Query } = await import(`@managers/QueryManager/Query.js`)
 
-const { entityStore, MAX_CHUNK_CAPACITY } = await import(`@managers/EntityManager/EntityManager.js`)
+const { entityStore, MAX_CHUNK_CAPACITY, MAX_COMPONENTS } = await import(
+	`@managers/EntityManager/EntityManager.js`
+)
 
 export class QueryManager {
 	constructor() {
 		this.queryCache = new Map()
 		this.queriesById = []
 		this.nextQueryId = 0
+
+		this.componentTypesScratch = new Uint16Array(MAX_COMPONENTS)
 
 		// A new, simple cache to store the generated string keys themselves.
 		// This avoids re-calculating the key string on every single getQuery call.
@@ -257,12 +261,15 @@ export class QueryManager {
 
 	registerArchetype(newArchetypeId) {
 		const candidateQueries = new Set()
-		const archetypeComponentIDs = this.entityManager.getComponentTypeIDsForArchetype(newArchetypeId)
+		// Use the scratch buffer and the new allocation-free signature.
+		const count = this.entityManager.getComponentTypeIDsForArchetype(newArchetypeId, this.componentTypesScratch)
 
-		if (!archetypeComponentIDs) return
+		if (count === 0) return
 
 		// 1. Gather candidates that have a `with` or `any` requirement matching a component in the new archetype.
-		for (const typeId of archetypeComponentIDs) {
+		// Iterate up to `count` over the scratch buffer.
+		for (let i = 0; i < count; i++) {
+			const typeId = this.componentTypesScratch[i]
 			this.queriesWith.get(typeId)?.forEach(q => candidateQueries.add(q))
 			this.queriesAny.get(typeId)?.forEach(q => candidateQueries.add(q))
 		}

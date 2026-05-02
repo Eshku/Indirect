@@ -1,5 +1,5 @@
 const { engine } = await import(`@client/Engine.js`)
-const { ecs, gameManager } = engine.getManagers()
+const { ecs, gameManager, layerManager } = engine.getManagers()
 
 // Define a single, simple visual style for the cursor.
 const CURSOR_VISUALS = {
@@ -30,8 +30,6 @@ export class CursorSystem {
 		// Position
 		this.hardwarePosition = { x: 0, y: 0 }
 
-		const { layerManager, gameManager } = engine.getManagers()
-
 		this.pixiApp = gameManager.getApp()
 		this.renderer = this.pixiApp.renderer
 		this.cursorLayer = layerManager.getLayer('cursor')
@@ -47,15 +45,15 @@ export class CursorSystem {
 		// Find the cursor entity that was instantiated from the prefab
 		this.cursorEntityId = this.cursorQuery.getSingleEntity()
 
-		if (this.cursorEntityId === null) {
-			console.error('CursorSystem: Could not find the cursor entity. Was it instantiated at startup?')
-			return // Stop initialization if the entity isn't found
-		}
+		// Get the cursor's location once. Since it's a singleton, its location is stable.
+		// This allows for direct, immediate-mode writes to its component data.
+		const location = this.getEntityLocation(this.cursorEntityId)
+
+		this.cursorChunkId = location.chunkId
+		this.cursorIndexInChunk = location.indexInChunk
+		this.cursorPositionComponent = this.getComponentData(this.cursorChunkId, position)
 
 		this.playerId = this.playerQuery.getSingleEntity()
-		if (!this.playerId) {
-			console.error('CursorSystem: Could not find player entity for camera reference.')
-		}
 
 		// Snap initial positions to the current hardware cursor position
 		const pointer = this.renderer.events.pointer
@@ -89,27 +87,27 @@ export class CursorSystem {
 		let playerY = 0
 
 		const playerChunkIds = this.playerQuery.getChunks()
-		if (playerChunkIds.length > 0) {
-			const playerChunkId = playerChunkIds[0]
-			if (this.getChunkSize(playerChunkId) > 0) {
-				const playerPositions = this.getComponentData(playerChunkId, position)
-				playerX = playerPositions.x[0]
-				playerY = playerPositions.y[0]
-			}
-		}
+
+		const playerChunkId = playerChunkIds[0]
+
+		const playerPositions = this.getComponentData(playerChunkId, position)
+		playerX = playerPositions.x[0]
+		playerY = playerPositions.y[0]
 
 		const cursorChunkIds = this.cursorQuery.getChunks()
-		if (cursorChunkIds.length > 0) {
-			const cursorChunkId = cursorChunkIds[0]
-			// Convert screen-space hardware position to world-space coordinates.
-			// This accounts for camera panning by using the player's position as the camera's focus.
-			const worldX = this.hardwarePosition.x + playerX - screenWidth / 2
-			const worldY = -this.hardwarePosition.y + playerY + screenHeight / 2
 
-			const positions = this.getComponentData(cursorChunkId, position)
-			positions.x[0] = worldX
-			positions.y[0] = worldY
-		}
+		const cursorChunkId = cursorChunkIds[0]
+		// Convert screen-space hardware position to world-space coordinates.
+		// This accounts for camera panning by using the player's position as the camera's focus.
+		const worldX = this.hardwarePosition.x + playerX - screenWidth / 2
+		const worldY = -this.hardwarePosition.y + playerY + screenHeight / 2
+
+		// Write the world position directly to the component's data array.
+		// This is an immediate-mode write, making the new position instantly available
+		// to other systems in the same frame (e.g., PlayerWeaponSystem).
+
+		this.cursorPositionComponent.x[this.cursorIndexInChunk] = worldX
+		this.cursorPositionComponent.y[this.cursorIndexInChunk] = worldY
 	}
 
 	/**

@@ -141,11 +141,6 @@ export class PrefabManager {
 		return this.idToPrefabName[id]
 	}
 
-	/**
-	 * The new internal, high-performance way to get prefab data, used by the CommandBufferExecutor.
-	 * @param {number} id The numeric ID of the prefab.
-	 * @returns {object | null} The cached component data object or null if not found.
-	 */
 	getPrefabDataById(id) {
 		const components = this.processedPrefabCache[id]
 		if (components === undefined) {

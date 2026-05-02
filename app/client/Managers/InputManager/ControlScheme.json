@@ -79,6 +79,12 @@
 			"type": "key",
 			"input": "F12",
 			"displayName": "Toggle Console"
+		},
+		{
+			"action": "Input ToggleSpatialHashDebug",
+			"type": "key",
+			"input": "Tab",
+			"displayName": "Toggle Spatial Hash Debug"
 		}
 	]
 }

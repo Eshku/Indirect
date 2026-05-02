@@ -1,8 +1,9 @@
 const { payloadCompiler } = await import(`@managers/SystemManager/PayloadCompiler.js`)
-const { commandBuffer } = await import(`@managers/SystemManager/CommandBuffer.js`)
+const { entityCommandBuffer } = await import(`@managers/SystemManager/EntityCommandBuffer.js`)
 const { queryManager } = await import(`@managers/QueryManager/QueryManager.js`)
 const { entityManager } = await import(`@managers/EntityManager/EntityManager.js`)
 const { entityMaskManager } = await import(`@managers/EntityMaskManager/EntityMaskManager.js`)
+const { ecs } = await import(`@managers/EntityManager/ECS.js`)
 
 const { entityStore, MAX_CHUNK_CAPACITY } = await import(`@managers/EntityManager/EntityManager.js`)
 
@@ -17,37 +18,53 @@ const { entityStore, MAX_CHUNK_CAPACITY } = await import(`@managers/EntityManage
  */
 export const extensions = {
 	// compiler
-	compile: (source, dataOrOverrides) => payloadCompiler.compile(source, dataOrOverrides),
-	compileDefaults: (source, overrides, ignores) => payloadCompiler.compileDefaults(source, overrides, ignores),
-	compileBatch: componentsObject => payloadCompiler.compileComponentsForEntities(componentsObject),
+	compile: (source, options) => payloadCompiler.compile(source, options),
 
-	// command buffer methods
-	addComponent: (entityId, payload, layer) => commandBuffer.addComponent(entityId, payload, layer),
-	addComponents: (entityId, payload, layer) => commandBuffer.addComponents(entityId, payload, layer),
+	// --- Command Buffer: Fast Path (for existing entities) ---
+	addComponent: (entityId, payload, layer) => entityCommandBuffer.addComponent(entityId, payload, layer),
+	addComponents: (entityId, payload, layer) => entityCommandBuffer.addComponents(entityId, payload, layer),
+	addComponentsToEntities: (entityIds, payload, layer) =>
+		entityCommandBuffer.addComponentsToEntities(entityIds, payload, layer),
+	// `setComponent` is now an alias for `setComponents` for single-component data setting.
+	setComponent: (entityId, payload, layer) => entityCommandBuffer.setComponents(entityId, payload, layer), 
+	setComponentSilent: (entityId, payload, layer) => entityCommandBuffer.setComponentsSilent(entityId, payload, layer), 
+	setComponents: (entityId, payload, layer) => entityCommandBuffer.setComponents(entityId, payload, layer),
 
-	setComponent: (entityId, payload, layer) => commandBuffer.setComponent(entityId, payload, layer),
-	setComponentSilent: (entityId, payload, layer) => commandBuffer.setComponentSilent(entityId, payload, layer),
+	setEntities: (entityIds, payload, layer) => entityCommandBuffer.setEntities(entityIds, payload, layer),
 
-	setComponents: (entityId, payload, layer) => commandBuffer.setComponents(entityId, payload, layer),
-	setComponentsSilent: (entityId, payload, layer) => commandBuffer.setComponentsSilent(entityId, payload, layer),
+	removeComponent: (entityId, componentTypeId, layer) =>
+		entityCommandBuffer.removeComponent(entityId, componentTypeId, layer),
+	removeComponents: (entityId, componentTypeIds, layer) =>
+		entityCommandBuffer.removeComponents(entityId, componentTypeIds, layer),
+	removeComponentsFromEntities: (entityIds, componentTypeIds, layer) =>
+		entityCommandBuffer.removeComponentsFromEntities(entityIds, componentTypeIds, layer),
+	
+	destroyEntity: (entityId, layer) => entityCommandBuffer.destroyEntity(entityId, layer),
 
 	// --- Enableable Component Pattern Helpers ---
-	enableComponent: (chunkId, indexInChunk, componentTypeId) => entityMaskManager.enableComponent(chunkId, indexInChunk, componentTypeId),
-	disableComponent: (chunkId, indexInChunk, componentTypeId) => entityMaskManager.disableComponent(chunkId, indexInChunk, componentTypeId),
+	enableComponent: (chunkId, indexInChunk, componentTypeId) =>
+		entityMaskManager.enableComponent(chunkId, indexInChunk, componentTypeId),
+	disableComponent: (chunkId, indexInChunk, componentTypeId) =>
+		entityMaskManager.disableComponent(chunkId, indexInChunk, componentTypeId),
 	enableComponentById: (entityId, componentTypeId) => entityMaskManager.enableComponentById(entityId, componentTypeId),
-	disableComponentById: (entityId, componentTypeId) => entityMaskManager.disableComponentById(entityId, componentTypeId),
+	disableComponentById: (entityId, componentTypeId) =>
+		entityMaskManager.disableComponentById(entityId, componentTypeId),
 	createScratchBuffer: () => new Uint32Array(MAX_CHUNK_CAPACITY),
-	isComponentEnabled: (chunkId, indexInChunk, componentTypeId) => entityMaskManager.isComponentEnabled(chunkId, indexInChunk, componentTypeId),
-	getEnabled: (chunkId, componentTypeId, outBuffer) => entityMaskManager.getEnabled(chunkId, componentTypeId, outBuffer),
+	isComponentEnabled: (chunkId, indexInChunk, componentTypeId) =>
+		entityMaskManager.isComponentEnabled(chunkId, indexInChunk, componentTypeId),
+	getEnabled: (chunkId, componentTypeId, outBuffer) =>
+		entityMaskManager.getEnabled(chunkId, componentTypeId, outBuffer),
 
 	// --- Dirty Tracking Component Pattern Helpers ---
 	// Broad-phase: Marks the entire component type as dirty for a chunk. Call this ONCE per chunk, outside the entity loop.
-	markComponentDirty: (chunkId, componentTypeId, tick) => entityManager.markComponentDirty(chunkId, componentTypeId, tick),
+	markComponentDirty: (chunkId, componentTypeId, tick) =>
+		entityManager.markComponentDirty(chunkId, componentTypeId, tick),
 
 	// Narrow-phase: Marks a specific entity as dirty. Call this inside an entity loop for `isTrackable` components.
 	markEntityDirty: (chunkId, indexInChunk, componentTypeId, tick) =>
 		entityMaskManager.maskDirty(chunkId, indexInChunk, componentTypeId, tick),
-	markEntityDirtyById: (entityId, componentTypeId, tick) => entityMaskManager.maskDirtyById(entityId, componentTypeId, tick),
+	markEntityDirtyById: (entityId, componentTypeId, tick) =>
+		entityMaskManager.maskDirtyById(entityId, componentTypeId, tick),
 
 	markEntitiesDirty: (chunkId, indexInChunk, componentTypeIds, tick) =>
 		entityMaskManager.markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, tick),
@@ -58,15 +75,10 @@ export const extensions = {
 	getDirty: (chunkId, componentTypeId, lastTick, currentTick, outBuffer) =>
 		entityMaskManager.getDirty(chunkId, componentTypeId, lastTick, currentTick, outBuffer),
 
-	removeComponent: (entityId, componentTypeId, layer) =>
-		commandBuffer.removeComponent(entityId, componentTypeId, layer),
-
-	destroyEntity: (entityId, layer) => commandBuffer.destroyEntity(entityId, layer),
-	destroyByQuery: (query, layer) => commandBuffer.destroyByQuery(query, layer),
-	destroyEntitiesInChunk: (chunkId, layer) => commandBuffer.destroyEntitiesInChunk(chunkId, layer),
-	createEntity: (payload, layer) => commandBuffer.createEntity(payload, layer),
-	createEntities: (payload, count, layer) => commandBuffer.createEntities(payload, count, layer),
-	instantiate: (payload, layer) => commandBuffer.instantiate(payload, layer),
+	// --- Command Buffer: Bulk & Other ---
+	destroyByQuery: (query, layer) => entityCommandBuffer.destroyByQuery(query, layer),
+	destroyEntitiesInChunk: (chunkId, layer) => entityCommandBuffer.destroyEntitiesInChunk(chunkId, layer),
+	instantiate: (payload, count = 1, layer) => entityCommandBuffer.instantiate(payload, count, layer),
 
 	// Query-related helpers
 	getComponentData: (chunkId, componentTypeId) => entityStore.chunkComponentData[chunkId][componentTypeId],
@@ -78,12 +90,10 @@ export const extensions = {
 	getQuery: options => queryManager.getQuery(options),
 
 	// entity manager
-	getEntityLocation: entityId => entityManager.getEntityLocation(entityId),
+	getEntityLocation: entityId => entityManager.getEntityLocation(entityId), // allocating.
 
-	//! Not recommended unless absolutely nessesary
-	// This is a footgun for tests/HMR. If no tick is provided, it defaults to 0.
-	// A timestamp of 0 will be seen by the first tick's reactive query (`dirtyTick > -1`),
-	// but may cause issues if used mid-loop. Use with caution.
-	//todo use tick from system manager there.
-	flush: timestampTick => commandBuffer.flush(timestampTick ?? 0),
+	// This is a convenience for tests and HMR. It triggers the full compile->execute->clear sequence.
+	// If no tick is provided, it defaults to `currentTick + 1` to align with the engine's reactivity model.
+	// This now delegates to the central ECS API.
+	flush: timestampTick => ecs.executeCommandBuffer(timestampTick),
 }

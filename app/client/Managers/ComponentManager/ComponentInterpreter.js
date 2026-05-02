@@ -102,7 +102,7 @@ export function resolveComponentData(typeID, data) {
  */
 export function interpret(typeID, data) {
 	const info = Schema.componentInfo[typeID]
-	if (!info) return data
+	if (!info) return data //!
 
 	const rawData = { ...data } // Work on a copy
 	const propKeys = Object.keys(rawData)

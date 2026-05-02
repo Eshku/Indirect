@@ -62,6 +62,7 @@ export class SyncTransforms {
 			for (let indexInChunk = 0; indexInChunk < chunkSize; indexInChunk++) {
 				const spriteRef = viewableRefs[indexInChunk]
 				const view = displayObjectStorage[spriteRef]
+
 				view.x = posX[indexInChunk]
 				view.y = -posY[indexInChunk]
 			}

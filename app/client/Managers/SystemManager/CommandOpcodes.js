@@ -1,26 +1,26 @@
-/**
- * Defines numeric operation codes for all commands used in the CommandBuffer.
- * Using fixed numeric codes instead of strings is a core part of the raw data buffer optimization.
- */
-
 export const OpCodes = Object.freeze({
-	// Entity Lifecycle
-	CREATE_ENTITY: 1,
-	DESTROY_ENTITY: 2,
-	DESTROY_ENTITIES_IN_CHUNK: 3,
+	// --- Raw Sortable Commands (Recorded) ---
 
-	// Component Modifications
-	ADD_COMPONENT: 10,
-	REMOVE_COMPONENT: 11,
-	SET_COMPONENT: 12,
-	ADD_COMPONENTS: 13, // Add multiple components to an entity
-	SET_COMPONENT_SILENT: 14, // Set single component data without marking dirty
-	SET_COMPONENTS: 15, // Set multiple components data
-	SET_COMPONENTS_SILENT: 16, // Set multiple components data silently
+	// --- Structural Changes (Phase: MODIFY) ---
+	ADD_COMPONENT: 11,
+	ADD_COMPONENTS: 12, // New command for adding multiple components from a payload
+	REMOVE_COMPONENT: 13,
+	REMOVE_COMPONENTS: 14, // New command for removing multiple components
+	// bulk commands
+	BULK_ADD_COMPONENTS: 15,
+	BULK_REMOVE_COMPONENTS: 16,
+	DESTROY_ENTITY: 17,
 
-	// Batch Creation
-	CREATE_ENTITIES_IDENTICAL: 20,
+	// --- Data-Only Changes (Phase: MODIFY) ---
+	SET_COMPONENTS: 21,
+	SET_COMPONENTS_SILENT: 22, // for silent SoA updates
+	SET_ENTITIES: 23, // for bulk-resetting pooled entities
 
-	// Bulk Query Operations
-	DESTROY_BY_QUERY: 30,
+	// --- Creation (Phase: CREATE) ---
+	INSTANTIATE: 31,
+
+	// --- Bulk Immediate Commands ---
+	// These are special-case commands that are written directly to the compiled stream and bypass the main sort/compile pipeline.
+	DESTROY_ENTITIES_IN_CHUNK: 40,
+	DESTROY_BY_QUERY: 41,
 })

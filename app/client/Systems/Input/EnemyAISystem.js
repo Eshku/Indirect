@@ -67,7 +67,7 @@ export class EnemyAISystem {
 		// We'll use the player's radius itself as a buffer, effectively stopping
 		// enemies one "player-width" away from the player's center.
 		
-		//! This stops at exact moment where enemies can still attack player - distance <= 32 for collision detection and stop distance.
+		// This stops at exact moment where enemies can still attack player - distance <= 32 for collision detection and stop distance.
 		this.stopDistance = playerRadius * 2 // e.g., 16 * 2 = 32
 	}
 

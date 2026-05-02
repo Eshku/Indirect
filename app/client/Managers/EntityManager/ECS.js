@@ -76,13 +76,13 @@ export class ECS {
 	 * @private
 	 */
 	getTick() {
-		//! return real tick goddamnit, +1 should be done manually only if needed.
-
 		// The game loop is not available during the initial manager init phase.
-		if (!this.systemManager?.gameLoop) return 0
-		// For pre-loop setup (frame 0), use tick 0.
+		if (!this.systemManager || !this.systemManager.gameLoop) return 0
+		// For pre-loop setup (e.g., in client.js), use tick 0.
 		if (this.systemManager.gameLoop.frameCounter === 0) return 0
-		// For in-loop calls, timestamp with the *next* tick to ensure next-frame reactivity, mirroring the command buffer's behavior.
+		// For in-loop calls, timestamp with the *next* tick (`currentTick + 1`). This is crucial for the engine's
+		// "next-tick" reactivity model. Changes made during tick N are timestamped for tick N+1,
+		// so they are correctly picked up by reactive queries on the next frame.
 		return this.systemManager.currentTick + 1
 	}
 
@@ -96,15 +96,11 @@ export class ECS {
 
 		// Binary path as the command buffer,
 		// but executes immediately. This ensures all entity creation is consistent. We use the SoA path for single entity creation as it's the most efficient.
-		const { payload } = this.payloadCompiler.compile(componentsInput)
+		const payload = this.payloadCompiler.compile(componentsInput)
+		payload.count = 1 // Ensure it's a single entity payload
 		const tick = this.getTick()
-		const entityID = this.entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, tick)
-		// Manually trigger the narrow-phase dirty mask for trackable components,
-		// mirroring the behavior of the CommandBufferExecutor for deferred creation.
-		if (payload.trackableComponentIds.length > 0) {
-			this.entityMaskManager.markEntitiesDirtyById(entityID, payload.trackableComponentIds, tick)
-		}
-		return entityID
+		// The entity manager method now handles dirty tracking internally.
+		return this.entityManager.createEntityFromSoaPayload(payload, tick)
 	}
 
 	/**
@@ -113,10 +109,10 @@ export class ECS {
 		return this.entityManager.destroyEntity(entityId)
 	}
 
-	destroyAllEntities() {
+	destroyAll() {
 		// This is a full world reset. It must clear the state of all managers
 		// that hold world data to ensure true test isolation.
-		this.entityManager.destroyAllEntities()
+		this.entityManager.destroyAll()
 		// Clear all existing mask data and re-run the declarative registration
 		// to build a clean state for the next test.
 		this.entityMaskManager.clear()
@@ -127,19 +123,15 @@ export class ECS {
 	 * Instantiates an entity from a prefab immediately.
 	 */
 	instantiate(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
-		const finalOverrides = { ...overrides }
+		const finalOverrides = { ...overrides } // Create a copy to avoid mutating the caller's object
 		if (parentId) finalOverrides.Parent = { entityId: parentId }
 		if (ownerId) finalOverrides.Owner = { entityId: ownerId }
 
 		// Use the compiler to handle prefab logic and all overrides consistently.
-		const { payload } = this.payloadCompiler.compile(prefabName, finalOverrides)
+		const payload = this.payloadCompiler.compile(prefabName, { overrides: finalOverrides })
 		const tick = this.getTick()
-		const entityID = this.entityManager.createEntityFromAosPayload(payload.archetypeId, payload.data, tick)
-		// Manually trigger the narrow-phase dirty mask for trackable components.
-		if (payload.trackableComponentIds.length > 0) {
-			this.entityMaskManager.markEntitiesDirtyById(entityID, payload.trackableComponentIds, tick)
-		}
-		return entityID
+		// The entity manager method now handles dirty tracking internally.
+		return this.entityManager.createEntityFromSoaPayload(payload, tick)
 	}
 
 	/**
@@ -152,12 +144,21 @@ export class ECS {
 	 * Adds a component to an entity immediately.
 	 */
 	addComponent(entityId, componentName, data = {}) {
-		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
+		// The immediate-mode API is responsible for preparing the data object before
+		// calling the compiler. This keeps the compiler "dumber" and focused on its
+		// core task of creating SoA payloads from a standard object format.
+		const componentObject = { [componentName]: data }
+		const payload = this.payloadCompiler.compile(componentObject)
+		const tick = this.getTick()
 
-		const { payload } = this.payloadCompiler.compile(componentTypeId, data)
+		const success = this.entityManager.addComponent(entityId, payload, tick)
 
-		//! todo this needs to mask
-		return this.entityManager.addComponent(entityId, componentTypeId, payload.data, this.getTick())
+		// If the added component is trackable, we must manually fire the narrow-phase dirty event.
+		if (success && payload.trackableComponentIds.length > 0) {
+			this.entityMaskManager.markEntitiesDirtyById(entityId, payload.trackableComponentIds, tick)
+		}
+
+		return success
 	}
 
 	/**
@@ -168,6 +169,30 @@ export class ECS {
 
 		//! todo mask removal once API is there
 		return this.entityManager.removeComponent(entityId, componentTypeId, this.getTick())
+	}
+
+	/**
+	 * Sets the data for a single component on an entity immediately.
+	 * This is a non-structural change and is faster than add/remove.
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {string} componentName The name of the component.
+	 * @param {object} data The new data for the component.
+	 * @returns {boolean} True on success.
+	 */
+	setComponent(entityId, componentName, data = {}) {
+		// This is now a convenience wrapper around setComponents.
+		return this.setComponents(entityId, { [componentName]: data })
+	}
+
+	/**
+	 * Sets the data for multiple components on an entity immediately.
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {object} componentsInput An object of component data, e.g., `{ position: {x:1}, velocity: {x:1} }`.
+	 */
+	setComponents(entityId, componentsInput) {
+		const payload = this.payloadCompiler.compile(componentsInput)
+		const tick = this.getTick()
+		return this.entityManager.setComponentsDataImmediate(entityId, payload, tick)
 	}
 
 	/**
@@ -182,7 +207,16 @@ export class ECS {
 
 		const rawData = {}
 		const info = Schema.componentInfo[componentTypeId]
-		const componentArrays = entityStore.chunkComponentData[chunkId]?.[componentTypeId]
+		const componentArrays = entityStore.chunkComponentData[chunkId][componentTypeId]
+		if (!componentArrays) {
+			// This is a critical error. It means we are trying to get a component from an entity
+			// that does not have it, according to its archetype. This can happen if getComponent
+			// is called on an entity that doesn't have it.
+			console.error(
+				`[ECS.getComponent] Data integrity error: Entity ${entityId} in chunk ${chunkId} (archetype ${location.archetypeId}) does not have component data for ${componentName} (ID: ${componentTypeId}).`,
+			)
+			return undefined
+		}
 
 		for (const propKey of info.propertyKeys) {
 			const propArray = componentArrays[propKey]
@@ -250,6 +284,10 @@ export class ECS {
 		return constants
 	}
 
+	getEntityLocation(entityId) {
+		return this.entityManager.getEntityLocation(entityId)
+	}
+
 	/**
 	 * Retrieves an object mapping all registered component names to their numeric type IDs.
 	 */
@@ -269,6 +307,21 @@ export class ECS {
 	 */
 	getKernelIDs() {
 		return this.systemManager.getKernelIds()
+	}
+
+	/**
+	 * A test and debug helper to immediately execute all commands in the global command buffer.
+	 * This is equivalent to the `flush()` helper available inside systems.
+	 * @param {number} [timestampTick] - The tick to timestamp the changes with. If not provided, it defaults to the current tick + 1.
+	 */
+	executeCommandBuffer(timestampTick) {
+		if (!this.systemManager) {
+			throw new Error('ECS.executeCommandBuffer called before ECS was initialized with a SystemManager.')
+		}
+		// If no tick is provided, default to the next tick for reactivity.
+		const tick = timestampTick ?? this.systemManager.currentTick + 1
+
+		this.systemManager.commandBufferExecutor.flush(this.systemManager.entityCommandBuffer, tick)
 	}
 }
 

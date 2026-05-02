@@ -68,12 +68,11 @@ export class PlayerWeaponSystem {
 
 		// Pre-compile full projectile entity for maximum creation performance.
 		// We will use mutators to set dynamic values (position, velocity, owner) at fire time.
-		const { payload, mutators } = this.compile('slashingArc')
-		this.projectilePayload = payload
-		this.projectileMutators = mutators
+		this.projectilePayload = this.compile('slashingArc')
+		this.projectileMutators = this.projectilePayload.buffers
 
-		//! compile defaults with overrides \ ignores instead.
-		const { payload: reusePayload, mutators: reuseMutators } = this.compile({
+
+		this.reuseProjectilePayload = this.compile({
 			lifecycleState: { flags: LIFECYCLE.ACTIVE },
 			distanceTraveled: { value: 0 },
 			hitHistory: { count: 0 }, // Explicitly reset hit history here.
@@ -85,8 +84,7 @@ export class PlayerWeaponSystem {
 			range: {},
 			damage: {},
 		})
-		this.reuseProjectilePayload = reusePayload
-		this.reuseProjectileMutators = reuseMutators
+		this.reuseProjectileMutators = this.reuseProjectilePayload.buffers
 	}
 
 	update({ currentTick }) {
@@ -193,11 +191,15 @@ export class PlayerWeaponSystem {
 		this.reuseProjectileMutators.damage.value[0] = fireData.projectileDamage
 		// distanceTraveled and hitHistory are reset by the payload's defaults.
 
+		const loc = this.getEntityLocation(entityId)
+
 		// Issue deferred commands to make the state change atomic from the perspective of other systems.
 		// 1. This is the structural change that moves the entity to an "active" archetype.
 		this.removeComponent(entityId, isPooled)
 		// 2. This single command updates all necessary components for the projectile's new life.
 		// It resets state and applies new dynamic values from the mutators.
+
+		
 		this.setComponents(entityId, this.reuseProjectilePayload)
 	}
 
@@ -211,8 +213,6 @@ export class PlayerWeaponSystem {
 		this.projectileMutators.range.value[0] = fireData.projectileRange
 		this.projectileMutators.damage.value[0] = fireData.projectileDamage
 
-
-
-		this.createEntity(this.projectilePayload)
+		this.instantiate(this.projectilePayload, 1)
 	}
 }

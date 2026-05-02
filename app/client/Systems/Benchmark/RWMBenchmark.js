@@ -19,13 +19,14 @@ export class RWMBenchmark {
 		//1.5m stable
 		this.entityCount = 1_500_000
 
-		const { payload } = this.compile({
-			position: { x: 0, y: 0 },
-			velocity: { x: 10, y: 10 },
-			rwmTag: {},
-		})
-
-		this.creationPayload = payload
+		this.creationPayload = this.compile(
+			{
+				position: { x: 0, y: 0 },
+				velocity: { x: 10, y: 10 },
+				rwmTag: {},
+			},
+			{ count: this.entityCount },
+		)
 
 		this.spawnEntities()
 	}
@@ -50,7 +51,7 @@ export class RWMBenchmark {
 
 	spawnEntities() {
 		console.log(`RWMBenchmark (SoA): Spawning ${this.entityCount} entities...`)
-		this.createEntities(this.creationPayload, this.entityCount)
+		this.instantiate(this.creationPayload, this.entityCount)
 		console.log(`RWMBenchmark (SoA): Finished queueing ${this.entityCount} entities for creation.`)
 	}
 

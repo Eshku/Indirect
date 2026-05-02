@@ -333,7 +333,7 @@ class WorkerEntry {
 			const jobId = this.findJob(self.id)
 
 			if (jobId !== this.NO_JOB_AVAILABLE) {
-				await this.executeJob(jobId, self.id, frameId)
+				this.executeJob(jobId, self.id, frameId)
 			} else {
 				// No job found. Go to sleep until woken up.
 				await this.goToSleep(frameId)
@@ -400,7 +400,7 @@ class WorkerEntry {
 			// This is a normal race-avoidance path, so no log is needed.
 			// We are no longer idle, so decrement the counter and execute the job.
 			Atomics.sub(this.frameState, idleOffset, 1n)
-			await this.executeJob(finalCheckJobId, self.id, frameId)
+			this.executeJob(finalCheckJobId, self.id, frameId)
 			return
 		}
 
@@ -417,7 +417,7 @@ class WorkerEntry {
 	 * Wakes up a specified number of sleeping threads (main or worker).
 	 * This is called when new work becomes available that an idle thread could potentially pick up.
 	 */
-	wakeIdleThreads() {
+	wakeIdleThreads(count = Infinity) {
 		const idleOffset = this.FRAME_STATE_IDLE_THREADS_OFFSET
 		const generationOffset = this.FRAME_STATE_SLEEP_GENERATION_OFFSET
 
@@ -428,7 +428,7 @@ class WorkerEntry {
 			Atomics.add(this.frameState, generationOffset, 1n)
 			// Notify ALL threads waiting on the generation counter to avoid lost wakeups
 			// where a worker consumes a notification intended for another thread.
-			Atomics.notify(this.frameState, generationOffset, Infinity)
+			Atomics.notify(this.frameState, generationOffset, count)
 		}
 	}
 
@@ -470,7 +470,7 @@ class WorkerEntry {
 		return this.NO_JOB_AVAILABLE
 	}
 
-	async executeJob(jobId, threadId, frameId) {
+	executeJob(jobId, threadId, frameId) {
 		if (jobId === undefined || jobId === null || jobId < 0) {
 			return
 		}
@@ -496,7 +496,7 @@ class WorkerEntry {
 				if (kernelFn) {
 					try {
 						self.kernel.resetJobState() // Reset pool for each job.
-						await kernelFn(payload, systemContext, this.kernelContext);
+						kernelFn(payload, systemContext, this.kernelContext);
 					} catch (error) {
 						// Only look up system name on error.
 						const systemName = this.idToSystemName[systemId]
@@ -563,10 +563,16 @@ class WorkerEntry {
 			this.localDeque.pushBatch(unlockedAnyJobs)
 		}
 
-		// If we unlocked any job, of any affinity, we should wake a thread.
-		// This is crucial to wake the main thread if it's sleeping and we just gave it an MTO job.
-		if (unlockedMTOJobs.length > 0 || unlockedAnyJobs.length > 0) {
-			this.wakeIdleThreads()
+		const unlockedMtoCount = unlockedMTOJobs.length
+		const unlockedAnyCount = unlockedAnyJobs.length
+
+		if (unlockedMtoCount > 0) {
+			// If we unlocked a main-thread-only job, we MUST wake everyone to guarantee
+			// the main thread wakes up. This is the "thundering herd" but is necessary for correctness.
+			this.wakeIdleThreads(Infinity)
+		} else if (unlockedAnyCount > 0) {
+			// If we only unlocked parallel jobs, we can safely wake up a corresponding number of threads.
+			this.wakeIdleThreads(unlockedAnyCount)
 		}
 	}
 

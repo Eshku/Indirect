@@ -538,7 +538,7 @@ export class Scheduler {
 				const start = jobIndex
 				const end = start + jobsForThisWorker
 
-				const jobSlice = readyAnyWorkerJobs.slice(start, end)
+				const jobSlice = readyAnyWorkerJobs.slice(start, end) //!
 				// This is a special, non-thread-safe push for the initial setup phase.
 				this.allDeques[workerId].batchPush(jobSlice)
 				jobIndex = end
@@ -565,7 +565,7 @@ export class Scheduler {
 				const jobId = this._findJobForMainThread()
 
 				if (jobId !== -1) {
-					await this._executeJob(jobId, 0, frameId)
+				this._executeJob(jobId, 0, frameId)
 				} else {
 					// No job found. Go to sleep until woken up by another thread.
 					await this._goToSleep(frameId)
@@ -708,7 +708,7 @@ export class Scheduler {
 			// We are no longer idle, so decrement the counter and execute the job.
 			// This is a normal race-avoidance path, so no log is needed.
 			Atomics.sub(frameState, idleOffset, 1n)
-			await this._executeJob(finalCheckJobId, 0, frameId)
+			this._executeJob(finalCheckJobId, 0, frameId)
 			return
 		}
 
@@ -726,7 +726,7 @@ export class Scheduler {
 	 * This is called when new work becomes available that an idle thread could potentially pick up.
 	 * @private
 	 */
-	_wakeIdleThreads() {
+	_wakeIdleThreads(count = Infinity) {
 		const frameState = new BigInt64Array(this.sharedBuffers.frameStateSAB)
 		const idleOffset = FRAME_STATE_IDLE_THREADS_OFFSET
 		const generationOffset = FRAME_STATE_SLEEP_GENERATION_OFFSET
@@ -738,7 +738,7 @@ export class Scheduler {
 			// Increment the generation to signal a wakeup event.
 			Atomics.add(frameState, generationOffset, 1n)
 			// Notify ALL threads waiting on the generation counter to avoid lost wakeups.
-			Atomics.notify(frameState, generationOffset, Infinity)
+			Atomics.notify(frameState, generationOffset, count)
 		}
 	}
 
@@ -748,7 +748,7 @@ export class Scheduler {
 	 * @param {number} threadId - The ID of the thread executing the job.
 	 * @private
 	 */
-	async _executeJob(jobId, threadId, frameId) {
+	_executeJob(jobId, threadId, frameId) {
 		const jobsView = new Int32Array(this.sharedBuffers.jobsSAB)
 		const jobOffset = jobId * JOB_STRIDE_IN_U32
 
@@ -771,7 +771,7 @@ export class Scheduler {
 				const payload = jobPayload & 0x00ffffff;
 				switch (jobType) {
 					case JOB_TYPE.UPDATE:
-						await system.update(this.perFrameContext)
+						system.update(this.perFrameContext)
 						break
 					case JOB_TYPE.KERNEL: {
 						const oldFrameContext = self.frameContext
@@ -787,12 +787,12 @@ export class Scheduler {
 						// Fast path: Look up pre-compiled context from the SystemManager's cache.
 						const systemContext = this.systemManager.allSystemContexts[systemId]?.[kernelId] || {} // Reset pool for each job.
 						self.kernel.resetJobState()
-						await kernelFn(payload, systemContext, this.mainThreadKernelContext)
+						kernelFn(payload, systemContext, this.mainThreadKernelContext)
 						self.frameContext = oldFrameContext // Restore global context
 						break
 					}
 					case JOB_TYPE.PROCESS:
-						await system.process(this.perFrameContext)
+						system.process(this.perFrameContext)
 						break
 				}
 			}
@@ -875,7 +875,7 @@ export class Scheduler {
 
 		if (unlockedAnyJobs.length > 0) {
 			this.mainThreadDeque.pushBatch(unlockedAnyJobs)
-			this._wakeIdleThreads()
+			this._wakeIdleThreads(unlockedAnyJobs.length)
 		}
 	}
 

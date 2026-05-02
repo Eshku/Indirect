@@ -10,14 +10,11 @@ const { componentInfo } = Schema
  * Its goal was to avoid archetype fragmentation while saving memory. However, the current
  * implementation has significant drawbacks:
  * - **Performance:** Slow read/write paths due to multiple indirections.
- * - **Parallelism:** Not thread-safe. 
+ * - **Parallelism:** Not thread-safe.
  * - **Complexity:** The "variant" system for overrides adds runtime complexity and prototype fragmentation.
  *
  * This file will be removed or completely refactored in a future.
  */
-
-//! TODO remove from the engine at some point, it is still everywhere...
-
 
 export class SharedDataManager {
 	constructor() {
@@ -154,7 +151,7 @@ export class SharedDataManager {
 	 * This is core of per-entity variation.
 	 * @param {number} basePrototypeId - ID of prototype to copy.
 	 * @param {number} componentTypeId - component to modify in new prototype.
-	* @param {number} newSharedDataIndex - new `sharedDataIndex` for modified component.
+	 * @param {number} newSharedDataIndex - new `sharedDataIndex` for modified component.
 	 * @returns {number} `prototypeId` of new or existing matching prototype.
 	 */
 	createVariantPrototype(basePrototypeId, componentTypeId, newSharedDataIndex) {

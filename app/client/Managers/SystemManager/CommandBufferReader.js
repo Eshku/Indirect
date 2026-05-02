@@ -5,10 +5,19 @@
 export class CommandBufferReader {
 	/**
 	 * @param {import('./RawCommandBuffer.js').RawCommandBuffer} rawBuffer
+	 * @deprecated The constructor no longer accepts a buffer. Use `setBuffer()` instead.
 	 */
-	constructor(rawBuffer) {
+	constructor() {
+		this.buffer = null
+		this.uint8View = null
+		this.view = null
+		this.offset = 0
+	}
+
+	setBuffer(rawBuffer) {
 		this.buffer = rawBuffer.buffer
-		this.view = new DataView(this.buffer)
+		this.uint8View = rawBuffer.uint8View
+		this.view = new DataView(this.buffer, rawBuffer.buffer.byteOffset, rawBuffer.buffer.byteLength)
 		this.offset = 0
 	}
 
@@ -78,18 +87,5 @@ export class CommandBufferReader {
 		//console.log(`Reader: readF64 at ${this.offset} value ${value}`);
 		this.offset += 8
 		return value
-	}
-
-	/**
-	 * Reads a block of bytes from the buffer into a new ArrayBuffer.
-	 * @param {number} size - The number of bytes to read.
-	 * @returns {ArrayBuffer} A new ArrayBuffer containing the data.
-	 */
-	readBuffer(size) {
-		// Create a slice (a view) of the underlying buffer without copying.
-		const slice = this.buffer.slice(this.offset, this.offset + size)
-		this.offset += size
-		// Return a copy so the original buffer can be reused without affecting the payload.
-		return slice
 	}
 }

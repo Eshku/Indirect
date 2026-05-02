@@ -8,7 +8,7 @@ const { parallelCpu } = ecs.getKernelIDs()
 const benchmarkConfig = {
 	activeMode: 'parallel', // Options: 'singleThread', 'parallel'
 	singleThreadEntityCount: 2_000,
-	parallelEntityCount: 10_000,
+	parallelEntityCount: 12_000,
 }
 
 /**
@@ -44,13 +44,14 @@ export class CPUBenchmark {
 				? benchmarkConfig.parallelEntityCount
 				: benchmarkConfig.singleThreadEntityCount
 
-		const { payload } = this.compile({
-			position: { x: 0.1, y: 0.2 },
-			velocity: { x: 0.3, y: 0.4 },
-			cpuTag: {},
-		})
-
-		this.creationPayload = payload
+		this.creationPayload = this.compile(
+			{
+				position: { x: 0.1, y: 0.2 },
+				velocity: { x: 0.3, y: 0.4 },
+				cpuTag: {},
+			},
+			{ count: this.entityCount },
+		)
 
 		this.spawnEntities()
 	}
@@ -94,7 +95,7 @@ export class CPUBenchmark {
 
 	spawnEntities() {
 		console.log(`CPUBenchmark (${benchmarkConfig.activeMode}): Spawning ${this.entityCount} entities...`)
-		this.createEntities(this.creationPayload, this.entityCount)
+		this.instantiate(this.creationPayload, this.entityCount)
 		console.log(
 			`CPUBenchmark (${benchmarkConfig.activeMode}): Finished queueing ${this.entityCount} entities for creation.`,
 		)

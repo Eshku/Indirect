@@ -1,20 +1,13 @@
-/**
- * Manages a raw SharedArrayBuffer for serializing commands.
- * This is the low-level implementation detail of the command buffer system.
- * Systems should not interact with this directly, but through the high-level CommandBuffer API.
- */
-
 const INITIAL_BUFFER_SIZE = 1024 * 1024 // 1 MB
 
 export class RawCommandBuffer {
 	constructor() {
-		// The command buffer is a main-thread-only construct. It should use a standard,
-		// garbage-collected ArrayBuffer. Using SharedArrayBuffer here was causing a
-		// massive memory leak, as resizing the buffer would discard the old SAB,
-		// which is never freed.
 		this.buffer = new ArrayBuffer(INITIAL_BUFFER_SIZE)
+		// DataView is for writing/reading individual, heterogeneous data types (u16, f32, etc.)
+		// at specific byte offsets.
 		this.view = new DataView(this.buffer)
-		this.uint8View = new Uint8Array(this.buffer) // For faster string/buffer ops
+		// Uint8Array is for bulk memory operations (memcpy) using .set().
+		this.uint8View = new Uint8Array(this.buffer)
 		this.offset = 0
 	}
 
@@ -57,8 +50,6 @@ export class RawCommandBuffer {
 	writeU16At(offset, value) {
 		this.view.setUint16(offset, value, true)
 	}
-
-
 
 	writeU16(value) {
 		//console.log(`RawBuffer: writeU16 at ${this.offset} value ${value}`);
@@ -118,45 +109,12 @@ export class RawCommandBuffer {
 
 	/**
 	 * Writes a raw ArrayBuffer's contents into this command buffer.
-	 * @param {ArrayBuffer} buffer - The buffer to write.
+	 * @param {TypedArray} buffer - The buffer to write. Must be a TypedArray view (e.g., Uint8Array).
 	 */
 	writeBuffer(buffer) {
 		this.ensureCapacity(buffer.byteLength)
-		// Use a Uint8Array view for an efficient block copy.
-		this.uint8View.set(new Uint8Array(buffer), this.offset)
+		// caller MUST provide a TypedArray view.
+		this.uint8View.set(buffer, this.offset)
 		this.offset += buffer.byteLength
-	}
-
-	/**
-	 * Writes a string to the buffer, prefixed with its length.
-	 * @param {string} str The string to write.
-	 */
-	writeString(str) {
-		// Note: This uses a simple TextEncoder. For extreme performance,
-		// a pre-computed string hash (like FNV-1a) would be faster.
-		const encoded = new TextEncoder().encode(str)
-		this.ensureCapacity(2 + encoded.length)
-		this.writeU16(encoded.length)
-		this.uint8View.set(encoded, this.offset)
-		this.offset += encoded.length
-	}
-
-	readString() {
-		const length = this.view.getUint16(this.offset, true)
-		this.offset += 2
-		const strBytes = this.uint8View.subarray(this.offset, this.offset + length)
-		this.offset += length
-		return new TextDecoder().decode(strBytes)
-	}
-
-	readBuffer(byteLength) {
-		this.ensureCapacity(byteLength) // Should not be needed if writer ensures capacity
-		const bufferSlice = this.buffer.slice(this.offset, this.offset + byteLength)
-		this.offset += byteLength
-		return bufferSlice
-	}
-
-	seek(offset) {
-		this.offset = offset
 	}
 }

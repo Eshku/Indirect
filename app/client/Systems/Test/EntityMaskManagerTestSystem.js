@@ -44,8 +44,12 @@ export class EntityMaskManagerTestSystem {
 					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:selected', allocationRule)
 
 					// 2. Create entities that will match the allocation query
-					const { payload } = this.compile({ componentA: {} })
-					const entities = [this.createEntity(payload), this.createEntity(payload), this.createEntity(payload)]
+					const payload = this.compile({ componentA: {} })
+					const entities = [
+						this.instantiate(payload, 1),
+						this.instantiate(payload, 1),
+						this.instantiate(payload, 1),
+					]
 					flush()
 
 					// 3. Get real entity IDs and chunk info
@@ -85,11 +89,11 @@ export class EntityMaskManagerTestSystem {
 					// 1. Setup
 					const allocationRule = { with: [componentA] }
 					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:swap_pop', allocationRule)
-					const { payload: creationPayload } = this.compile({ componentA: {} })
+					const creationPayload = this.compile({ componentA: {} })
 
 					// Create two entities in the same chunk
-					this.createEntity(creationPayload)
-					this.createEntity(creationPayload)
+					this.instantiate(creationPayload, 1)
+					this.instantiate(creationPayload, 1)
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -108,7 +112,7 @@ export class EntityMaskManagerTestSystem {
 					expect(scratchBuffer[0]).toBe(0) // Index of entityToMove
 
 					// 3. Force an archetype move on the first entity
-					const { payload: addPayload } = this.compile(componentB, {})
+					const addPayload = this.compile({ componentB: {} })
 					this.addComponent(entityToMove, addPayload)
 					flush()
 
@@ -126,11 +130,11 @@ export class EntityMaskManagerTestSystem {
 					// 1. Setup
 					const allocationRule = { with: [componentA] }
 					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:swap_preserve', allocationRule)
-					const { payload: creationPayload } = this.compile({ componentA: {} })
+					const creationPayload = this.compile({ componentA: {} })
 
 					// Create two entities in the same chunk
-					this.createEntity(creationPayload)
-					this.createEntity(creationPayload)
+					this.instantiate(creationPayload, 1)
+					this.instantiate(creationPayload, 1)
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -160,7 +164,7 @@ export class EntityMaskManagerTestSystem {
 					expect(scratchBuffer[0]).toBe(0, 'Swapped entity should now be at index 0')
 
 					// 5. Create a new entity. It will occupy the old slot of the swapped entity (index 1).
-					this.createEntity(creationPayload)
+					this.instantiate(creationPayload, 1)
 					flush()
 
 					// 6. Verification after new entity creation
@@ -177,8 +181,8 @@ export class EntityMaskManagerTestSystem {
 					// 1. Setup
 					const allocationRule = { with: [componentA] }
 					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:move_selected', allocationRule)
-					const { payload: creationPayload } = this.compile({ componentA: {} })
-					const entityPlaceholder = this.createEntity(creationPayload)
+					const creationPayload = this.compile({ componentA: {} })
+					const entityPlaceholder = this.instantiate(creationPayload, 1)
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -193,7 +197,7 @@ export class EntityMaskManagerTestSystem {
 					expect(initialCount).toBe(1)
 
 					// 3. Force an archetype move by adding a component
-					const { payload: addPayload } = this.compile(componentB, {})
+					const addPayload = this.compile({ componentB: {} })
 					this.addComponent(entityId, addPayload)
 					flush()
 
@@ -211,6 +215,89 @@ export class EntityMaskManagerTestSystem {
 					const oldCount = this.entityMaskManager.getStateIndices(selectedMaskId, oldLocation.chunkId, scratchBuffer)
 					expect(oldCount).toBe(0, 'State bit should be cleared from the old chunk after a move')
 				})
+
+				it("should not inherit stale state when a new entity reuses a moved entity's old slot", () => {
+					cleanup()
+
+					// 1. Setup
+					const allocationRule = { with: [componentA] }
+					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:stale_state', allocationRule)
+					const creationPayload = this.compile({ componentA: {} })
+
+					// 2. Create entity A and set its state
+					this.instantiate(creationPayload, 1)
+					flush()
+
+					const query = this.getQuery({ with: [componentA] })
+					const entityA = query.getSingleEntity()
+					const oldLocation = this.getEntityLocation(entityA)
+					const scratchBuffer = this.createScratchBuffer()
+
+					this.entityMaskManager.setBitById(selectedMaskId, entityA)
+					let selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, oldLocation.chunkId, scratchBuffer)
+					expect(selectedCount).toBe(1, 'Entity A should initially be selected')
+
+					// 3. Move entity A to a new archetype. This vacates its slot.
+					const addPayload = this.compile({ componentB: {} })
+					this.addComponent(entityA, addPayload)
+					flush()
+
+					// 4. Create entity B. It should recycle the chunk and slot vacated by A.
+					this.instantiate(creationPayload, 1)
+					flush()
+
+					// 5. Verification
+					const queryB = this.getQuery({ with: [componentA], without: [componentB] }) // Query for entity B
+					const entityB = queryB.getSingleEntity()
+					expect(entityB).toBeDefined()
+
+					const locationB = this.getEntityLocation(entityB)
+					selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, locationB.chunkId, scratchBuffer)
+					expect(selectedCount).toBe(0, 'New entity B should not inherit the stale "selected" state from the recycled slot')
+				})
+
+				it("should not inherit stale state when a slot is reused after a move from a non-empty chunk", () => {
+					cleanup()
+
+					// 1. Setup
+					const allocationRule = { with: [componentA] }
+					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:stale_state_swap', allocationRule)
+					const creationPayload = this.compile({ componentA: {} })
+
+					// 2. Create two entities in the same chunk.
+					this.instantiate(creationPayload, 1) // Entity A at index 0
+					this.instantiate(creationPayload, 1) // Entity B at index 1
+					flush()
+
+					const query = this.getQuery({ with: [componentA] })
+					const chunkId = query.getChunks()[0]
+					const entities = this.getEntities(chunkId).slice(0, 2)
+					const entityToMove = entities[1] // The entity at the END of the list.
+
+					// 3. Set the state on the entity we are about to move.
+					this.entityMaskManager.setBitById(selectedMaskId, entityToMove)
+					const scratchBuffer = this.createScratchBuffer()
+					let selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer)
+					expect(selectedCount).toBe(1, 'Entity to move should be selected')
+					expect(scratchBuffer[0]).toBe(1, 'Selected entity should be at index 1')
+
+					// 4. Move the second entity. This vacates slot 1 without a swap.
+					// The chunk is NOT destroyed. Its mask buffer persists.
+					const addPayload = this.compile({ componentB: {} })
+					this.addComponent(entityToMove, addPayload)
+					flush()
+
+					// 5. Create a new entity (C). It will reuse the slot at index 1.
+					this.instantiate(creationPayload, 1)
+					flush()
+
+					// 6. Verification
+					// If the bit at index 1 was not cleared by handleEntitiesMoved, the new entity
+					// at that slot would inherit the stale "selected" state.
+					selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer)
+					expect(this.getChunkSize(chunkId)).toBe(2, 'Chunk should now contain two entities')
+					expect(selectedCount).toBe(0, 'No entities should be selected after the move and recreation')
+				})
 			})
 
 			// --- COMMON PATTERN TESTS ---
@@ -222,8 +309,8 @@ export class EntityMaskManagerTestSystem {
 					this.entityMaskManager.registerEnableableMask(componentA)
 
 					// 2. Create an entity. By default, its bit is not set, so it's "disabled".
-					const { payload } = this.compile({ componentA: {} })
-					this.createEntity(payload) // This returns a placeholder, don't store it.
+					const payload = this.compile({ componentA: {} })
+					this.instantiate(payload, 1) // This returns a placeholder, don't store it.
 					this.flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -260,8 +347,8 @@ export class EntityMaskManagerTestSystem {
 				it('should throw a TypeError when enabling a non-enableable component', () => {
 					cleanup()
 					// componentB is not 'isEnableable'
-					const { payload } = this.compile({ componentB: {} })
-					const entityId = this.createEntity(payload)
+					const payload = this.compile({ componentB: {} })
+					const entityId = this.instantiate(payload, 1)
 					flush()
 
 					// Test ById API
@@ -278,8 +365,8 @@ export class EntityMaskManagerTestSystem {
 
 				it('should throw a TypeError when disabling a non-enableable component', () => {
 					cleanup()
-					const { payload } = this.compile({ componentB: {} })
-					const entityId = this.createEntity(payload)
+					const payload = this.compile({ componentB: {} })
+					const entityId = this.instantiate(payload, 1)
 					flush()
 
 					// Test ById API
@@ -297,8 +384,8 @@ export class EntityMaskManagerTestSystem {
 				it('should throw a TypeError when getting enabled indices for a non-enableable component', () => {
 					cleanup()
 					// componentB is not 'isEnableable'
-					const { payload } = this.compile({ componentB: {} })
-					this.createEntity(payload)
+					const payload = this.compile({ componentB: {} })
+					this.instantiate(payload, 1)
 					flush()
 
 					const chunkId = this.getQuery({ with: [componentB] }).getChunks()[0]
@@ -312,8 +399,8 @@ export class EntityMaskManagerTestSystem {
 				it('should throw a TypeError when checking if a non-enableable component is enabled', () => {
 					cleanup()
 					// componentB is not 'isEnableable'
-					const { payload } = this.compile({ componentB: {} })
-					const entityId = this.createEntity(payload)
+					const payload = this.compile({ componentB: {} })
+					const entityId = this.instantiate(payload, 1)
 					flush()
 
 					const location = this.getEntityLocation(entityId)
@@ -326,8 +413,8 @@ export class EntityMaskManagerTestSystem {
 				it('should throw a TypeError when masking a non-trackable component as dirty', () => {
 					cleanup()
 					// componentA is not 'isTrackable'
-					const { payload } = this.compile({ componentA: {} })
-					const entityId = this.createEntity(payload)
+					const payload = this.compile({ componentA: {} })
+					const entityId = this.instantiate(payload, 1)
 					flush()
 
 					// Test ById API
@@ -344,8 +431,8 @@ export class EntityMaskManagerTestSystem {
 
 				it('should throw a TypeError when getting dirty indices for a non-trackable component', () => {
 					cleanup()
-					const { payload } = this.compile({ componentA: {} })
-					this.createEntity(payload)
+					const payload = this.compile({ componentA: {} })
+					this.instantiate(payload, 1)
 					flush()
 
 					const chunkId = this.getQuery({ with: [componentA] }).getChunks()[0]
@@ -365,8 +452,12 @@ export class EntityMaskManagerTestSystem {
 					// 1. Setup 
 					const allocationRule = { with: [componentA] }
 					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged', allocationRule)
-					const { payload } = this.compile({ componentA: {} })
-					const entities = [this.createEntity(payload), this.createEntity(payload), this.createEntity(payload)]
+					const payload = this.compile({ componentA: {} })
+					const entities = [
+						this.instantiate(payload, 1),
+						this.instantiate(payload, 1),
+						this.instantiate(payload, 1),
+					]
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -390,8 +481,8 @@ export class EntityMaskManagerTestSystem {
 					cleanup()
 					const allocationRule = { with: [componentA] }
 					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged_quiet', allocationRule)
-					const { payload } = this.compile({ componentA: {} })
-					this.createEntity(payload)
+					const payload = this.compile({ componentA: {} })
+					this.instantiate(payload, 1)
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -415,8 +506,12 @@ export class EntityMaskManagerTestSystem {
 					cleanup()
 					const allocationRule = { with: [componentA] }
 					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged_multi', allocationRule)
-					const { payload } = this.compile({ componentA: {} })
-					const entities = [this.createEntity(payload), this.createEntity(payload), this.createEntity(payload)]
+					const payload = this.compile({ componentA: {} })
+					const entities = [
+						this.instantiate(payload, 1),
+						this.instantiate(payload, 1),
+						this.instantiate(payload, 1),
+					]
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -444,8 +539,8 @@ export class EntityMaskManagerTestSystem {
 					// 1. Setup
 					const allocationRule = { with: [componentA] }
 					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:event_move', allocationRule)
-					const { payload: creationPayload } = this.compile({ componentA: {} })
-					this.createEntity(creationPayload)
+					const creationPayload = this.compile({ componentA: {} })
+					this.instantiate(creationPayload, 1)
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -462,7 +557,8 @@ export class EntityMaskManagerTestSystem {
 					expect(scratchBuffer[0]).toBe(oldLocation.indexInChunk)
 
 					// 3. Force an archetype move by adding a component
-					const { payload: addPayload } = this.compile(componentB, {})
+					const addPayload = this.compile({componentB : {}})
+					const location = this.getEntityLocation(entityId)
 					this.addComponent(entityId, addPayload)
 					flush()
 
@@ -482,8 +578,8 @@ export class EntityMaskManagerTestSystem {
 					const allocationRule = { with: [componentA] }
 					// Use a small history (4) for easier testing 
 					this.ringBufferTestDamagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged_overflow', allocationRule, 4)
-					const { payload } = this.compile({ componentA: {} })
-					this.createEntity(payload)
+					const payload = this.compile({ componentA: {} })
+					this.instantiate(payload, 1)
 					flush()
 					const query = this.getQuery({ with: [componentA] })
 					this.ringBufferTestChunkId = query.getChunks()[0]

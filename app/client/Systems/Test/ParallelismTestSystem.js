@@ -94,14 +94,13 @@ export class ParallelismTestSystem {
 			with: [position, velocity, parallelismTestTag, column],
 		})
 
-		const { payload, mutators } = this.compile({
+		this.creationPayload = this.compile({
 			position: { x: 0, y: 0 },
 			velocity: { x: 1, y: 0 },
 			parallelismTestTag: {}, // Tag for this system's entities
 			column: { index: 0 }, // Component to identify which column an entity belongs to
 		})
-		this.creationPayload = payload
-		this.creationMutators = mutators
+		this.creationMutators = this.creationPayload.buffers
 
 		// --- Visual Test Setup: Create a Grid of Entities ---
 		// We will create long, continuous vertical columns of entities. Each column spans
@@ -145,7 +144,7 @@ export class ParallelismTestSystem {
 				this.topMargin + (entityIndexInColumn / entitiesPerColumn) * (this.worldHeight - this.topMargin)
 			this.creationMutators.column.index[0] = columnIndex
 
-			this.createEntity(this.creationPayload)
+			this.instantiate(this.creationPayload)
 		}
 	}
 

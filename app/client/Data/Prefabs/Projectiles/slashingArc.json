@@ -17,6 +17,7 @@
 		"spriteDescriptor": { "assetName": "slashing_arc" },
 		"layer": { "name": "projectiles" },
 		"viewable": {},
+		"visibility": {},
 		"tint":{},
 		"lifecycleState": {}
 	}

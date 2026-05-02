@@ -1,27 +1,74 @@
 /**
  * Compiles high-level entity data into low-level binary payloads.
- * This is a build-time or setup-time utility, not for use in hot loops.
- * This is a key part of the Zero-Overhead Data Pipeline, designed to eliminate runtime object traversal and
- * deserialization for entity creation.
+ * This is a setup-time utility, designed to be called once in a system's `init()` method
+ * to create reusable templates. It is a key part of the Zero-Overhead Data Pipeline.
  *
  * ---
- * ### DEV-NOTE: The "Write" Path Assembler
- * This service is the authority for the **"Write" Path payload assembly**. Its responsibility is to take a high-level
- * entity definition (e.g., `{ Position: {x:10} }` or a prefab name) and assemble it into a final, engine-ready binary
- * `ArrayBuffer` payload.
+ * ### DEV-NOTE: The "Live" SoA Payload Factory
+ * This service is the authority for creating "live" Structure-of-Arrays (SoA) payloads. Its responsibility is to take a
+ * high-level entity definition (e.g., `{ position: {x:10} }` or a prefab name) and compile it into a mutable payload
+ * object that can be efficiently manipulated and serialized by the command buffer.
  *
- * It operates as a client of several other services:
- * 1.  **`ComponentInterpreter`**: To transform high-level data (like strings) into raw numeric values.
- * 2.  **`SchemaCompiler`**: To get the `componentInfo` blueprint, which contains the memory layout and pre-compiled `mutatorFactories`.
- * 3.  **`EntityManager` / `PrefabManager`**: To resolve archetypes and prefab data.
+ * The term "live" means the returned payload is not a static snapshot. Its `buffers` property contains mutable `TypedArray`
+ * views into the underlying binary data. You can compile a payload once and then write to its buffers at runtime before
+ * passing it to the command buffer, making it a powerful tool for creating varied entities without re-compiling.
  *
- * The `PayloadCompiler` itself is a "dumb" assembler; it allocates a buffer and executes the mutator factories
- * provided by the `SchemaCompiler` to create the final payload and its mutators.
+ * ---
+ * ### USAGE PATTERNS
+ *
+ * #### 1. Basic Compilation (in `init()`)
+ *
+ * ```javascript
+ * // Compile from a component object
+ * this.myObjectPayload = this.compile({ position: { x: 10, y: 20 } });
+ *
+ * // Compile from a prefab name
+ * this.myPrefabPayload = this.compile('my_prefab');
+ * ```
+ *
+ * #### 2. Compiling with Overrides (in `init()`)
+ *
+ * ```javascript
+ * // Compile a prefab, but override the position
+ * this.modifiedPrefabPayload = this.compile('my_prefab', {
+ *   overrides: {
+ *     position: { x: 99, y: 99 }
+ *   }
+ * });
+ *
+ * // A powerful trick: override with an empty object to reset a component
+ * // to its schema defaults, ignoring the prefab's values.
+ * this.resetPrefabPayload = this.compile('my_prefab', {
+ *   overrides: {
+ *     position: {} // Position will be {x: 0, y: 0} from schema, not prefab
+ *   }
+ * });
+ * ```
+ *
+ * #### 3. Runtime Mutation for Varied Entities (in `update()`)
+ *
+ * ```javascript
+ * // In init(), compile a payload with a capacity greater than 1.
+ * this.variedPayload = this.compile({ position: {} }, { count: 10 });
+ *
+ * // In update(), you can write unique data to the payload's buffers before creating entities.
+ * this.variedPayload.buffers.position.x[0] = 100;
+ * this.variedPayload.buffers.position.y[0] = 100;
+ * this.variedPayload.buffers.position.x[1] = 200;
+ * this.variedPayload.buffers.position.y[1] = 200;
+ *
+ * // Instantiate only the entities you wrote data for.
+ * this.instantiate(this.variedPayload, 2);
+ * ```
  */
 
-const { interpret, resolveComponentData } = await import(`@managers/ComponentManager/ComponentInterpreter.js`)
+const { interpret, resolveComponentData, reconstruct } = await import(
+	`@managers/ComponentManager/ComponentInterpreter.js`
+)
 
 const Schema = await import(`@managers/ComponentManager/ComponentSchema.js`)
+const { MAX_COMPONENTS } = await import(`@managers/ComponentManager/ComponentSchema.js`)
+const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 
 class PayloadCompiler {
 	init(engine) {
@@ -30,304 +77,185 @@ class PayloadCompiler {
 		this.sharedDataManager = engine.sharedDataManager
 		this.componentManager = engine.componentManager
 
+		this.componentTypesScratch = new Uint16Array(MAX_COMPONENTS)
 		this.prefabComponentId = Schema.componentNameToTypeID.get('prefab')
 	}
 
 	/**
-	 * The universal compiler method. It creates a binary payload from a high-level definition.
-	 * Its behavior is overloaded based on the type of the `source` argument.
-	 *
-	 * - **`compile(prefabName, overrides)`**: Compiles an entity from a prefab with optional overrides.
-	 * - **`compile(componentObject)`**: Compiles an entity from a component data object.
-	 * - **`compile(componentTypeID, data)`**: Compiles a single component's data.
-	 *
-	 * @param {string|object|number} source - The source to compile from.
-	 * @param {object} [dataOrOverrides={}] - Overrides for a prefab or data for a single component.
-	 * @returns {{payload: object, mutators: object}} The compiled payload and its mutators.
+	 * The universal compiler method. It creates a "live" SoA payload from a high-level definition.
+	 * @param {string|object|number} source - The source: a prefab name (string), a component object, or a single component typeID.
+	 * @param {object} [options={}] - Optional configuration.
+	 * @param {object} [options.overrides={}] - Overrides for prefab-based compilation.
+	 * @param {Array<number>|number} [options.excludes=[]] - Component typeIDs to exclude.
+	 * @param {number} [options.count=1] - The number of entities to allocate space for in the SoA payload.
+	 * @returns {object} The compiled, live SoA payload.
 	 */
-	compile(source, dataOrOverrides = {}) {
-		// Case 1: Prefab name (string)
+	compile(source, options = {}) {
+		const { overrides = {}, count = 1 } = options
+		let { excludes = [] } = options
+		if (Number.isInteger(excludes)) {
+			excludes = [excludes]
+		}
+
+		// --- 1. Source Resolution ---
+		// This step resolves the `source` argument into a base `componentDataObject`.
+		let componentDataObject
 		if (typeof source === 'string') {
-			return this._compilePrefab(source, dataOrOverrides, this._compile.bind(this))
-		}
-		// Case 2: Component data object for an entity
-		else if (typeof source === 'object' && source !== null) {
-			return this._compileFromObject(source, this._compile.bind(this))
-		}
-		// Case 3: Single component type ID (number)
-		else if (typeof source === 'number') {
-			const typeID = source
-			const data = dataOrOverrides
-
-			const info = Schema.componentInfo[typeID]
-			if (!info) {
-				throw new Error(`PayloadCompiler.compile: Component with typeID ${typeID} not found.`)
-			}
-
-			const archetypeId = this.entityManager.getArchetype([typeID])
-			const resolvedData = resolveComponentData(typeID, data)
-			const rawData = interpret(typeID, resolvedData)
-			const componentDataMap = new Map([[typeID, rawData]])
-			const { payload, mutators } = this._compile(archetypeId, componentDataMap)
-
-			return {
-				payload: {
-					typeID,
-					data: payload.data,
-					trackableComponentIds: payload.trackableComponentIds,
-				},
-				mutators,
-			}
-		}
-		// Error case
-		else {
-			throw new TypeError(
-				'PayloadCompiler.compile: First argument must be a prefab name (string), a component data object, or a component type ID (number).',
-			)
-		}
-	}
-
-	/**
-	 * Compiles a special-purpose payload containing the default values for a set of components.
-	 * This is used for efficiently resetting pooled entities.
-	 *
-	 * @param {string|object} source - A prefab name or a component object defining the set of components to get defaults for.
-	 * @param {object} [overrides={}] - A component data object specifying values to use instead of the schema defaults.
-	 * @param {string[]} [ignores=[]] - An array of component names to exclude from the defaults payload.
-	 * @returns {{payload: object, mutators: object}} The compiled payload containing default values.
-	 */
-	compileDefaults(source, overrides = {}, ignores = []) {
-		let sourceComponentData = {}
-		if (typeof source === 'string') {
-			// Prefab name
 			const prefabData = this.prefabManager.getPrefabData(source)
 			if (!prefabData) {
-				throw new Error(`PayloadCompiler.compileDefaults: Prefab '${source}' not found.`)
+				throw new Error(`PayloadCompiler: Prefab '${source}' not found.`)
 			}
-			// A prefab file has a top-level 'components' key. We need to use the inner object.
-			sourceComponentData = prefabData.components || prefabData
+			componentDataObject = { ...prefabData } // Create a mutable copy
 		} else if (typeof source === 'object' && source !== null) {
-			// Component object
-			sourceComponentData = source
+			componentDataObject = source
 		} else {
-			throw new TypeError(
-				'PayloadCompiler.compileDefaults: First argument must be a prefab name or a component data object.',
-			)
+			throw new TypeError('PayloadCompiler.compile: First argument must be a prefab name or a component object.')
 		}
 
-		const componentNames = Object.keys(sourceComponentData)
-		const allTypeIDs = []
-		for (const name of componentNames) {
-			const typeID = Schema.componentNameToTypeID.get(name.toLowerCase())
-			if (typeID !== undefined) {
-				allTypeIDs.push(typeID)
-			} else {
-				// A prefab might contain components not known to this client (e.g. server-only components).
-				// This is a valid scenario, so we warn instead of throwing an error.
-				console.warn(`PayloadCompiler.compileDefaults: Component name "${name}" not found in schema. It will be ignored.`)
+		// --- 2. Override Application ---
+		// If the source was a prefab, apply the `options.overrides`.
+		if (typeof source === 'string' && Object.keys(overrides).length > 0) {
+			const nameMap = Object.keys(componentDataObject).reduce((map, key) => {
+				map[key.toLowerCase()] = key
+				return map
+			}, {})
+
+			for (const compName in overrides) {
+				if (Object.prototype.hasOwnProperty.call(overrides, compName)) {
+					const originalCaseName = nameMap[compName.toLowerCase()] || compName
+					const overrideData = overrides[compName]
+					const prefabCompData = componentDataObject[originalCaseName]
+
+					// The "empty object" override trick to reset to schema defaults.
+					if (typeof overrideData === 'object' && overrideData !== null && Object.keys(overrideData).length === 0) {
+						componentDataObject[originalCaseName] = {}
+					} else if (
+						typeof overrideData === 'object' &&
+						overrideData !== null &&
+						typeof prefabCompData === 'object' &&
+						prefabCompData !== null
+					) {
+						// Merge override data with prefab data.
+						componentDataObject[originalCaseName] = { ...prefabCompData, ...overrideData }
+					} else {
+						// Replace the value entirely (e.g., for shorthand overrides).
+						componentDataObject[originalCaseName] = overrideData
+					}
+				}
 			}
 		}
 
-		const ignoresSet = new Set(ignores)
-		const typeIDsToCompile = allTypeIDs.filter(id => !ignoresSet.has(id))
-		const componentDataMap = new Map()
-		const interpretedOverrides = this._createIdMapFromData(overrides)
-
-		for (const typeID of typeIDsToCompile) {
-			const schemaDefaults = Schema.compiledDefaults[typeID]
-			const overrideData = interpretedOverrides.get(typeID) || {}
-			const finalData = { ...schemaDefaults, ...overrideData }
-			componentDataMap.set(typeID, finalData)
-		}
-
-		const archetypeId = this.entityManager.getArchetype(componentDataMap.keys())
-		return this._compile(archetypeId, componentDataMap)
-	}
-
-	/**
-	 * [PLANNED] Compiles component data for a BATCH of entities, each with varying data for the same component type.
-	 * This is intended for a future `commands.setComponent(payload)` command.
-	 *
-	 * This method produces a **Structure-of-Arrays (SoA)** payload, which is fundamentally
-	 * different from the AoS payload produced by `compile`. SoA is highly efficient
-	 * for batch-updating a single component across many entities, as it mirrors the engine's
-	 * internal chunk storage format.
-	 *
-	 * @example
-	 * // const positionPayload = compileComponentsForEntities({ Position: [{x:1}, {x:2}, ...] });
-	 * @param {object} componentsObject - An object where keys are component names and values are arrays of data for each entity.
-	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}}
-	 */
-	compileComponentsForEntities(componentsObject) {
-		throw new Error('compileComponentsForEntities is not yet implemented.')
-	}
-
-	/**
-	 * The internal, low-level workhorse for compiling a payload into a "flattened struct" binary format.
-	 * This format is a single ArrayBuffer containing the data for one entity, with components laid out sequentially.
-	 * @param {number} archetypeId The target archetype for the entity.
-	 * @param {Map<number, object>} componentDataMap A map of componentTypeID to its high-level data object.
-	 * @returns {{payload: {archetypeId: number, data: ArrayBuffer}, mutators: object}} A payload object with its mutators.
-	 * @private
-	 */
-	_compile(archetypeId, componentDataMap) {
-		const sortedTypeIDs = this.entityManager.getComponentTypeIDsForArchetype(archetypeId)
-		if (!sortedTypeIDs) {
-			throw new Error(`PayloadCompiler: Archetype with ID ${archetypeId} not found.`)
-		}
-
-		const trackableComponentIds = []
-
-		let totalByteSize = 0 // The rest of the logic remains the same.
-		const componentOffsets = new Map()
-		for (const typeID of sortedTypeIDs) {
-			const info = Schema.componentInfo[typeID]
-			if (info.isTrackable) {
-				trackableComponentIds.push(typeID)
+		// --- 3. Exclusion Application ---
+		// Filter out components specified in `options.excludes`.
+		if (excludes.length > 0) {
+			const finalData = {}
+			const excludeIdSet = new Set(excludes)
+			for (const compName in componentDataObject) {
+				if (Object.prototype.hasOwnProperty.call(componentDataObject, compName)) {
+					const typeId = Schema.componentNameToTypeID.get(compName.toLowerCase())
+					if (typeId !== undefined && !excludeIdSet.has(typeId)) {
+						finalData[compName] = componentDataObject[compName]
+					}
+				}
 			}
-			const alignment = info.alignment
-			if (alignment > 0 && totalByteSize % alignment !== 0) {
-				totalByteSize += alignment - (totalByteSize % alignment)
-			}
-			componentOffsets.set(typeID, totalByteSize)
-			totalByteSize += info.byteSize
+			componentDataObject = finalData
 		}
 
-		const payloadBuffer = new ArrayBuffer(totalByteSize)
-		const payloadView = new DataView(payloadBuffer)
-		const mutators = {}
-
-		for (const typeID of sortedTypeIDs) {
-			const info = Schema.componentInfo[typeID]
-			const componentName = Schema.componentNames[typeID]
-			const compiledDefaults = Schema.compiledDefaults[typeID]
-			const initialData = componentDataMap.get(typeID) || {}
-			mutators[componentName] = {}
-
-			// Execute the pre-compiled mutator factory functions from the schema.
-			const componentBaseOffset = componentOffsets.get(typeID)
-			for (const factory of info.mutatorFactories) {
-				factory(mutators[componentName], payloadBuffer, componentBaseOffset, info)
-			}
-			for (const propKey of info.propertyKeys) {
-				// Now iterate all final properties to write data
-				// Now iterate all final properties to write data
-				const propInfo = info.properties[propKey]
-				if (!propInfo) continue
-
-				const value = initialData[propKey] ?? compiledDefaults[propKey]
-				const writeOffset = componentOffsets.get(typeID) + propInfo.offset
-				this._writeValue(payloadView, writeOffset, value, propInfo.type)
-			}
-		}
-
-		const payload = {
-			archetypeId,
-			data: payloadBuffer,
-			trackableComponentIds,
-		}
-
-		return Object.freeze({ payload, mutators: Object.freeze(mutators) })
-	}
-
-	/**
-	 * Internal helper to compile from a component object.
-	 * @param {object} componentDataObject
-	 * @returns {ReturnType<this['_compile']>}
-	 * @private
-	 */
-	_compileFromObject(componentDataObject, compileFn) {
-		// This is the "Interpreter" step. It uses ComponentInterpreter to process
-		// high-level data into a map of typeID -> raw numeric data.
+		// --- 4. Archetype & Layout Discovery ---
 		const componentDataMap = this._createIdMapFromData(componentDataObject)
-
-		// Determine the archetype from the provided components.
 		const archetypeId = this.entityManager.getArchetype(componentDataMap.keys())
-		return compileFn(archetypeId, componentDataMap)
-	}
+		const componentCount = this.entityManager.getComponentTypeIDsForArchetype(archetypeId, this.componentTypesScratch)
 
-	/**
-	 * Internal helper to compile from a prefab with overrides.
-	 * @param {string} prefabName
-	 * @param {object} overrides
-	 * @returns {ReturnType<this['_compile']>}
-	 * @private
-	 */
-	_compilePrefab(prefabName, overrides = {}, compileFn) {
-		const prefabData = this.prefabManager.getPrefabData(prefabName)
-		if (!prefabData) {
-			throw new Error(`PayloadCompiler: Prefab '${prefabName}' not found.`)
-		}
+		// --- DEBUG LOG ---
 
-		// Merge prefab data with overrides.
-		const finalComponentData = { ...prefabData }
-		for (const compName in overrides) {
-			const overrideData = overrides[compName]
-			const prefabCompData = finalComponentData[compName]
+		// Make a copy of the component IDs. This makes the payload self-contained and ensures
+		// that the `serialize` closure captures a stable list, unaffected by subsequent
+		// calls to `compile()` that would overwrite the shared `componentTypesScratch` buffer.
+		const componentTypeIDs = Array.from(this.componentTypesScratch.subarray(0, componentCount))
 
-			// This logic correctly handles both partial object overrides and primitive/shorthand overrides.
-			if (
-				typeof overrideData === 'object' &&
-				overrideData !== null &&
-				!Array.isArray(overrideData) &&
-				typeof prefabCompData === 'object' &&
-				prefabCompData !== null &&
-				!Array.isArray(prefabCompData)
-			) {
-				finalComponentData[compName] = { ...prefabCompData, ...overrideData }
-			} else {
-				finalComponentData[compName] = overrideData
+		// --- 5. Payload Allocation ---
+		const layout = []
+		let totalDataSize = 0
+		for (const typeId of componentTypeIDs) {
+			const info = Schema.componentInfo[typeId]
+			const componentName = Schema.componentNames[typeId]
+			for (const propKey of info.propertyKeys) {
+				const propInfo = info.properties[propKey]
+
+
+				const bytesPerElement = propInfo.arrayConstructor.BYTES_PER_ELEMENT
+
+				// Align the current offset to the requirement of this property.
+				const alignment = bytesPerElement
+				if (alignment > 0 && totalDataSize % alignment !== 0) {
+					totalDataSize += alignment - (totalDataSize % alignment)
+				}
+				const propOffset = totalDataSize
+				const propSize = count * bytesPerElement
+
+				layout.push({
+					typeId,
+					componentName,
+					propKey,
+					propInfo,
+					bytesPerElement,
+					size: propSize,
+					offset: propOffset, // Use the aligned offset
+				})
+				totalDataSize += propSize
 			}
 		}
 
-		// Run the merged data through the interpreter.
-		// Pass the final component data object to the object compiler, which will
-		// handle creating the ID map and determining the archetype.
-		return this._compileFromObject(finalComponentData, compileFn)
-	}
+		const trackableComponentIds = componentTypeIDs.filter(typeId => Schema.componentInfo[typeId].isTrackable)
 
-	/**
-	 * @private
-	 * Helper to write a value to a DataView with the correct type.
-	 */
-	_writeValue(view, offset, value, type) {
-		const constructor = Schema.TYPED_ARRAY_MAP[type]
-		if (!constructor) {
-			throw new Error(`PayloadCompiler: Unknown property type for writing: ${type}`)
+		// The single, pre-packed buffer for all component data.
+		const singleBuffer = new ArrayBuffer(totalDataSize)
+
+		// --- 6. View Creation ---
+		const buffers = {}
+		for (const item of layout) {
+			const { componentName, propKey, propInfo, offset } = item
+			if (!buffers[componentName]) {
+				buffers[componentName] = {}
+			}
+			const constructor = propInfo.arrayConstructor
+			buffers[componentName][propKey] = new constructor(singleBuffer, offset, count)
 		}
 
-		switch (constructor.BYTES_PER_ELEMENT) {
-			case 8:
-				if (type.startsWith('f')) view.setFloat64(offset, value, true)
-				else {
-					// Value might already be a bigint from the interpreter.
-					const bigIntValue = typeof value === 'bigint' ? value : BigInt(value)
-					if (type.startsWith('i')) view.setBigInt64(offset, bigIntValue, true)
-					else view.setBigUint64(offset, bigIntValue, true)
-				}
-				break
-			case 4:
-				if (type.startsWith('f')) {
-					view.setFloat32(offset, value, true)
+		// --- 6. Data Population ---
+		for (const typeId of componentTypeIDs) {
+			const info = Schema.componentInfo[typeId]
+			const componentName = Schema.componentNames[typeId]
+			const compiledDefaults = Schema.compiledDefaults[typeId]
+			const initialData = componentDataMap.get(typeId) || {}
+
+			for (const propKey of info.propertyKeys) {
+				if (!buffers[componentName] || !buffers[componentName][propKey]) continue
+				const value = initialData[propKey] ?? compiledDefaults[propKey]
+				const buffer = buffers[componentName][propKey]
+				if (buffer instanceof BigInt64Array || buffer instanceof BigUint64Array) {
+					buffer.fill(BigInt(value))
 				} else {
-					// Allow bigint to be written to 32-bit fields, but it will truncate.
-					// This is expected for entity IDs where we only need the index part sometimes.
-					const numValue = typeof value === 'bigint' ? Number(value & 0xffffffffn) : value
-					if (type.startsWith('i')) view.setInt32(offset, numValue, true)
-					else view.setUint32(offset, numValue, true)
+					buffer.fill(value)
 				}
-				break
-			case 2:
-				if (type.startsWith('i')) view.setInt16(offset, value, true)
-				else view.setUint16(offset, value, true)
-				break
-			case 1:
-				if (type.startsWith('i')) view.setInt8(offset, value)
-				else view.setUint8(offset, value)
-				break
-			default:
-				throw new Error(`PayloadCompiler: Unsupported byte size for type: ${type}`)
+			}
 		}
+
+		// --- 7. Serialization Closure & Final Object ---
+		const livePayload = {
+			archetypeId,
+			capacity: count,
+			layout,
+			buffers, // mutable
+			trackableComponentIds,
+			// componentTypeId is only attached for single-component payloads,
+			// which is useful for commands like `addComponent`.
+			...(componentTypeIDs.length === 1 && {
+				componentTypeId: componentTypeIDs[0],
+			}),
+		}
+
+		return livePayload
 	}
 
 	_createIdMapFromData(componentsInput) {
@@ -340,7 +268,11 @@ class PayloadCompiler {
 			if (!Object.prototype.hasOwnProperty.call(componentsInput, componentName)) continue
 
 			const typeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
-			if (typeId === undefined) continue
+			if (typeId === undefined) {
+				// This is a critical error. Compiling with a component that doesn't exist in the schema
+				// leads to silent failures and difficult-to-debug issues.
+				throw new Error(`PayloadCompiler: Attempted to compile with an unknown component name: "${componentName}".`)
+			}
 
 			const info = Schema.componentInfo[typeId]
 			if (!info) continue

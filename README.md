@@ -22,6 +22,7 @@ Experimental, constantly changing. Expect breaking changes and bugs.
 - HMR
 - Demo and proper documentation
 - Pray [proposal-structs](https://github.com/tc39/proposal-structs) is implemented.
+- Port core to wasm \ cpp.
 
 ## Vision & Principles
 
@@ -148,10 +149,10 @@ System methods are executed in a specific, guaranteed order. An `async init()` m
 
 **Execution Order:**
 
-1.  **Job Creation**: The `schedule()` method of all active systems is called on the main thread. It uses a `JobWriter` to populate a shared job buffer. This step only _defines_ the work.
-2.  **`update()`**: The `update()` method of systems runs on the main thread. It is used for any logic that must run sequentially before parallel kernels begin.
+1.  **Job Creation**: method of all active systems is called on the main thread. It uses a `JobWriter` to populate a shared job buffer. This step only _defines_ the work.
+2.  **`update()`**: method of systems runs on the main thread. It is used for any logic that must run sequentially before parallel kernels begin.
 3.  **Kernel Execution**: Kernel jobs created during job creation phase are now executed in parallel across worker threads.
-4.  **`process()`**: The `process()` method runs on the main thread after all of a system's `update()` and kernel jobs have finished.
+4.  **`process()`**: method runs on the main thread after all of a system's `update()` and kernel jobs have finished.
 
 **Declaring Dependencies:**
 
@@ -229,45 +230,74 @@ export class ParallelSystem {
 }
 ```
 
-### [System API Extensions](app/client/Core/Extends/systemExtends.js)
+### System API: The "Compile-Then-Command" Workflow
 
-Set of common methods are injected into every system instance. These provide direct access to core engine features like queries and deferred commands.
+All structural changes to entities (creation, deletion, adding/removing components) are deferred and batched for performance using an `EntityCommandBuffer`. 
 
-Key injected methods include:
+A set of common methods are injected into every system instance. These provide direct access to the command buffer and the payload compiler.
 
+- **`compile()`**: Creates a reusable, low-level binary payload from a high-level source (like a component object or prefab name). This is the "Compile" step.
+- **`instantiate()`**: Queues the creation of one or more entities from a compiled payload. This is the "Command" step.
+- **`addComponent()` / `addComponents()`**: Queues the addition of one or more components to an entity, using a compiled payload.
+- **`setComponent()` / `setComponents()`**: Queues a change to an entity's component data, using a compiled payload.
+- **`removeComponent()`**: Queues the removal of a component.
+- **`destroyEntity()`**: Queues an entity to be destroyed.
 - **`getQuery()`**: Retrieves a cached query.
-- **`createEntity()`**: Queue an entity to be created.
-- **`destroyEntity()`**: Queue an entity to be destroyed.
-- **`addComponent()`**: Queue component to be added.
 
-### Dirty Tracking
+#### The Workflow in Practice
 
-**Broad-Phase Tracking (`modified` queries)**
+The core idea is to perform the expensive work of interpreting and laying out data **once** during initialization, and then reuse that compiled "template" many times during execution.
 
-This is the primary method for reactive systems. A query with a `modified` clause will only match chunks where at least one entity has had that component's data changed since the system last ran.
+**1. "Compile" Payloads in `init()`**
 
-To trigger this, a system must explicitly mark a component type as dirty for a given chunk. This is typically done once per chunk, outside of the main entity loop.
+In a system's `init()` method, call `this.compile()` to create and store payload templates for any entities you'll need to work with.
 
 ```javascript
-// In a system, after modifying data in a chunk:
-this.markComponentDirty(chunkId, position, frameContext.currentTick)
+// In a system's init() method:
+
+// Compile a payload from a component object.
+// This creates a template for a projectile with default position and velocity.
+this.projectilePayload = this.compile({
+	position: { x: 0, y: 0 },
+	velocity: { x: 0, y: 0 },
+	projectileTag: {},
+})
+
+// Compile a payload from a prefab name, with overrides.
+this.bossPayload = this.compile('enemy_base', {
+	overrides: {
+		health: { value: 1000, max: 1000 },
+		scale: { x: 2, y: 2 },
+	},
+})
 ```
 
-**Narrow-Phase Tracking (`isTrackable` components)**
+**2. "Command" Structural Changes in `update()` / `schedule()`**
 
-For more granular tracking, a component can be declared with `meta: { isTrackable: true },` in its schema. This allocates a bitmask for each entity, allowing systems to identify exactly which entities have been marked as dirty.
+In system's logic methods, use the pre-compiled payloads to issue commands.
 
 ```javascript
-// Mark a specific entity's component as dirty.
-this.markEntityDirty(chunkId, entityIndex, componentTypeId, frameContext.currentTick)
+// In a system's update() method:
 
-// In another system, get a list of dirty entity indices for a chunk.
-const dirtyCount = this.getDirty(chunkId, componentTypeId, lastTick, currentTick, scratchBuffer)
+// --- Example 1: Creating a new entity ---
+
+// Mutate the payload's buffers with runtime data.
+this.projectilePayload.buffers.position.x[0] = this.player.x
+this.projectilePayload.buffers.position.y[0] = this.player.y
+this.projectilePayload.buffers.velocity.x[0] = this.player.directionX * 100
+
+// Issue the command to instantiate one entity from the payload.
+this.instantiate(this.projectilePayload)
+
+// --- Example 2: Modifying an existing entity ---
+
+// Let's give an enemy a temporary "empowered" status.
+// First, compile the payload for the component to add (can also be done in init).
+const empoweredPayload = this.compile({ empowered: { duration: 10 } })
+
+// Issue the command to add the component to a specific entity.
+this.addComponent(enemyId, empoweredPayload)
 ```
-
-**[added] and [removed] reactive queries are not fully implemented \ tested yet.**
-
-**Until there is a proper doc - information on masking in (`/app/client/Managers/EntityMaskManager.js`)**
 
 ### Frame Lifecycle & Deferred Commands
 
@@ -295,9 +325,9 @@ The frame lifecycle proceeds in this fixed order:
     - **Context:** Receives a variable `deltaTime` and an `alpha` value (0.0 to 1.0) for interpolating between logic ticks, ensuring smooth motion.
     - **Purpose:** For any logic tied to rendering, such as camera movement, animations, and synchronizing game state to visual representations.
 
-#### Command Buffer Execution
+#### Command Buffer Execution Point
 
-All structural changes (creating/destroying entities, adding/removing components) are deferred. When system calls a method like `createEntity`, it records a command in a `CommandBuffer` to be executed before visual group.
+All deferred commands recorded by systems (e.g., `instantiate`, `addComponent`, `destroyEntity`) are executed automatically in a single batch **between the Logic Group and the Visuals Group**. This ensures that all structural changes from gameplay logic are completed before any rendering-related systems run.
 
 ### Prefab Definitions
 

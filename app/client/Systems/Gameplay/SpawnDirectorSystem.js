@@ -3,7 +3,6 @@ const { ecs, entityManager, gameManager, physicsManager, prefabManager } = engin
 
 const { SpriteFactorySystem, RenderLayerSystem } = ecs.getSystemIDs()
 
-
 const {
 	spawnDirector,
 	playerTag,
@@ -16,12 +15,14 @@ const {
 	threatCost,
 	tint,
 	hitFlash,
+	aiParameters,
+	visibility,
 } = ecs.getComponentIDs()
 
 const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
 
 // A fixed radius around the player considered the "safe zone". Enemies will spawn outside this radius.
-const SAFE_SPAWN_RADIUS = 1200
+const SAFE_SPAWN_RADIUS = 2200
 
 const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
 
@@ -39,6 +40,11 @@ export class SpawnDirectorSystem {
 	}
 
 	init() {
+		this.maxSpawnsPerFrame = 100 //  maximum number of entities to spawn in a single frame.
+		this.entitiesToUnpool = []
+		this.waveChoiceResult = { chosenEnemies: [], spentBudget: 0 }
+		this.affordableEnemiesCache = []
+
 		// A singleton query to find the director's state.
 		this.directorQuery = this.getQuery({
 			with: [spawnDirector],
@@ -59,54 +65,67 @@ export class SpawnDirectorSystem {
 			{ prefabName: 'explosiveDrone', cost: 15, weight: 2 },
 		]
 
+		// Add an index to each enemy info object for easy lookup from the spawn queue.
+		this.spawnableEnemies.forEach((enemy, index) => (enemy.index = index))
+
 		// --- Generic Pooling Setup ---
 		// A single query to find all pooled entities that have a prefab ID.
 		this.pooledEnemyQuery = this.getQuery({
 			with: [isPooled, prefab, health],
 		})
 
+		// A reusable map to avoid allocations in the spawn loop.
+		// The map and its arrays are created once and cleared each frame.
+		this.availablePooledEnemies = new Map()
+
 		// Pre-compile payloads and cache prefab IDs for all spawnable enemies.
 		for (const enemy of this.spawnableEnemies) {
-			try {
-				const { payload, mutators } = this.compile(enemy.prefabName)
-				enemy.payload = payload
-				enemy.mutators = mutators
-
-				// Get the numeric prefab ID from the manager. This is the "fast path" for systems.
-				enemy.prefabId = prefabManager.getPrefabId(enemy.prefabName)
-				if (enemy.prefabId === undefined) {
-					throw new Error(`Could not find prefab ID for "${enemy.prefabName}". Is it in the manifest and preloaded?`)
-				}
-			} catch (e) {
-				console.error(`DirectorSystem: Failed to compile prefab "${enemy.prefabName}". It will not be spawned.`, e)
+			// Get  numeric prefab ID
+			enemy.prefabId = prefabManager.getPrefabId(enemy.prefabName)
+			if (enemy.prefabId !== undefined) {
+				// This is now a true SoA to avoid object allocations when gathering.
+				const POOLED_ENEMY_CAPACITY = 1024 // A reasonable capacity for pooled enemies of one type.
+				this.availablePooledEnemies.set(enemy.prefabId, {
+					entityIds: new BigUint64Array(POOLED_ENEMY_CAPACITY),
+					maxHealths: new Float32Array(POOLED_ENEMY_CAPACITY),
+					count: 0,
+				})
+				// Pre-compile a max-capacity payload for new creations. This is the core
+				// of the new optimization. We compile once at init and reuse the payload
+				// buffer at runtime.
+				enemy.creationPayload = this.compile(enemy.prefabName, {
+					count: this.maxSpawnsPerFrame, // Compile with max capacity
+					overrides: {
+						position: {},
+						threatCost: {},
+						aiParameters: {},
+					},
+				})
 			}
 		}
 		// Filter out any enemies that failed to compile.
-		this.spawnableEnemies = this.spawnableEnemies.filter(e => e.payload)
+		this.spawnableEnemies = this.spawnableEnemies.filter(e => e.prefabId !== undefined && e.creationPayload)
 
-		// Payload for setting dynamic properties on a newly created enemy.
-		const { payload: createOverridesPayload, mutators: createOverridesMutators } = this.compile({
-			position: {},
-			threatCost: {},
-			aiParameters: {}, // Include to set the random seed.
-		})
-		this.createOverridesPayload = createOverridesPayload
-		this.createOverridesMutators = createOverridesMutators
+		// Pre-calculate the minimum cost of any spawnable enemy.
+		this.minSpawnCost =
+			this.spawnableEnemies.length > 0
+				? this.spawnableEnemies.reduce((min, e) => Math.min(min, e.cost), Infinity)
+				: Infinity
 
 		// Payload for resetting and reusing a pooled enemy.
-		const { payload: reuseEnemyPayload, mutators: reuseEnemyMutators } = this.compile({
+		// This is compiled with a count of 1 and mutated in a loop for each reused entity.
+		this.resetEnemyPayload = this.compile({
 			lifecycleState: { flags: LIFECYCLE.ACTIVE },
 			velocity: { x: 0, y: 0 },
 			tint: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
 			hitFlash: { timer: 0.0 },
+			visibility: { isVisible: 1 }, // Make it visible again
 			// These components have dynamic data that will be set by mutators.
-			aiParameters: {}, // Include to set the random seed.
+			aiParameters: {},
 			position: {},
 			health: {},
 			threatCost: {},
 		})
-		this.reuseEnemyPayload = reuseEnemyPayload
-		this.reuseEnemyMutators = reuseEnemyMutators
 
 		// Get access to the spatial hash grid for finding empty spawn locations.
 		const gridSABs = physicsManager.getSpatialHashGridSABs()
@@ -121,14 +140,29 @@ export class SpawnDirectorSystem {
 			entityIndices: new Uint16Array(MAX_SPAWN_QUERY_RESULTS),
 		}
 
-		// A reusable map to avoid allocations in the spawn loop.
-		this.availablePooledEnemies = new Map()
+		// A pre-allocated SoA structure to batch new creation requests by enemy type index.
+		this.newCreationsBatch = {
+			batches: Array.from({ length: this.spawnableEnemies.length }, () => ({
+				x: new Float64Array(this.maxSpawnsPerFrame),
+				y: new Float64Array(this.maxSpawnsPerFrame),
+				spawnIndex: new Uint32Array(this.maxSpawnsPerFrame),
+				count: 0,
+			})),
+		}
 
-		// --- Spawn Throttling ---
-		// A queue to hold spawn requests, allowing us to throttle entity creation.
-		this.spawnQueue = []
-		this.maxSpawnsPerFrame = 100 // The maximum number of entities to spawn in a single frame.
+		// --- Spawn Throttling & Batching ---
+		// A pre-allocated SoA queue to hold spawn requests, avoiding per-request object allocation.
+		const SPAWN_QUEUE_CAPACITY = 2048
+		this.spawnQueue = {
+			enemyInfoIndex: new Uint16Array(SPAWN_QUEUE_CAPACITY),
+			x: new Float64Array(SPAWN_QUEUE_CAPACITY),
+			y: new Float64Array(SPAWN_QUEUE_CAPACITY),
+			count: 0,
+			capacity: SPAWN_QUEUE_CAPACITY,
+		}
 		this.spawnIndexCounter = 0 // A counter for positioning entities within a cluster.
+		// A reusable object for finding spawn locations to avoid allocations.
+		this.spawnLocation = { x: 0, y: 0 }
 	}
 
 	update({ deltaTime, currentTick }) {
@@ -150,7 +184,7 @@ export class SpawnDirectorSystem {
 			directorState.threatBudget[0] = Math.min(maxBudget, currentBudget + growthRate * deltaTime)
 
 			// Check if we have enough budget to trigger a spawn wave.
-			if (directorState.threatBudget[0] >= minSpawnBudget) {
+			if (directorState.threatBudget[0] >= this.minSpawnCost && directorState.threatBudget[0] >= minSpawnBudget) {
 				// Spend the budget and spawn the wave.
 				const spentBudget = this.spawnWave(directorState.threatBudget[0], currentTick)
 
@@ -170,25 +204,31 @@ export class SpawnDirectorSystem {
 	 * @returns {number} The amount of budget that was actually spent.
 	 */
 	spawnWave(budget, currentTick) {
-		const { chosenEnemies, spentBudget } = this._chooseEnemiesForWave(budget)
+		this._chooseEnemiesForWave(budget, this.waveChoiceResult)
+		const { chosenEnemies, spentBudget } = this.waveChoiceResult
 		if (chosenEnemies.length === 0) {
 			return 0 // Nothing was spawned, so no budget was spent.
 		}
 
-		const spawnLocation = this._findEmptySpawnLocation()
-		if (!spawnLocation) {
+		const foundLocation = this._findEmptySpawnLocation(this.spawnLocation)
+		if (!foundLocation) {
 			//console.warn('DirectorSystem: Could not find an empty spot to spawn wave. Skipping wave, budget not spent.')
 			return 0 // Could not spawn, so no budget was spent.
 		}
 
 		// If the queue was empty, we are starting a new cluster, so reset the index.
-		if (this.spawnQueue.length === 0) {
+		if (this.spawnQueue.count === 0) {
 			this.spawnIndexCounter = 0
 		}
 
-		// Enqueue the spawn requests instead of spawning them directly.
+		// Enqueue the spawn requests into our SoA queue to be throttled.
+		const queue = this.spawnQueue
 		for (const enemyInfo of chosenEnemies) {
-			this.spawnQueue.push({ enemyInfo, location: spawnLocation })
+			if (queue.count >= queue.capacity) break // Queue is full
+			queue.enemyInfoIndex[queue.count] = enemyInfo.index
+			queue.x[queue.count] = this.spawnLocation.x
+			queue.y[queue.count] = this.spawnLocation.y
+			queue.count++
 		}
 
 		return spentBudget
@@ -197,13 +237,14 @@ export class SpawnDirectorSystem {
 	/**
 	 * Finds a suitable empty location off-screen to spawn an enemy cluster.
 	 * It uses a "guess and check" approach with the spatial hash grid.
-	 * @returns {{x: number, y: number} | null} The coordinates of the spawn location, or null if none was found.
+	 * @param {object} outLocation - An object to write the found coordinates to.
+	 * @returns {boolean} True if a location was found, false otherwise.
 	 * @private
 	 */
-	_findEmptySpawnLocation() {
+	_findEmptySpawnLocation(outLocation) {
 		let playerX = 0
 		let playerY = 0
-		// This is a singleton query, so it will only run once.
+		// singleton query
 		const playerChunkIds = this.playerQuery.getChunks()
 
 		const playerChunkId = playerChunkIds[0]
@@ -226,15 +267,23 @@ export class SpawnDirectorSystem {
 			this.grid.queryRadius(x, y, WAVE_CLUSTER_RADIUS, this.spawnQueryResult)
 
 			if (this.spawnQueryResult.count === 0) {
-				return { x, y } // Found an empty spot.
+				outLocation.x = x
+				outLocation.y = y
+				return true // Found an empty spot.
 			}
 		}
 
-		return null // Failed to find a spot.
+		return false // Failed to find a spot.
 	}
 
 	_gatherPooledEnemies() {
-		this.availablePooledEnemies.clear()
+		// Clear the arrays inside the map, but don't re-allocate the map or the arrays themselves.
+		// Iterate over the known spawnable enemies to avoid allocating a map iterator.
+		for (const enemyInfo of this.spawnableEnemies) {
+			const pool = this.availablePooledEnemies.get(enemyInfo.prefabId)
+			// The pool is guaranteed to exist because we created it in init().
+			pool.count = 0
+		}
 
 		const pooledChunkIds = this.pooledEnemyQuery.getChunks()
 		for (let i = 0; i < pooledChunkIds.length; i++) {
@@ -246,128 +295,183 @@ export class SpawnDirectorSystem {
 
 			for (let j = 0; j < chunkSize; j++) {
 				const prefabId = prefabs.id[j]
-				if (!this.availablePooledEnemies.has(prefabId)) {
-					this.availablePooledEnemies.set(prefabId, [])
+				const poolForType = this.availablePooledEnemies.get(prefabId)
+				if (poolForType && poolForType.count < poolForType.capacity) {
+					const index = poolForType.count
+					poolForType.entityIds[index] = entities[j]
+					poolForType.maxHealths[index] = healths.max[j]
+					poolForType.count++
 				}
-				this.availablePooledEnemies.get(prefabId).push({ entityId: entities[j], maxHealth: healths.max[j] })
 			}
 		}
 	}
 
 	_processSpawnQueue(currentTick) {
-		const processCount = Math.min(this.spawnQueue.length, this.maxSpawnsPerFrame)
+		const processCount = Math.min(this.spawnQueue.count, this.maxSpawnsPerFrame)
 		if (processCount === 0) {
 			return
 		}
 
+		// --- Batch Processing Setup ---
 		this._gatherPooledEnemies()
+		const separation = 48
+		const phi = (1 + Math.sqrt(5)) / 2
 
-		//! base separation on entity size? Prolly not worth it, just move up in
-		//! config, so can be hardcoded manually.
-		const separation = 48 // Base separation distance between enemies.
-		const phi = (1 + Math.sqrt(5)) / 2 // Golden ratio for the spiral.
+		// Clear per-frame buffers.
+		for (const batch of this.newCreationsBatch.batches) {
+			batch.count = 0
+		}
+		this.entitiesToUnpool.length = 0
 
+		// 1. Group spawn requests into reuses and new creations.
 		for (let i = 0; i < processCount; i++) {
-			const request = this.spawnQueue.shift()
-			const { enemyInfo, location } = request
+			// Process from the end of the queue and decrement count to "pop" them.
+			const reqIndex = --this.spawnQueue.count
+			const enemyInfo = this.spawnableEnemies[this.spawnQueue.enemyInfoIndex[reqIndex]]
+			const locationX = this.spawnQueue.x[reqIndex]
+			const locationY = this.spawnQueue.y[reqIndex]
 			const index = this.spawnIndexCounter++
-			let reused = false
 
 			// Look up available entities using the numeric prefabId, not the string name.
 			const pooledForType = this.availablePooledEnemies.get(enemyInfo.prefabId)
-			if (pooledForType && pooledForType.length > 0) {
-				const enemyToReuse = pooledForType.pop() // Take one from the pool
-				this._reuseEnemy(
-					enemyToReuse.entityId,
+			if (pooledForType && pooledForType.count > 0) {
+				pooledForType.count--
+				const reuseIndex = pooledForType.count
+				const entityToReuseId = pooledForType.entityIds[reuseIndex]
+				const maxHealthToReuse = pooledForType.maxHealths[reuseIndex]
+
+				this.entitiesToUnpool.push(entityToReuseId)
+				this._resetReusedEnemy(
+					entityToReuseId,
 					enemyInfo,
-					location,
+					locationX,
+					locationY,
 					index,
 					separation,
 					phi,
-					currentTick,
-					enemyToReuse.maxHealth,
+					maxHealthToReuse,
 				)
-				reused = true
+			} else {
+				const batch = this.newCreationsBatch.batches[enemyInfo.index]
+				const newIndex = batch.count
+				batch.x[newIndex] = locationX
+				batch.y[newIndex] = locationY
+				batch.spawnIndex[newIndex] = index
+				batch.count++
 			}
+		}
 
-			if (!reused) {
-				this._createNewEnemy(enemyInfo, location, index, separation, phi, currentTick)
+		// 2. Process reuses.
+		if (this.entitiesToUnpool.length > 0) {
+			// Issue one bulk command to remove the 'isPooled' tag from all reused entities.
+			this.removeComponentsFromEntities(this.entitiesToUnpool, isPooled)
+		}
+
+		// 3. Process new creations in batches.
+		for (let i = 0; i < this.newCreationsBatch.batches.length; i++) {
+			const batch = this.newCreationsBatch.batches[i]
+			if (batch.count > 0) {
+				const enemyInfo = this.spawnableEnemies[i]
+				this._createNewEnemiesInBatch(enemyInfo, batch, separation, phi)
 			}
 		}
 	}
-	_createNewEnemy(enemyInfo, location, index, separation, phi, currentTick) {
-		const radius = Math.sqrt(index + 0.5) * separation
-		const angle = 2 * Math.PI * index * phi
-		const enemyX = location.x + radius * Math.cos(angle)
-		const enemyY = location.y + radius * Math.sin(angle)
 
-		// Create the entity from its base prefab payload. This returns a placeholder ID.
-		const placeholderId = this.createEntity(enemyInfo.payload)
+	/**
+	 * Creates a batch of new enemies of the same type using a single `instantiate` command.
+	 * This method no longer compiles; it reuses a pre-compiled payload.
+	 * @private
+	 */
+	_createNewEnemiesInBatch(enemyInfo, requests, separation, phi) {
+		const count = requests.count
+		if (count === 0) return
 
-		// Use a separate, pre-compiled payload to set the unique, per-instance properties.
-		// This is the correct way to apply dynamic data without re-compiling the whole prefab.
-		this.createOverridesMutators.position.x[0] = enemyX
-		this.createOverridesMutators.position.y[0] = enemyY
-		this.createOverridesMutators.threatCost.value[0] = enemyInfo.cost
-		this.createOverridesMutators.aiParameters.randomSeed[0] = Math.random()
+		// Get the pre-compiled payload.
+		const payload = enemyInfo.creationPayload
 
-		// Issue a command to set these overrides on the newly created entity.
-		this.setComponents(placeholderId, this.createOverridesPayload)
+		// Fill the payload's buffers with unique data for each entity.
+		for (let i = 0; i < count; i++) {
+			const locationX = requests.x[i]
+			const locationY = requests.y[i]
+			const index = requests.spawnIndex[i]
+			const radius = Math.sqrt(index + 0.5) * separation
+			const angle = 2 * Math.PI * index * phi
+
+			payload.buffers.position.x[i] = locationX + radius * Math.cos(angle)
+			payload.buffers.position.y[i] = locationY + radius * Math.sin(angle)
+			payload.buffers.threatCost.value[i] = enemyInfo.cost
+			payload.buffers.aiParameters.randomSeed[i] = Math.random()
+		}
+
+		// Issue a single, highly efficient command to create `count` entities.
+		// The payload has a larger capacity, but we only use the first `count` slots.
+		this.instantiate(payload, count)
 	}
 
-	_reuseEnemy(entityId, enemyInfo, location, index, separation, phi, currentTick, maxHealth) {
+	/**
+	 * Issues commands to reset a single pooled enemy's state.
+	 * @private
+	 */
+	_resetReusedEnemy(entityId, enemyInfo, locationX, locationY, index, separation, phi, maxHealth) {
 		// --- 1. Calculate new position ---
 		const radius = Math.sqrt(index + 0.5) * separation
 		const angle = 2 * Math.PI * index * phi
-		const enemyX = location.x + radius * Math.cos(angle)
-		const enemyY = location.y + radius * Math.sin(angle)
+		const enemyX = locationX + radius * Math.cos(angle)
+		const enemyY = locationY + radius * Math.sin(angle)
 
-		// --- 2. Use mutators to set the dynamic data for the reused enemy ---
-		this.reuseEnemyMutators.position.x[0] = enemyX
-		this.reuseEnemyMutators.position.y[0] = enemyY
-		this.reuseEnemyMutators.health.current[0] = maxHealth
-		this.reuseEnemyMutators.health.max[0] = maxHealth
-		this.reuseEnemyMutators.threatCost.value[0] = enemyInfo.cost
-		this.reuseEnemyMutators.aiParameters.randomSeed[0] = Math.random()
+		// --- 2. set the dynamic data for the reused enemy ---
+		const buffers = this.resetEnemyPayload.buffers
+		buffers.position.x[0] = enemyX
+		buffers.position.y[0] = enemyY
+		buffers.health.current[0] = maxHealth
+		buffers.health.max[0] = maxHealth
+		buffers.threatCost.value[0] = enemyInfo.cost
+		buffers.aiParameters.randomSeed[0] = Math.random()
 
-		// --- 3. Issue commands to reactivate and reset the entity's state ---
-		// This is a structural change that brings the entity back into the "active" world.
-		this.removeComponent(entityId, isPooled) // Structural change: bring it back to the active world.
-
-		// This single command updates all necessary components for the enemy's new life.
+		// --- 3. Issue a command to reset the entity's state ---
+		// This single command updates all necessary components for the enemy's new life,
 		// It sets lifecycle to ACTIVE, resets velocity and tint to defaults, and applies
-		// the new position, health, and threat cost from the mutators.
-		this.setComponents(entityId, this.reuseEnemyPayload)
+		// the new position, health, and threat cost from buffers.
+
+		this.setComponents(entityId, this.resetEnemyPayload)
 	}
 
 	/**
 	 * Selects a list of enemies to spawn based on the available budget and weights.
 	 * This version is more robust, ensuring it spends the budget effectively by only
 	 * considering affordable enemies at each step.
-	 * @param {number} initialBudget The total budget to spend.
-	 * @returns {{chosenEnemies: object[], spentBudget: number}} An object containing the list of enemies and the total budget spent.
+	 * @param {number} initialBudget - The total budget to spend.
+	 * @param {object} outResult - An object to write the results to, to avoid allocations.
+	 * @param {object[]} outResult.chosenEnemies - The output array for chosen enemies.
+	 * @param {number} outResult.spentBudget - The output for the budget spent.
 	 * @private
 	 */
-	_chooseEnemiesForWave(initialBudget) {
-		const chosenEnemies = []
+	_chooseEnemiesForWave(initialBudget, outResult) {
+		outResult.chosenEnemies.length = 0
+		const chosenEnemies = outResult.chosenEnemies
 		let remainingBudget = initialBudget
 
-		// Find the cost of the cheapest possible enemy to ensure the loop can start.
-		const minCost = this.spawnableEnemies.length > 0 ? Math.min(...this.spawnableEnemies.map(e => e.cost)) : Infinity
+		const minCost = this.minSpawnCost
 
+		// Ensure we can afford at least the cheapest enemy.
 		while (remainingBudget >= minCost) {
-			// 1. Get a list of enemies we can currently afford.
-			const affordableEnemies = this.spawnableEnemies.filter(e => e.cost <= remainingBudget)
-			if (affordableEnemies.length === 0) break
+			// 1. Get a list of affordable enemies and their total weight without allocating new arrays.
+			this.affordableEnemiesCache.length = 0
+			let totalWeight = 0
+			for (const enemy of this.spawnableEnemies) {
+				if (enemy.cost <= remainingBudget) {
+					this.affordableEnemiesCache.push(enemy)
+					totalWeight += enemy.weight
+				}
+			}
 
-			// 2. Calculate total weight of *only* the affordable enemies.
-			const totalWeight = affordableEnemies.reduce((sum, e) => sum + e.weight, 0)
+			if (this.affordableEnemiesCache.length === 0) break
 
 			// 3. Pick one enemy from the affordable list using weighted random selection.
 			const randomWeight = Math.random() * totalWeight
 			let weightSum = 0,
 				chosenEnemy = null
-			for (const enemy of affordableEnemies) {
+			for (const enemy of this.affordableEnemiesCache) {
 				weightSum += enemy.weight
 				if (randomWeight <= weightSum) {
 					chosenEnemy = enemy
@@ -384,6 +488,6 @@ export class SpawnDirectorSystem {
 			}
 		}
 
-		return { chosenEnemies, spentBudget: initialBudget - remainingBudget }
+		outResult.spentBudget = initialBudget - remainingBudget
 	}
 }

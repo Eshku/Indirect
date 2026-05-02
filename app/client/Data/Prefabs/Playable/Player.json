@@ -28,7 +28,6 @@
 		"playerWeaponStats": {
 			"count": 1,
 			"speed": 1000,
-			"velocityInheritance": 0,
 			"range": 2000,
 			"fireRate": 0.25,
 			"damage": 5

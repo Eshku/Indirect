@@ -70,11 +70,9 @@ export class DataIntegrityTestSystem {
 		this.query = this.getQuery({ with: [churnTag, churnData, verification] })
 
 		// --- Payloads ---
-		const { payload: verificationPayload } = this.compile(
-			verification,
-			{ status: 2 }, // The data we want to set
+		this.verificationUpdatePayload = this.compile(
+			{ verification: { status: 2 } }, // The data we want to set
 		)
-		this.verificationUpdatePayload = verificationPayload
 
 		console.log('[ChurnTest] System initialized. Starting in Creation phase.')
 	}
@@ -97,13 +95,13 @@ export class DataIntegrityTestSystem {
 				// the SharedArchetypeHashMap resize mechanism.
 				for (let i = 0; i < this.creationBatchSize; i++) {
 					const variantData = this.archetypeVariants[this.archetypeVariantCounter]
-					const { payload } = this.compile({
+					const payload = this.compile({
 						churnTag: {},
 						churnData: { creationTick: currentTick, entityId: 0n },
 						verification: { status: 0 },
 						...variantData,
 					})
-					this.createEntity(payload)
+					this.instantiate(payload, 1)
 
 					this.archetypeVariantCounter = (this.archetypeVariantCounter + 1) % this.archetypeVariants.length
 				}
@@ -165,7 +163,7 @@ export class DataIntegrityTestSystem {
 					})
 
 					// Mark as logged to prevent spamming the console every frame for the same error.
-					this.setComponentData(entityId, this.verificationUpdatePayload)
+					this.setComponent(entityId, this.verificationUpdatePayload)
 				}
 			}
 		}

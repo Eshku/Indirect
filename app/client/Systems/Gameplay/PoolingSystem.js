@@ -35,24 +35,22 @@ export class PoolingSystem {
 		})
 
 		// --- Payloads ---
-		this.addIsPooledPayload = this.compile(isPooled, {}).payload
+		this.addIsPooledPayload = this.compile({ isPooled: {} })
 
 		// Payload for resetting damageable entities (e.g., enemies).
 		// We set their state to POOLED, reset their tint, and make them invisible.
-		this.pooledDamageableResetPayload = this.compileDefaults(
-			{ lifecycleState: {}, tint: {}, visibility: {} },
-			{
-				lifecycleState: { flags: LIFECYCLE.POOLED },
-				visibility: { isVisible: 0 },
-			},
-		).payload
+		this.pooledDamageableResetPayload = this.compile({
+			lifecycleState: { flags: LIFECYCLE.POOLED },
+			tint: {}, // Reset to schema default (white)
+			visibility: { isVisible: 0 },
+		})
 
 		// Payload for resetting projectiles.
 		// We set their state to POOLED and make them invisible.
-		this.pooledProjectileResetPayload = this.compile([lifecycleState, visibility], {
+		this.pooledProjectileResetPayload = this.compile({
 			lifecycleState: { flags: LIFECYCLE.POOLED },
 			visibility: { isVisible: 0 },
-		}).payload
+		})
 
 		this.scratchBuffer = this.createScratchBuffer()
 	}

@@ -34,13 +34,12 @@ export class ContextTestSystem {
 			with: [contextTestTag],
 		})
 
-		const { payload } = this.compile({
+		this.creationPayload = this.compile({
 			contextTestTag: {},
 		})
-		this.creationPayload = payload
 
 		// Create a single entity to ensure the schedule phase has a job to run.
-		this.createEntity(this.creationPayload)
+		this.instantiate(this.creationPayload, 1)
 		console.log('[ContextTestSystem] Initialized and created a test entity.')
 	}
 

@@ -46,7 +46,7 @@
  *   infrequent tasks that don't need to run every frame, like periodic UI refreshes.
  */
 export const systemSchedule = {
-	Initialization: [
+ 	Initialization: [
 		{ name: 'UIInputSystem', frequency: 'none' },
 		{ name: 'BackgroundSystem', frequency: 'none' },
 	],
@@ -84,8 +84,12 @@ export const systemSchedule = {
 		{ name: 'CooldownSystem', frequency: 'logic' },
 
 		{ name: 'ProjectileLifetimeSystem', frequency: 'logic' },
+		
 		{ name: 'PoolingSystem', frequency: 'logic' },
-	],
+
+	
+	], 
+	
 
 	// Infrequent UI updates. Runs on a timer, not every frame.
 	Timed: [{ name: 'OffscreenCleanupSystem', frequency: 1 }],
@@ -104,22 +108,24 @@ export const systemSchedule = {
 		{ name: 'SyncTransforms', frequency: 'visuals' },
 
 		{ name: 'CameraSystem', frequency: 'visuals' },
-	],
+	], 
 
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
 		{ name: 'FpsCounter', frequency: 'visuals' },
 		{ name: 'DebugInspectionSystem', frequency: 'input' },
-		/* { name: 'SpatialHashDebugSystem', frequency: 'visuals' }, */
+		{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
 	],
 
 	//! Do not run benchmark \ test systems with other systems together, high query overlap potential.
 
 	Benchmark: [
 		/* { name: 'CPUBenchmark', frequency: 'visuals' }, */
-		/* { name: 'MemoryBenchmark', frequency: 'visuals' }, */
+		/* { name: 'MemoryBenchmark', frequency: 'logic' }, */
 		/* { name: 'RWMBenchmark', frequency: 'visuals' },  */
-		/* { name: 'CommandBufferBenchmarkSystem', frequency: 'visuals' }, */
+
+		/* { name: 'HashingBenchmarkSystem', frequency: 'none' }, */
+		/* { name: 'EntityCommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
 	Test: [
@@ -136,15 +142,15 @@ export const systemSchedule = {
 	CoreTests: [
 		/* { name: 'SchemaTestSystem', frequency: 'none' }, */
 		/* { name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
-		/* { name: 'CommandBufferTestSystem', frequency: 'none' }, */
-		/* { name: 'QueryTestSystem', frequency: 'none' }, */
 		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */
+		
+		/* { name: 'EntityCommandBufferTestSystem', frequency: 'none' }, */
 		/* { name: 'EntityMaskManagerTestSystem', frequency: 'none' }, */
+		/* { name: 'QueryTestSystem', frequency: 'none' }, */
 	],
 
 	SideQuests: [
-		//! do not run together with tests, as they perform cleanup.
-		/* { name: `MaskAPIExampleSystem`, frequency: `logic` }, */
+
 	],
 
 	TickTests: [

@@ -11,8 +11,9 @@ const { parallelMemory } = ecs.getKernelIDs()
 
 const benchmarkConfig = {
 	activeMode: 'parallel', // Options: 'singleThread', 'parallel'
-	singleThreadEntityCount: 8_000_000,
-	parallelEntityCount: 7_000_000, 
+	singleThreadEntityCount: 10_000_000,
+	parallelEntityCount: 7_000_000, //! WTF hapenned there?! it was supposed to be 7 mil
+	//! WORKERS ARE SLEEPING NOW
 }
  
 /**
@@ -46,12 +47,13 @@ export class MemoryBenchmark {
 		// Set entity count based on active mode
 		this.entityCount =
 			benchmarkConfig.activeMode === 'parallel' ? benchmarkConfig.parallelEntityCount : benchmarkConfig.singleThreadEntityCount
-		const { payload } = this.compile({
-			memoryComponent: { value: 1 },
-			memoryTag: {},
-		})
-
-		this.creationPayload = payload
+		this.creationPayload = this.compile(
+			{
+				memoryComponent: { value: 1 },
+				memoryTag: {},
+			},
+			{ count: this.entityCount },
+		)
 		this.spawnEntities()
 	}
 
@@ -70,7 +72,7 @@ export class MemoryBenchmark {
 				// Read and immediately write to the same location to test memory bandwidth.
 				memoryComponents.value[j] = memoryComponents.value[j]
 			}
-			// Per the test requirements, we do not mark anything as dirty.
+			// do not mark anything as dirty.
 		}
 	}
 
@@ -84,7 +86,7 @@ export class MemoryBenchmark {
 
 	spawnEntities() {
 		console.log(`MemoryBenchmark (${benchmarkConfig.activeMode}): Spawning ${this.entityCount} entities...`)
-		this.createEntities(this.creationPayload, this.entityCount)
+		this.instantiate(this.creationPayload, this.entityCount)
 		console.log(`MemoryBenchmark (${benchmarkConfig.activeMode}): Finished queueing ${this.entityCount} entities for creation.`)
 	}
 

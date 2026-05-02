@@ -25,7 +25,7 @@ export class QueryTestSystem {
 		}
 
 		// Pre-compile payloads to make tests cleaner and more efficient.
-		const togglePayload = this.compile(queryTestToggle, {}).payload
+		const togglePayload = this.compile({ queryTestToggle: {} })
 
 		// A helper to clean up all test entities between tests to ensure isolation.
 		const cleanup = () => {
@@ -45,10 +45,8 @@ export class QueryTestSystem {
 					cleanup()
 
 					// Create one entity with the toggle, one without. Use ComponentA/B as markers.
-					this.createEntity(this.compile({ queryTestTag: {}, componentA: {} }).payload)
-					this.createEntity(
-						this.compile({ queryTestTag: {}, queryTestToggle: {}, componentB: {} }).payload,
-					)
+					this.instantiate(this.compile({ queryTestTag: {}, componentA: {} }), 1)
+					this.instantiate(this.compile({ queryTestTag: {}, queryTestToggle: {}, componentB: {} }), 1)
 					flush()
 
 					const withQuery = this.getQuery({ with: [queryTestTag, queryTestToggle] })
@@ -75,7 +73,7 @@ export class QueryTestSystem {
 					const withQuery = this.getQuery({ with: [queryTestTag, queryTestToggle] })
 					const withoutQuery = this.getQuery({ with: [queryTestTag], without: [queryTestToggle] })
 
-					const placeholder_e1 = this.createEntity(this.compile({ queryTestTag: {} }).payload)
+					const placeholder_e1 = this.instantiate(this.compile({ queryTestTag: {} }), 1)
 					flush()
 
 					// Before change
@@ -86,6 +84,7 @@ export class QueryTestSystem {
 
 					// Add component using the real entity ID. Placeholders are only valid
 					// for the duration of a single command buffer flush.
+					const location = this.getEntityLocation(real_e1)
 					this.addComponent(real_e1, togglePayload)
 					flush()
 
@@ -100,7 +99,7 @@ export class QueryTestSystem {
 					const withQuery = this.getQuery({ with: [queryTestTag, queryTestToggle] })
 					const withoutQuery = this.getQuery({ with: [queryTestTag], without: [queryTestToggle] })
 
-					this.createEntity(this.compile({ queryTestTag: {}, queryTestToggle: {} }).payload)
+					this.instantiate(this.compile({ queryTestTag: {}, queryTestToggle: {} }), 1)
 					flush()
 
 					// Before change
@@ -123,9 +122,7 @@ export class QueryTestSystem {
 					cleanup()
 					const withQuery = this.getQuery({ with: [queryTestTag, queryTestToggle] })
 
-					this.createEntity(
-						this.compile({ queryTestTag: {}, queryTestToggle: {} }).payload,
-					)
+					this.instantiate(this.compile({ queryTestTag: {}, queryTestToggle: {} }), 1)
 					flush()
 
 					const real_e1 = withQuery.getSingleEntity()
@@ -144,9 +141,9 @@ export class QueryTestSystem {
 					const anyQuery = this.getQuery({ with: [queryTestTag], any: [componentA, componentB] })
 
 					// Create entities with different combinations
-					this.createEntity(this.compile({ queryTestTag: {}, componentA: {} }).payload)
-					this.createEntity(this.compile({ queryTestTag: {}, componentB: {} }).payload)
-					this.createEntity(this.compile({ queryTestTag: {} }).payload) // This one should not match
+					this.instantiate(this.compile({ queryTestTag: {}, componentA: {} }), 1)
+					this.instantiate(this.compile({ queryTestTag: {}, componentB: {} }), 1)
+					this.instantiate(this.compile({ queryTestTag: {} }), 1) // This one should not match
 					flush()
 
 					expect(anyQuery.count).toBe(2)

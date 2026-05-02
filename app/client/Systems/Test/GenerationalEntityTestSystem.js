@@ -50,7 +50,7 @@ export class GenerationalEntityTestSystem {
 
 		// Since our simple test runner doesn't have `beforeAll`, we'll manually reset the state
 		// at the beginning to ensure a clean slate for our index and generation predictions.
-		entityManager.destroyAllEntities()
+		entityManager.destroyAll()
 
 		describe('Generational Entity IDs (Human-Readable Validation)', () => {
 			let firstEntityId
