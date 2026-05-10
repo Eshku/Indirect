@@ -4,7 +4,6 @@ const { engine } = await import('@client/Engine.js')
 
 await engine.init()
 
-
 const { gameManager, assetManager, layerManager, uiManager, inputManager, ecs } = engine.getManagers()
 
 const setupLayers = () => {
@@ -61,12 +60,18 @@ const preload = async () => {
 
 	await ecs.prefabManager.preload([
 		'player',
+
 		'spinningDrone',
 		'explosiveDrone',
+
 		'cursor',
+
 		'slashingArc',
-		'spawnDirector',
 		'shield',
+
+		'smallExplosionEffect',
+
+		'spawnDirector',
 	])
 }
 

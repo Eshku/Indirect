@@ -3,17 +3,21 @@
  * This is central to the entity pooling pattern.
  */
 export const lifecycleState = {
-	/**
-	 * A bitmask representing the entity's current state (e.g., ACTIVE, DYING, POOLED).
-	 */
-	meta: { isTrackable: true },
-	flags: {
-		type: 'bitmask',
+	// An enum field for the entity's exclusive state. The engine will auto-generate
+	// a constants object from this definition.
+	state: {
+		type: 'enum',
 		of: {
-			ACTIVE: 1 << 0,
-			DYING: 1 << 1,
-			POOLED: 1 << 2,
+			SPAWNING: 0,
+			ACTIVE: 1, // Normal gameplay participation
+			DYING: 2, // In the process of a death animation
+			DEAD: 3, // Finished dying, ready for pooling
+			POOLED: 4, // In the pool, inactive
 		},
-		default: 1 << 0, // default to active.
+		default: 1, // ACTIVE
 	},
+	// A generic timer for the current state's animation/duration.
+	timer: { type: 'f32', default: 0.0 },
+	// The total duration for the current state's animation.
+	duration: { type: 'f32', default: 0.0 },
 }

@@ -26,12 +26,6 @@ const PrimitiveTypeProcessors = Object.keys(TYPED_ARRAY_MAP).reduce((processors,
 			}
 			const offset = componentInfo.byteSize
 
-			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
-				mutators[propName] = new arrayConstructor(payloadBuffer, componentBaseOffset + offset, 1)
-			}
-
-			componentInfo.mutatorFactories.push(factory)
-
 			componentInfo.properties[propName] = {
 				type: definition.type,
 				alignment,
@@ -90,12 +84,6 @@ Object.assign(TypeProcessors, {
 				componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
 			}
 			const offset = componentInfo.byteSize
-
-			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
-				mutators[propName] = new arrayConstructor(payloadBuffer, componentBaseOffset + offset, 1)
-			}
-
-			componentInfo.mutatorFactories.push(factory)
 
 			componentInfo.properties[propName] = {
 				type: storageType,
@@ -159,12 +147,6 @@ Object.assign(TypeProcessors, {
 				componentInfo.byteSize += alignment - (componentInfo.byteSize % alignment)
 			}
 			const offset = componentInfo.byteSize
-
-			const factory = (mutators, payloadBuffer, componentBaseOffset) => {
-				mutators[propName] = new arrayConstructor(payloadBuffer, componentBaseOffset + offset, 1)
-			}
-
-			componentInfo.mutatorFactories.push(factory)
 
 			componentInfo.properties[propName] = {
 				type: storageType,
@@ -291,22 +273,6 @@ Object.assign(TypeProcessors, {
 			const itemConstructor = getTypedArrayConstructor(itemRepresentation.type)
 			const arrayStartPropName = `${propName}0`
 			const lengthPropName = userDefinedLengthProp || `${propName}_count`
-
-			const factory = (mutators, payloadBuffer, componentBaseOffset, info) => {
-				const arrayStartPropInfo = info.properties[arrayStartPropName]
-				const lengthPropInfo = info.properties[lengthPropName]
-
-				const arrayStartOffset = componentBaseOffset + arrayStartPropInfo.offset
-				mutators[propName] = new itemConstructor(payloadBuffer, arrayStartOffset, len)
-
-				if (lengthPropInfo) {
-					// This can fail if lengthPropInfo is not found, which it will be if the factory is created before the prop.
-					const lengthPropOffset = componentBaseOffset + lengthPropInfo.offset
-					mutators[lengthPropInfo.propName] = new lengthPropInfo.arrayConstructor(payloadBuffer, lengthPropOffset, 1)
-				}
-			}
-
-			componentInfo.mutatorFactories.push(factory)
 
 			const lengthProperty = userDefinedLengthProp || `${propName}_count`
 			componentInfo.representations[propName].lengthProperty = lengthProperty
@@ -464,16 +430,13 @@ export class SchemaCompiler {
 			typeID,
 			componentName, // Store componentName here for TypeProcessors to access
 			propertyKeys: [],
-			representations: {},
-			originalSchemaKeys: [],
-			mutatorFactories: [],
-			properties: {},
-			byteSize: 0,
-			alignment: 0,
-			sharedProperties: [],
+			representations: {}, // High-level schema info for interpretation/reconstruction
+			originalSchemaKeys: [], // Preserves original key order for shorthand resolution
+			properties: {}, //
+			byteSize: 0, //
+			alignment: 0, //
+			sharedProperties: [], //! currently not used
 			perEntityProperties: [],
-			isEnableable: false,
-			isTrackable: false,
 		}
 
 		if (schema === undefined || Object.keys(schema).length === 0) {
@@ -486,10 +449,6 @@ export class SchemaCompiler {
 		componentInfo.originalSchemaKeys = [...schemaKeys]
 		const implicitKeys = []
 		for (const propName of schemaKeys) {
-			if (propName === 'meta') {
-				this._parseMeta(schema.meta, componentInfo)
-				continue
-			}
 			const propDefinition = schema[propName]
 			this._parseProperty(propName, propDefinition, componentInfo, implicitKeys, componentName, constants)
 		}
@@ -542,15 +501,6 @@ export class SchemaCompiler {
 		}
 
 		return componentInfo
-	}
-
-	_parseMeta(metaDefinition, componentInfo) {
-		if (metaDefinition.isEnableable) {
-			componentInfo.isEnableable = true
-		}
-		if (metaDefinition.isTrackable) {
-			componentInfo.isTrackable = true
-		}
 	}
 
 	_parseProperty(propName, definitionObject, componentInfo, implicitKeys, componentName, constants) {

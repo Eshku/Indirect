@@ -6,7 +6,6 @@ const {
 	damageable,
 	damage,
 	health,
-	isPooled,
 	lifecycleState,
 	hitFlash,
 	hitHistory,
@@ -16,7 +15,7 @@ const {
 
 const { CollisionDetectionSystem } = ecs.getSystemIDs()
 
-const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 
 /**
  * Applies damage to entities based on collision events.
@@ -37,32 +36,31 @@ export class DamageSystem {
 		// A reactive query for the player entity.
 		this.playerQuery = this.getQuery({
 			with: [playerTag, damageable, health, damageCollisionBuffer, lifecycleState, hitFlash, immunity],
-			without: [isPooled],
 			modified: [damageCollisionBuffer],
 		})
 
 		// A reactive query for active, non-player entities that can receive damage.
 		this.receiversQuery = this.getQuery({
 			with: [damageable, health, damageCollisionBuffer, lifecycleState, hitFlash],
-			without: [isPooled, playerTag],
+			without: [playerTag],
 			modified: [damageCollisionBuffer],
 		})
 
 		// Query for all entities that can deal damage.
 		this.damagersQuery = this.getQuery({
-			with: [damage], // We don't need hitHistory here, we'll look it up on demand.
-			without: [isPooled],
+			with: [damage, lifecycleState], // We don't need hitHistory here, we'll look it up on demand.
 		})
 
 		// Query for piercing entities to cache their hit history data.
 		this.piercingDamagersQuery = this.getQuery({
-			with: [hitHistory],
-			without: [isPooled],
+			with: [hitHistory, lifecycleState],
 		})
 
 		// A cache to store damage values per entity for fast lookup in the main loop.
 		// This avoids repeated, slow "remote" component lookups.
 		this.damageCache = new Map()
+
+		this.isActiveMaskId = this.getMaskId('isActive')
 
 		// Caches for hit history data to avoid allocations and getComponent calls.
 		this.hitHistoryChunkCache = new Map()
@@ -115,8 +113,10 @@ export class DamageSystem {
 			const chunkId = damagerChunkIds[i]
 			const damages = this.getComponentData(chunkId, damage)
 			const entities = this.getEntities(chunkId)
-			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
-				this.damageCache.set(entities[j], damages.value[j])
+			const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+			for (let j = 0; j < activeCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+				this.damageCache.set(entities[indexInChunk], damages.value[indexInChunk])
 			}
 		}
 
@@ -126,10 +126,12 @@ export class DamageSystem {
 		for (let i = 0; i < piercingChunkIds.length; i++) {
 			const chunkId = piercingChunkIds[i]
 			const entities = this.getEntities(chunkId)
-			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
-				const entityId = entities[j]
+			const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+			for (let j = 0; j < activeCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+				const entityId = entities[indexInChunk]
 				this.hitHistoryChunkCache.set(entityId, chunkId)
-				this.hitHistoryIndexCache.set(entityId, j)
+				this.hitHistoryIndexCache.set(entityId, indexInChunk)
 			}
 		}
 	}
@@ -149,8 +151,7 @@ export class DamageSystem {
 
 		if (changedCount === 0) return
 
-		const states = this.getComponentData(playerChunkId, lifecycleState)
-		const isPlayerActive = (states.flags[0] & LIFECYCLE.ACTIVE) !== 0
+		const isPlayerActive = this.isBitSet(this.isActiveMaskId, playerChunkId, 0)
 		const isPlayerInvulnerable = this.isComponentEnabled(playerChunkId, 0, immunity)
 
 		if (isPlayerActive && !isPlayerInvulnerable) {
@@ -180,7 +181,6 @@ export class DamageSystem {
 		const receiverChunkIds = this.receiversQuery.getChunks()
 		for (let i = 0; i < receiverChunkIds.length; i++) {
 			const chunkId = receiverChunkIds[i]
-			const states = this.getComponentData(chunkId, lifecycleState)
 			// Get only the indices of entities whose collision buffer has changed.
 			const changedCount = this.getDirty(
 				chunkId,
@@ -194,7 +194,7 @@ export class DamageSystem {
 				const indexInChunk = this.scratchBuffer[j]
 
 				// Only process entities that are currently active.
-				if ((states.flags[indexInChunk] & LIFECYCLE.ACTIVE) !== 0) {
+				if (this.isBitSet(this.isActiveMaskId, chunkId, indexInChunk)) {
 					this._applyDamageToReceiver(chunkId, indexInChunk, currentTick)
 				}
 			}

@@ -1,8 +1,10 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { velocity, speed, movementIntent, isPooled } = ecs.getComponentIDs()
+const { velocity, speed, movementIntent } = ecs.getComponentIDs()
+const { lifecycleState } = ecs.getComponentIDs()
 
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 /**
  * This system is responsible for character movement based on their `MovementIntent`.
  * It translates the desired normalized direction vector from `MovementIntent` into a velocity,
@@ -18,9 +20,10 @@ export class MovementSystem {
 
 	init() {
 		this.query = this.getQuery({
-			with: [velocity, speed, movementIntent],
-			without: [isPooled],
+			with: [velocity, speed, movementIntent, lifecycleState],
 		})
+		this.isActiveMaskId = this.getMaskId('isActive')
+		this.scratchBuffer = this.createScratchBuffer()
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
@@ -36,9 +39,11 @@ export class MovementSystem {
 			const intentX = intentArrays.desiredX
 			const intentY = intentArrays.desiredY
 			const speedVal = speedArrays.value
-			const chunkSize = this.getChunkSize(chunkId)
 
-			for (let indexInChunk = 0; indexInChunk < chunkSize; indexInChunk++) {
+			const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+			for (let j = 0; j < activeCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+
 				velX[indexInChunk] = intentX[indexInChunk] * speedVal[indexInChunk]
 				velY[indexInChunk] = intentY[indexInChunk] * speedVal[indexInChunk]
 			}

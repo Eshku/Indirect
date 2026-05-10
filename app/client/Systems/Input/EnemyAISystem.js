@@ -1,7 +1,10 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { playerTag, enemyTag, position, movementIntent, isPooled, aiParameters, circleCollider } = ecs.getComponentIDs()
+const { playerTag, enemyTag, position, movementIntent, aiParameters, circleCollider } = ecs.getComponentIDs()
+
+const { lifecycleState } = ecs.getComponentIDs()
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 
 /**
  * A high-performance AI system that creates a dynamic, non-clumping enemy swarm.
@@ -44,14 +47,17 @@ export class EnemyAISystem {
 	init() {
 		// A query for all enemies that are capable of moving.
 		this.enemyQuery = this.getQuery({
-			with: [enemyTag, position, movementIntent, aiParameters],
-			without: [isPooled],
+			with: [enemyTag, position, movementIntent, aiParameters, lifecycleState],
 		})
 
 		// A singleton query to find the player.
 		this.playerQuery = this.getQuery({
 			with: [playerTag, position],
 		})
+
+		this.isActiveMaskId = this.getMaskId('isActive')
+
+		this.scratchBuffer = this.createScratchBuffer()
 
 		this.playerId = this.playerQuery.getSingleEntity()
 
@@ -91,11 +97,13 @@ export class EnemyAISystem {
 			const enemyPositions = this.getComponentData(chunkId, position)
 			const enemyIntents = this.getComponentData(chunkId, movementIntent)
 			const enemyAIParams = this.getComponentData(chunkId, aiParameters)
-			const chunkSize = this.getChunkSize(chunkId)
 
-			for (let j = 0; j < chunkSize; j++) {
-				const seekX = playerX - enemyPositions.x[j]
-				const seekY = playerY - enemyPositions.y[j]
+			const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+			for (let j = 0; j < activeCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+
+				const seekX = playerX - enemyPositions.x[indexInChunk]
+				const seekY = playerY - enemyPositions.y[indexInChunk]
 
 				const length = Math.sqrt(seekX * seekX + seekY * seekY)
 
@@ -112,12 +120,12 @@ export class EnemyAISystem {
 				// We use a single random seed, generated once at spawn time and stored in the aiParameters component.
 				// This is much more performant than hashing every frame. We derive all needed variations from this
 				// single seed by taking the fractional part of multiplications with arbitrary prime-like numbers.
-				const seed = enemyAIParams.randomSeed[j]
+				const seed = enemyAIParams.randomSeed[indexInChunk]
 
 				// --- Pseudo-Random Number Generation ---
 				// Derive 4 different pseudo-random numbers from the single seed.
-				// This uses `x - Math.floor(x)` to get the fractional part, which is a well-known
-				// and significantly faster alternative to the floating-point modulo operator (`% 1.0`).
+				// This uses `x - Math.floor(x)` to get the fractional part, which is
+				// significantly faster alternative to the floating-point modulo operator (`% 1.0`).
 				const m1 = seed * 12.9898
 				const m2 = seed * 78.233
 				const m3 = seed * 34.437
@@ -135,14 +143,14 @@ export class EnemyAISystem {
 				// Rotates the seek vector by a calculated angle,
 				// allowing for bidirectional orbiting.
 				// 1. Calculate the base orbit angle for this entity.
-				const baseOrbitBias = enemyAIParams.orbitBias[j]
+				const baseOrbitBias = enemyAIParams.orbitBias[indexInChunk]
 				const orbitBias = baseOrbitBias * strengthMultiplier
 				const baseOrbitAngle = orbitDirection * orbitBias // A signed angle in radians
 
 				// 2. Calculate the time-based "wobble" angle.
-				const baseWobbleFrequency = enemyAIParams.orbitWobbleFrequency[j]
+				const baseWobbleFrequency = enemyAIParams.orbitWobbleFrequency[indexInChunk]
 				const timePhase = currentTick * baseWobbleFrequency * freqMultiplier * 0.01 // 0.01 is a tuning constant
-				const orbitAngleSpread = enemyAIParams.orbitAngleSpread[j]
+				const orbitAngleSpread = enemyAIParams.orbitAngleSpread[indexInChunk]
 				const wobbleAngle = Math.sin(timePhase + angleSeed * Math.PI * 2) * orbitAngleSpread
 
 				// 3. Combine the base orbit and wobble into a final angle and rotate the seek vector.
@@ -155,8 +163,8 @@ export class EnemyAISystem {
 
 				// The final intent is scaled by `shouldMove`. If the enemy is too close,
 				// `shouldMove` is 0, and the intent becomes zero, stopping the enemy.
-				enemyIntents.desiredX[j] = rotatedX * shouldMove
-				enemyIntents.desiredY[j] = rotatedY * shouldMove
+				enemyIntents.desiredX[indexInChunk] = rotatedX * shouldMove
+				enemyIntents.desiredY[indexInChunk] = rotatedY * shouldMove
 			}
 		}
 	}

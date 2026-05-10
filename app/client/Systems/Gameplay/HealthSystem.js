@@ -3,8 +3,10 @@ const { ecs } = engine.getManagers()
 
 const { health, lifecycleState, playerTag } = ecs.getComponentIDs()
 
-const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 const { DamageSystem } = ecs.getSystemIDs()
+
+const DEATH_ANIMATION_DURATION = 1
 
 /**
  * Monitors entities with health and marks them as 'DYING' when their health drops to zero or below.
@@ -21,6 +23,10 @@ export class HealthSystem {
 	}
 
 	init() {
+		// Get mask IDs for lifecycle states
+		this.isActiveMaskId = this.getMaskId('isActive')
+		this.isDyingMaskId = this.getMaskId('isDying')
+
 		// A reactive query that only triggers for entities whose health has changed.
 		this.healthQuery = this.getQuery({
 			with: [health, lifecycleState],
@@ -49,10 +55,15 @@ export class HealthSystem {
 
 				// Check if health has dropped to or below zero.
 				if (healths.current[indexInChunk] <= 0) {
-					// Only mark as DYING if it's currently ACTIVE. This prevents
+					// Only mark as DYING if it's currently ACTIVE (using the mask). This prevents
 					// redundant commands for entities already dying or pooled.
-					if ((states.flags[indexInChunk] & LIFECYCLE.ACTIVE) !== 0) {
-						states.flags[indexInChunk] = LIFECYCLE.DYING
+					if (this.isBitSet(this.isActiveMaskId, chunkId, indexInChunk)) {
+						// Transition from ACTIVE to DYING
+						this.clearBit(this.isActiveMaskId, chunkId, indexInChunk)
+						this.setBit(this.isDyingMaskId, chunkId, indexInChunk)
+						states.state[indexInChunk] = LIFECYCLE.DYING
+						states.timer[indexInChunk] = DEATH_ANIMATION_DURATION
+						states.duration[indexInChunk] = DEATH_ANIMATION_DURATION
 						this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
 						wasChunkModified = true
 					}

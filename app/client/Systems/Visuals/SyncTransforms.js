@@ -1,8 +1,9 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, assetManager } = engine.getManagers()
 
-const { viewable, position, rotation, scale, tint, visibility, isPooled } = ecs.getComponentIDs()
+const { viewable, position, rotation, scale, tint, visibility } = ecs.getComponentIDs()
 const { SpriteFactorySystem, LayerFactorySystem } = ecs.getSystemIDs()
+const { playerProjectile } = ecs.getComponentIDs()
 
 /**
  * Synchronizes the visual properties (position, rotation, scale) of a PIXI.Sprite
@@ -15,31 +16,30 @@ export class SyncTransforms {
 	init() {
 		this.positionQuery = this.getQuery({
 			with: [viewable, position],
-			without: [isPooled],
-			// react: [position], // Position is high-volatility.
+			 // Position is high-volatility.
 		})
 
 		this.rotationQuery = this.getQuery({
 			with: [viewable, rotation],
-			without: [isPooled],
-			// react: [rotation], // Rotation is high-volatility.
+			 // Rotation is high-volatility.
 		})
 
 		this.scaleQuery = this.getQuery({
 			with: [viewable, scale],
 			modified: [scale], // Scale is low-volatility, changes are rare.
-			without: [isPooled],
 		})
 
 		this.tintQuery = this.getQuery({
 			with: [viewable, tint],
-			without: [isPooled],
 			modified: [tint],
 		})
 
 		this.visibilityQuery = this.getQuery({
 			with: [viewable, visibility],
-			modified: [visibility], // Broad-phase only.
+			// This query is intentionally NOT reactive on the broad-phase (`modified:`). We iterate all
+			// matching chunks and use the narrow-phase `getDirty` check below. This is because a
+			// reactive `modified:` query will not detect changes on entities that undergo a structural
+			// change in the same frame, as the broad-phase dirty flag is not transferred to the new chunk.
 		})
 
 		this.displayObjectStorage = assetManager.displayObjectStorage
@@ -132,20 +132,21 @@ export class SyncTransforms {
 		}
 
 		// --- Visibility Sync ---
-		const visibilityChunkIds = this.visibilityQuery.getChunks(lastTick, currentTick)
+		const visibilityChunkIds = this.visibilityQuery.getChunks()
 		for (let i = 0; i < visibilityChunkIds.length; i++) {
 			const chunkId = visibilityChunkIds[i]
 			const viewableRefs = this.getComponentData(chunkId, viewable).spriteRef
 			const visibilities = this.getComponentData(chunkId, visibility)
-			const chunkSize = this.getChunkSize(chunkId)
 
-			// Since this is a broad-phase only query, we iterate all entities in the dirty chunk.
-			for (let indexInChunk = 0; indexInChunk < chunkSize; indexInChunk++) {
+			// Use the narrow-phase check to find entities whose visibility has changed since the last visual frame.
+			const changedCount = this.getDirty(chunkId, visibility, lastTick, currentTick, this.scratchBuffer)
+			for (let j = 0; j < changedCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+				const isVisible = !!visibilities.isVisible[indexInChunk]
+
 				const spriteRef = viewableRefs[indexInChunk]
 				const view = this.displayObjectStorage[spriteRef]
-
-				// `isVisible` is a u8 (0 or 1)
-				view.visible = !!visibilities.isVisible[indexInChunk]
+				view.visible = isVisible
 			}
 		}
 	}

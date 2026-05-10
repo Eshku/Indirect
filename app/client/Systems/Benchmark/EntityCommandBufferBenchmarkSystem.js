@@ -7,7 +7,7 @@ const benchmarkConfig = {
 	// 'destruction', 'destruction_bulk',
 	// 'structuralChange', 'structuralChangeBulk',
 	// 'setData', 'setDataSilent'
-	activeBenchmark: 'creation',
+	activeBenchmark: 'setDataSilent',
 
 	creation: {
 		entityCount: 0,
@@ -19,7 +19,7 @@ const benchmarkConfig = {
 	},
 	creation_varied: {
 		entityCount: 0,
-		batchSize: 30_000, // 7k before
+		batchSize: 35_000, // 7k before
 	},
 	destruction: {
 		entityCount: 400_000,
@@ -35,15 +35,15 @@ const benchmarkConfig = {
 	},
 	structuralChangeBulk: {
 		entityCount: 50_000,
-		batchSize: 7_000,
+		batchSize: 7_000,//7k+
 	},
 	setData: {
 		entityCount: 100_000,
-		batchSize: 5_000, 
+		batchSize: 6_000, //6k
 	},
 	setDataSilent: {
 		entityCount: 100_000,
-		batchSize: 5_000, 
+		batchSize: 6_000, // slightly faster then non-silent.
 	},
 }
 

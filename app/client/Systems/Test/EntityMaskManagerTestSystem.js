@@ -1,11 +1,11 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, testManager } = engine.getManagers()
 const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`)
- 
-const { entityMaskManager } = engine.getManagers() 
+
+const { entityMaskManager } = engine.getManagers()
 
 // Use existing components for testing to avoid schema changes.
-const { componentA, componentB } = ecs.getComponentIDs()
+const { componentA, componentB, hitFlash } = ecs.getComponentIDs()
 
 /**
  * A system dedicated to testing the new GeneralizedBitmaskFilters functionality.
@@ -18,25 +18,20 @@ export class EntityMaskManagerTestSystem {
 		this.ringBufferTestResolve = null
 		this.ringBufferTestDamagedMaskId = null
 		this.ringBufferTestChunkId = null
-		
-		this.entityMaskManager = entityMaskManager 
+
+		this.entityMaskManager = entityMaskManager
 
 		// Helpers to make tests cleaner
 		const flush = () => this.flush()
 		const cleanup = () => {
-			const query = this.getQuery({ with: [componentA] })
-			const chunkIds = query.getChunks()
-			for (let i = 0; i < chunkIds.length; i++) {
-				this.destroyEntitiesInChunk(chunkIds[i])
-			}
-			flush() 
-			this.entityMaskManager.clear() // Clear all registered mask sets for test isolation
+			ecs.destroyAll()
+			flush() // Flushes the destruction commands.
 		}
 
-		describe('EntityMaskManager', () => { 
+		describe('EntityMaskManager', () => {
 			// --- STATE MASK TESTS ---
 			describe('State Masks', () => {
-				it('should set, clear, and query bits for a state mask', () => { 
+				it('should set, clear, and query bits for a state mask', () => {
 					cleanup()
 
 					// 1. Setup: Register a state mask that allocates for archetypes with componentA
@@ -45,11 +40,7 @@ export class EntityMaskManagerTestSystem {
 
 					// 2. Create entities that will match the allocation query
 					const payload = this.compile({ componentA: {} })
-					const entities = [
-						this.instantiate(payload, 1),
-						this.instantiate(payload, 1),
-						this.instantiate(payload, 1),
-					]
+					const entities = [this.instantiate(payload, 1), this.instantiate(payload, 1), this.instantiate(payload, 1)]
 					flush()
 
 					// 3. Get real entity IDs and chunk info
@@ -62,23 +53,23 @@ export class EntityMaskManagerTestSystem {
 					const scratchBuffer = this.createScratchBuffer()
 
 					// 4. Action: Set bits for specific entities
-					this.entityMaskManager.setBitById(selectedMaskId, realEntities[0]) 
-					this.entityMaskManager.setBitById(selectedMaskId, realEntities[2]) 
+					this.entityMaskManager.setBitById(selectedMaskId, realEntities[0])
+					this.entityMaskManager.setBitById(selectedMaskId, realEntities[2])
 
 					// 5. Verification: Check which entities are selected
-					let selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer) 
+					let selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
 					expect(selectedCount).toBe(2)
 					const selectedIndices = Array.from(scratchBuffer.slice(0, selectedCount))
 					// The indices in the chunk should be 0 and 2
 					expect(selectedIndices.includes(0)).toBe(true)
 					expect(selectedIndices.includes(1)).toBe(false)
 					expect(selectedIndices.includes(2)).toBe(true)
-					
+
 					// 6. Action: Clear a bit
-					this.entityMaskManager.clearBitById(selectedMaskId, realEntities[0]) 
+					this.entityMaskManager.clearBitById(selectedMaskId, realEntities[0])
 
 					// 7. Verification: Check again
-					selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer) 
+					selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
 					expect(selectedCount).toBe(1)
 					expect(scratchBuffer[0]).toBe(2) // Only entity at index 2 should be left
 				})
@@ -103,12 +94,12 @@ export class EntityMaskManagerTestSystem {
 					const entityToSwap = entities[1] // at index 1
 
 					// 2. Set state: select the entity to move, but not the one to be swapped.
-					this.entityMaskManager.setBitById(selectedMaskId, entityToMove) 
+					this.entityMaskManager.setBitById(selectedMaskId, entityToMove)
 
 					// Verify initial state
 					const scratchBuffer = this.createScratchBuffer()
-					let selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer) 
-					expect(selectedCount).toBe(1) 
+					let selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
+					expect(selectedCount).toBe(1)
 					expect(scratchBuffer[0]).toBe(0) // Index of entityToMove
 
 					// 3. Force an archetype move on the first entity
@@ -120,7 +111,7 @@ export class EntityMaskManagerTestSystem {
 					// The old chunk now contains only the swapped entity, which has been moved to index 0.
 					// Its bit should be CLEAR, as it was never set. The bug would cause it to inherit
 					// the SET bit from the moved entity's old slot.
-					selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer) 
+					selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
 					expect(selectedCount).toBe(0, 'State bit for swapped entity should be clear')
 				})
 
@@ -141,14 +132,14 @@ export class EntityMaskManagerTestSystem {
 					const chunkId = query.getChunks()[0]
 					const entities = this.getEntities(chunkId).slice(0, 2)
 					const entityToDestroy = entities[0] // at index 0
-					const entityToSwap = entities[1]    // at index 1
+					const entityToSwap = entities[1] // at index 1
 
 					// 2. Set state: select the entity that will be swapped.
 					this.entityMaskManager.setBitById(selectedMaskId, entityToSwap)
 
 					// Verify initial state
 					const scratchBuffer = this.createScratchBuffer()
-					let selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer)
+					let selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
 
 					expect(selectedCount).toBe(1, 'Initial state should have one selected entity')
 					expect(scratchBuffer[0]).toBe(1, 'Initially selected entity should be at index 1')
@@ -159,7 +150,7 @@ export class EntityMaskManagerTestSystem {
 
 					// 4. Verification after swap
 					// The swapped entity is now at index 0. Its bit should be set.
-					selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer)
+					selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
 					expect(selectedCount).toBe(1, 'State bit for swapped entity should be preserved at new index')
 					expect(scratchBuffer[0]).toBe(0, 'Swapped entity should now be at index 0')
 
@@ -169,7 +160,7 @@ export class EntityMaskManagerTestSystem {
 
 					// 6. Verification after new entity creation
 					// The new entity should NOT have the bit set. The bug would cause it to inherit the stale bit.
-					selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer)
+					selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
 
 					expect(selectedCount).toBe(1, 'New entity should not inherit stale state bit from old slot')
 					expect(this.getChunkSize(chunkId)).toBe(2)
@@ -191,9 +182,13 @@ export class EntityMaskManagerTestSystem {
 					expect(oldLocation).toBeDefined()
 
 					// 2. Set state on the entity in its original chunk
-					this.entityMaskManager.setBitById(selectedMaskId, entityId) 
-					const scratchBuffer = this.createScratchBuffer() 
-					const initialCount = this.entityMaskManager.getStateIndices(selectedMaskId, oldLocation.chunkId, scratchBuffer)
+					this.entityMaskManager.setBitById(selectedMaskId, entityId)
+					const scratchBuffer = this.createScratchBuffer()
+					const initialCount = this.entityMaskManager.getIndicesFromMask(
+						selectedMaskId,
+						oldLocation.chunkId,
+						scratchBuffer,
+					)
 					expect(initialCount).toBe(1)
 
 					// 3. Force an archetype move by adding a component
@@ -206,25 +201,30 @@ export class EntityMaskManagerTestSystem {
 					expect(newLocation).toBeDefined()
 					expect(newLocation.chunkId).not.toBe(oldLocation.chunkId, 'Entity should have moved to a new chunk')
 
-					// The bit should have been copied to the new chunk's mask 
-					const newCount = this.entityMaskManager.getStateIndices(selectedMaskId, newLocation.chunkId, scratchBuffer) 
+					// The bit should have been copied to the new chunk's mask
+					const newCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, newLocation.chunkId, scratchBuffer)
 					expect(newCount).toBe(1, 'State bit should be preserved after moving chunks')
 					expect(scratchBuffer[0]).toBe(newLocation.indexInChunk)
-					
+
 					// The old chunk's mask should now be empty
-					const oldCount = this.entityMaskManager.getStateIndices(selectedMaskId, oldLocation.chunkId, scratchBuffer)
+					const oldCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, oldLocation.chunkId, scratchBuffer)
 					expect(oldCount).toBe(0, 'State bit should be cleared from the old chunk after a move')
 				})
 
-				it("should not inherit stale state when a new entity reuses a moved entity's old slot", () => {
+				it('should prevent stale state when a slot is recycled after a move', () => {
 					cleanup()
 
-					// 1. Setup
+					// This is a critical test for data integrity. It verifies that when an entity (A)
+					// is moved, its old memory slot is correctly cleared. If it were not, a new
+					// entity (B) that reuses that slot could incorrectly inherit A's state.
+
+					// --- ARRANGE ---
+					// 1. Create a state mask and a payload for our test entities.
 					const allocationRule = { with: [componentA] }
 					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:stale_state', allocationRule)
 					const creationPayload = this.compile({ componentA: {} })
 
-					// 2. Create entity A and set its state
+					// 2. Create Entity A and set its state.
 					this.instantiate(creationPayload, 1)
 					flush()
 
@@ -233,30 +233,41 @@ export class EntityMaskManagerTestSystem {
 					const oldLocation = this.getEntityLocation(entityA)
 					const scratchBuffer = this.createScratchBuffer()
 
-					this.entityMaskManager.setBitById(selectedMaskId, entityA)
-					let selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, oldLocation.chunkId, scratchBuffer)
+					this.setBit(selectedMaskId, oldLocation.chunkId, oldLocation.indexInChunk)
+					let selectedCount = this.entityMaskManager.getIndicesFromMask(
+						selectedMaskId,
+						oldLocation.chunkId,
+						scratchBuffer,
+					)
 					expect(selectedCount).toBe(1, 'Entity A should initially be selected')
 
-					// 3. Move entity A to a new archetype. This vacates its slot.
+					// --- ACT ---
+					// 3. Move Entity A to a new archetype. This vacates its slot. The `handleEntityMoved`
+					// hook is responsible for clearing the bit at this now-stale location.
 					const addPayload = this.compile({ componentB: {} })
 					this.addComponent(entityA, addPayload)
 					flush()
 
-					// 4. Create entity B. It should recycle the chunk and slot vacated by A.
+					// 4. Create Entity B. It should recycle the chunk and slot just vacated by A.
 					this.instantiate(creationPayload, 1)
 					flush()
 
-					// 5. Verification
+					// --- ASSERT ---
+					// 5. Verify that Entity B did NOT inherit the stale state.
 					const queryB = this.getQuery({ with: [componentA], without: [componentB] }) // Query for entity B
 					const entityB = queryB.getSingleEntity()
 					expect(entityB).toBeDefined()
 
 					const locationB = this.getEntityLocation(entityB)
-					selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, locationB.chunkId, scratchBuffer)
-					expect(selectedCount).toBe(0, 'New entity B should not inherit the stale "selected" state from the recycled slot')
+					// The bug would be that selectedCount is 1 here.
+					selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, locationB.chunkId, scratchBuffer)
+					expect(selectedCount).toBe(
+						0,
+						'New entity B should not inherit the stale "selected" state from the recycled slot',
+					)
 				})
 
-				it("should not inherit stale state when a slot is reused after a move from a non-empty chunk", () => {
+				it('should not inherit stale state when a slot is reused after a move from a non-empty chunk', () => {
 					cleanup()
 
 					// 1. Setup
@@ -277,7 +288,7 @@ export class EntityMaskManagerTestSystem {
 					// 3. Set the state on the entity we are about to move.
 					this.entityMaskManager.setBitById(selectedMaskId, entityToMove)
 					const scratchBuffer = this.createScratchBuffer()
-					let selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer)
+					let selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
 					expect(selectedCount).toBe(1, 'Entity to move should be selected')
 					expect(scratchBuffer[0]).toBe(1, 'Selected entity should be at index 1')
 
@@ -294,7 +305,7 @@ export class EntityMaskManagerTestSystem {
 					// 6. Verification
 					// If the bit at index 1 was not cleared by handleEntitiesMoved, the new entity
 					// at that slot would inherit the stale "selected" state.
-					selectedCount = this.entityMaskManager.getStateIndices(selectedMaskId, chunkId, scratchBuffer)
+					selectedCount = this.entityMaskManager.getIndicesFromMask(selectedMaskId, chunkId, scratchBuffer)
 					expect(this.getChunkSize(chunkId)).toBe(2, 'Chunk should now contain two entities')
 					expect(selectedCount).toBe(0, 'No entities should be selected after the move and recreation')
 				})
@@ -304,16 +315,15 @@ export class EntityMaskManagerTestSystem {
 			describe('Common Patterns', () => {
 				it('should handle enable/disable state for a component', () => {
 					cleanup()
-					// After cleanup(), we must re-register any masks needed for the test,
-					// as `clear()` wipes the manager's state.
-					this.entityMaskManager.registerEnableableMask(componentA)
+					// After cleanup(), we must re-register all declarative masks.
+					this.entityMaskManager.registerDeclarativeMasks()
 
 					// 2. Create an entity. By default, its bit is not set, so it's "disabled".
-					const payload = this.compile({ componentA: {} })
+					const payload = this.compile({ hitFlash: {} })
 					this.instantiate(payload, 1) // This returns a placeholder, don't store it.
 					this.flush()
 
-					const query = this.getQuery({ with: [componentA] })
+					const query = this.getQuery({ with: [hitFlash] })
 					const entityId = query.getSingleEntity() // Get the REAL entity ID after the flush.
 					expect(entityId).toBeDefined('Test entity should be found after creation.')
 
@@ -322,22 +332,22 @@ export class EntityMaskManagerTestSystem {
 					const scratchBuffer = this.createScratchBuffer()
 
 					// 3. Verification: Initially disabled.
-					let enabledCount = this.getEnabled(chunkId, componentA, scratchBuffer)
+					let enabledCount = this.getEnabled(chunkId, hitFlash, scratchBuffer)
 					expect(enabledCount).toBe(0, 'Entity should be disabled by default')
 
 					// 4. Action: Enable the component on the entity.
-					this.enableComponentById(entityId, componentA)
+					this.enableComponentById(entityId, hitFlash)
 
 					// 5. Verification: Now enabled.
-					enabledCount = this.getEnabled(chunkId, componentA, scratchBuffer)
+					enabledCount = this.getEnabled(chunkId, hitFlash, scratchBuffer)
 					expect(enabledCount).toBe(1, 'Entity should be enabled after calling enable()')
 					expect(scratchBuffer[0]).toBe(location.indexInChunk)
 
 					// 6. Action: Disable the component on the entity.
-					this.disableComponentById(entityId, componentA)
+					this.disableComponentById(entityId, hitFlash)
 
 					// 7. Verification: Disabled again.
-					enabledCount = this.getEnabled(chunkId, componentA, scratchBuffer)
+					enabledCount = this.getEnabled(chunkId, hitFlash, scratchBuffer)
 					expect(enabledCount).toBe(0, 'Entity should be disabled after calling disable()')
 				})
 			})
@@ -449,15 +459,11 @@ export class EntityMaskManagerTestSystem {
 				it('should fire and detect events in a single tick window', () => {
 					cleanup()
 
-					// 1. Setup 
+					// 1. Setup
 					const allocationRule = { with: [componentA] }
 					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged', allocationRule)
 					const payload = this.compile({ componentA: {} })
-					const entities = [
-						this.instantiate(payload, 1),
-						this.instantiate(payload, 1),
-						this.instantiate(payload, 1),
-					]
+					const entities = [this.instantiate(payload, 1), this.instantiate(payload, 1), this.instantiate(payload, 1)]
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -469,10 +475,10 @@ export class EntityMaskManagerTestSystem {
 					const currentTick = 5
 
 					// 2. Action: Fire events
-					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[1], currentTick) 
+					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[1], currentTick)
 
 					// 3. Verification
-					const changedCount = this.entityMaskManager.getEventIndicesSince(damagedMaskId, chunkId, 4, 5, scratchBuffer)
+					const changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, chunkId, 4, 5, scratchBuffer)
 					expect(changedCount).toBe(1)
 					expect(scratchBuffer[0]).toBe(1) // Entity at index 1
 				})
@@ -491,14 +497,14 @@ export class EntityMaskManagerTestSystem {
 					const scratchBuffer = this.createScratchBuffer()
 
 					// Fire event at tick 10
-					this.entityMaskManager.fireEventById(damagedMaskId, entityId, 10) 
+					this.entityMaskManager.fireEventById(damagedMaskId, entityId, 10)
 
 					// Verify it's found when querying for tick 10
-					let changedCount = this.entityMaskManager.getEventIndicesSince(damagedMaskId, chunkId, 9, 10, scratchBuffer)
+					let changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, chunkId, 9, 10, scratchBuffer)
 					expect(changedCount).toBe(1)
 
 					// Verify it's NOT found when querying for tick 11
-					changedCount = this.entityMaskManager.getEventIndicesSince(damagedMaskId, chunkId, 10, 11, scratchBuffer)
+					changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, chunkId, 10, 11, scratchBuffer)
 					expect(changedCount).toBe(0)
 				})
 
@@ -507,11 +513,7 @@ export class EntityMaskManagerTestSystem {
 					const allocationRule = { with: [componentA] }
 					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged_multi', allocationRule)
 					const payload = this.compile({ componentA: {} })
-					const entities = [
-						this.instantiate(payload, 1),
-						this.instantiate(payload, 1),
-						this.instantiate(payload, 1),
-					]
+					const entities = [this.instantiate(payload, 1), this.instantiate(payload, 1), this.instantiate(payload, 1)]
 					flush()
 
 					const query = this.getQuery({ with: [componentA] })
@@ -522,12 +524,12 @@ export class EntityMaskManagerTestSystem {
 					const scratchBuffer = this.createScratchBuffer()
 
 					// Fire events across multiple ticks
-					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[0], 20) 
-					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[2], 22) 
-					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[0], 22) // Duplicate event, should be aggregated 
+					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[0], 20)
+					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[2], 22)
+					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[0], 22) // Duplicate event, should be aggregated
 
 					// Query over the whole window
-					const changedCount = this.entityMaskManager.getEventIndicesSince(damagedMaskId, chunkId, 19, 22, scratchBuffer)
+					const changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, chunkId, 19, 22, scratchBuffer)
 					expect(changedCount).toBe(2)
 					const changedIndices = Array.from(scratchBuffer.slice(0, changedCount)).sort()
 					expect(changedIndices).toEqual([0, 2])
@@ -552,12 +554,18 @@ export class EntityMaskManagerTestSystem {
 					this.entityMaskManager.fireEventById(damagedMaskId, entityId, 10)
 
 					// Verify it's found in the old chunk
-					let changedCount = this.entityMaskManager.getEventIndicesSince(damagedMaskId, oldLocation.chunkId, 9, 10, scratchBuffer)
+					let changedCount = this.entityMaskManager.getEventsSince(
+						damagedMaskId,
+						oldLocation.chunkId,
+						9,
+						10,
+						scratchBuffer,
+					)
 					expect(changedCount).toBe(1, 'Event should be detected in the original chunk')
 					expect(scratchBuffer[0]).toBe(oldLocation.indexInChunk)
 
 					// 3. Force an archetype move by adding a component
-					const addPayload = this.compile({componentB : {}})
+					const addPayload = this.compile({ componentB: {} })
 					const location = this.getEntityLocation(entityId)
 					this.addComponent(entityId, addPayload)
 					flush()
@@ -568,7 +576,7 @@ export class EntityMaskManagerTestSystem {
 					expect(newLocation.chunkId).not.toBe(oldLocation.chunkId, 'Entity should have moved to a new chunk')
 
 					// The event history should have been copied to the new chunk's mask
-					changedCount = this.entityMaskManager.getEventIndicesSince(damagedMaskId, newLocation.chunkId, 9, 10, scratchBuffer)
+					changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, newLocation.chunkId, 9, 10, scratchBuffer)
 					expect(changedCount).toBe(1, 'Event history should be preserved after moving chunks')
 					expect(scratchBuffer[0]).toBe(newLocation.indexInChunk)
 				})
@@ -576,8 +584,12 @@ export class EntityMaskManagerTestSystem {
 				it('should correctly handle history ring buffer overflow', async () => {
 					cleanup()
 					const allocationRule = { with: [componentA] }
-					// Use a small history (4) for easier testing 
-					this.ringBufferTestDamagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged_overflow', allocationRule, 4)
+					// Use a small history (4) for easier testing
+					this.ringBufferTestDamagedMaskId = this.entityMaskManager.createEventMask(
+						'bitmask_test:damaged_overflow',
+						allocationRule,
+						4,
+					)
 					const payload = this.compile({ componentA: {} })
 					this.instantiate(payload, 1)
 					flush()
@@ -592,8 +604,7 @@ export class EntityMaskManagerTestSystem {
 			})
 		})
 
-		// Run all the defined tests
-		setTimeout(() => testManager.runAllTests(), 500) // Increased delay to allow for multiple ticks
+		testManager.runAllTests()
 	}
 
 	update({ currentTick, lastTick }) {
@@ -611,7 +622,7 @@ export class EntityMaskManagerTestSystem {
 					if (!entityId || !chunkId) return
 
 					// Fire an event at an early tick (e.g., currentTick + 1)
-					this.entityMaskManager.fireEventById(damagedMaskId, entityId, currentTick + 1) 
+					this.entityMaskManager.fireEventById(damagedMaskId, entityId, currentTick + 1)
 					this.ringBufferTestPhase = 'WAIT_FOR_OVERFLOW'
 					break
 
@@ -627,13 +638,13 @@ export class EntityMaskManagerTestSystem {
 					// Tick 8 (index 0) maintenance clears slot for tick 9 (index 1).
 					// So, by tick 8, the original event at tick 5 (index 1) should be cleared by maintenance for tick 9.
 					// We query at tick 9 for events since tick 4.
-					
+
 					const eventTick = lastTick + 1 // The tick the event was fired on
 					const historyLength = this.entityMaskManager.getMaskSetInfo(damagedMaskId).historyLength
 					const queryTick = eventTick + historyLength + 1 // Query after enough ticks have passed
 
 					if (currentTick >= queryTick) {
-						const changedCount = this.entityMaskManager.getEventIndicesSince(
+						const changedCount = this.entityMaskManager.getEventsSince(
 							damagedMaskId,
 							chunkId,
 							eventTick - 1,

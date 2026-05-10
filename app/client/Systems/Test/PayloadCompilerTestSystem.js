@@ -457,46 +457,6 @@ export class PayloadCompilerTestSystem {
 				})
 			})
 
-			describe('Dirty Tracking Metadata', () => {
-				it('should include trackableComponentIds for multi-component payloads', () => {
-					// health is trackable, position is not.
-					const source = {
-						health: { current: 50 },
-						position: { x: 10, y: 20 },
-					}
-					const payload = this.compile(source)
-
-					expect(payload.trackableComponentIds).toBeDefined()
-					expect(payload.trackableComponentIds).toBeInstanceOf(Array)
-					expect(payload.trackableComponentIds).toEqual([health])
-				})
-
-				it('should include trackableComponentIds for single-component payloads (trackable)', () => {
-					const payload = this.compile({ health: { current: 50 } })
-
-					expect(payload.trackableComponentIds).toBeDefined()
-					expect(payload.trackableComponentIds).toEqual([health])
-				})
-
-				it('should include an empty trackableComponentIds for single-component payloads (not trackable)', () => {
-					const payload = this.compile({ position: { x: 10 } })
-
-					expect(payload.trackableComponentIds).toBeDefined()
-					expect(payload.trackableComponentIds).toEqual([])
-				})
-
-				it('should include an empty trackableComponentIds when no components are trackable', () => {
-					const source = { 
-						position: { x: 10 },
-						velocity: { x: 1 },
-					}
-					const payload = this.compile(source)
-
-					expect(payload.trackableComponentIds).toBeDefined()
-					expect(payload.trackableComponentIds).toEqual([])
-				})
-			})
-
 			describe('compile() - Overrides and Excludes', () => {
 				it('should compile from a prefab, applying overrides and excludes', () => {
 					// The 'test_prefab' has Position {x:0, y:0}, Velocity {x:0, y:0}, TestEntityTag

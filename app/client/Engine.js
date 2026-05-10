@@ -12,15 +12,17 @@ const MANAGER_INIT_ORDER = [
 	`WorkerManager`,
 
 
-	'ecs',
 	'ComponentManager',
 	'PayloadCompiler',
 	'EntityManager',
 	'QueryManager',
-	'EntityMaskManager',
+	'EntityMaskManager', // must run after component manager fills data.
 	'PrefabManager',
-	'SystemManager',
+	'EventManager',
 
+	'ecs',
+
+	'SystemManager',
 
 	// --- User-Facing systems ---
 	'UiManager',
@@ -123,8 +125,7 @@ export class Engine {
 		const loadedManagers = new Map()
 
 
-		const { ecs } = await import('@managers/EntityManager/ECS.js')
-		loadedManagers.set('ecs', ecs)
+
 
 		const { payloadCompiler } = await import(`@managers/SystemManager/PayloadCompiler.js`)
 		loadedManagers.set('PayloadCompiler', payloadCompiler)
@@ -142,8 +143,12 @@ export class Engine {
 
 		const { prefabManager } = await import('@managers/PrefabManager/PrefabManager.js')
 		loadedManagers.set('PrefabManager', prefabManager)
+
 		const { systemManager } = await import('@managers/SystemManager/SystemManager.js')
 		loadedManagers.set('SystemManager', systemManager)
+
+				const { ecs } = await import('@managers/EntityManager/ECS.js')
+		loadedManagers.set('ecs', ecs)
 
 		const { layerManager } = await import('@managers/LayerManager/LayerManager.js')
 		loadedManagers.set('LayerManager', layerManager)
@@ -176,6 +181,9 @@ export class Engine {
 
 		const { entityMaskManager } = await import('@managers/EntityMaskManager/EntityMaskManager.js')
 		loadedManagers.set('EntityMaskManager', entityMaskManager)
+
+		const { eventManager } = await import('@managers/EventManager/EventManager.js')
+		loadedManagers.set('EventManager', eventManager)
 
 		return loadedManagers
 	}

@@ -232,7 +232,7 @@ export class ParallelSystem {
 
 ### System API
 
-All structural changes to entities (creation, deletion, adding/removing components) are deferred using an `EntityCommandBuffer`. 
+All structural changes to entities (creation, deletion, adding/removing components) are deferred using an `EntityCommandBuffer`.
 
 A set of common methods are injected into every system instance. These provide direct access to the command buffer and the payload compiler.
 
@@ -310,17 +310,16 @@ The frame lifecycle proceeds in this fixed order:
     - **Context:** Receives a variable `deltaTime` based on the actual time since the last frame.
     - **Purpose:** Ideal for low-latency input processing that needs to happen before any game logic.
 
-2.  **Timed Groups (`frequency: <number>`)**
+2.  **Logic Group (`frequency: 'logic'`)**
+    - **When:** Runs on a fixed, deterministic timestep (e.g., 60 times per second), independent of the frame rate. If the game lags, this group may run multiple times in a single frame to catch up.
+    - **Context:** Receives a constant `deltaTime` (e.g., `1/60`).
+    - **Purpose:** All core gameplay logic (physics, AI, state changes) should be here to ensure deterministic and frame-rate-independent behavior.
+    3.  **Timed Groups (`frequency: <number>`)**
     - **When:** Runs on a timer (e.g., `frequency: 10` runs 10 times per second).
     - **Context:** Receives a variable `deltaTime`.
     - **Purpose:** For infrequent logic that doesn't need to run every frame.
 
-3.  **Logic Group (`frequency: 'logic'`)**
-    - **When:** Runs on a fixed, deterministic timestep (e.g., 60 times per second), independent of the frame rate. If the game lags, this group may run multiple times in a single frame to catch up.
-    - **Context:** Receives a constant `deltaTime` (e.g., `1/60`).
-    - **Purpose:** All core gameplay logic (physics, AI, state changes) should be here to ensure deterministic and frame-rate-independent behavior.
-
-4.  **Visuals Group (`frequency: 'visuals'`)**
+3.  **Visuals Group (`frequency: 'visuals'`)**
     - **When:** Runs once at the end of the frame, just before rendering.
     - **Context:** Receives a variable `deltaTime` and an `alpha` value (0.0 to 1.0) for interpolating between logic ticks, ensuring smooth motion.
     - **Purpose:** For any logic tied to rendering, such as camera movement, animations, and synchronizing game state to visual representations.

@@ -170,22 +170,24 @@ export class ComponentManager {
 	}
 
 	/**
-	 * Retrieves an object containing all registered component constants,
-	 * keyed by their names. This is for easy access in systems, e.g., `const { Position, Velocity } = componentManager.getComponents()`
-	 * @returns {Object.<string, object>} An object mapping component names to their constants object.
+	 * Retrieves an object containing all registered component constants (enums, bitmasks),
+	 * keyed by their component names. This is a developer convenience. For more targeted
+	 * access, use `getConstantsFor(componentName)`.
+	 * @returns {Object.<string, object>} An object mapping component names to their full constants object.
 	 */
-	getComponents() {
+	getComponentConstants() {
 		if (this._cachedComponentsObject) {
 			return this._cachedComponentsObject
 		}
 
 		this._cachedComponentsObject = {}
 		for (let i = 0; i < Schema.nextComponentTypeID; i++) {
-			const name = Schema.componentNames[i]
-			this._cachedComponentsObject[name] = this.componentConstants[i]
+			const name = Schema.componentNames[i];
+			if (name) {
+				this._cachedComponentsObject[name] = this.componentConstants[i];
+			}
 		}
-
-		return this._cachedComponentsObject
+		return Object.freeze(this._cachedComponentsObject);
 	}
 
 	/**
@@ -227,26 +229,14 @@ export class ComponentManager {
 	 * @returns {string[]} An array of component names.
 	 */
 	getComponentNamesForArchetype(archetypeId) {
-		const typeIDs = this.entityManager.getComponentTypeIDsForArchetype(archetypeId)
-		if (!typeIDs) {
+		const typeIDs = this.entityManager.getComponentTypeIDsForArchetypeAlloc(archetypeId)
+		if (!typeIDs || typeIDs.length === 0) {
 			console.warn(`ComponentManager: Could not find type IDs for archetype ${archetypeId}.`)
 			return []
 		}
 		return Array.from(typeIDs).map(id => Schema.componentNames[id])
 	}
 
-	/**
-	 * Checks if an archetype has a specific component.
-	 * This is the fastest possible check, intended for use within system loops where
-	 * the archetype ID is already known. It checks the archetype's structure.
-	 * @param {number} archetypeId - The internal ID of the archetype to check.
-	 * @param {number} componentTypeID - The component type ID to check for.
-	 * @returns {boolean} True if the archetype contains the component type, false otherwise.
-	 */
-	hasComponent(archetypeId, componentTypeID) {
-		// Delegate directly to the EntityManager, which is the source of truth for archetype data.
-		return this.entityManager.hasComponentType(archetypeId, componentTypeID)
-	}
 }
 
 export const componentManager = new ComponentManager()

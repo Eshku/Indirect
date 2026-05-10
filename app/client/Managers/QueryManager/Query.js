@@ -1,5 +1,6 @@
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
+const { archetypeMatches } = await import(`../../Core/ArchetypeMatcher.js`)
 
 const { NULL_CHUNK_ID, MAX_COMPONENTS, MASK_PARTS } = await import(`@managers/EntityManager/EntityManager.js`)
 
@@ -320,40 +321,11 @@ export class Query {
 	}
 
 	archetypeMatches(archetype) {
-		const archetypeMaskOffset = archetype * MASK_PARTS
-
-		// Check required components
-		for (let i = 0; i < MASK_PARTS; i++) {
-			const part = entityStore.archetypeMasks[archetypeMaskOffset + i]
-			if ((part & this._requiredMask[i]) !== this._requiredMask[i]) {
-				return false
-			}
-		}
-
-		// Check excluded components
-		for (let i = 0; i < MASK_PARTS; i++) {
-			const part = entityStore.archetypeMasks[archetypeMaskOffset + i]
-			if ((part & this._excludedMask[i]) !== 0n) {
-				return false
-			}
-		}
-
-		// Check anyOf components
-		if (this._anyOfMaskIsNonZero) {
-			let hasAny = false
-			for (let i = 0; i < MASK_PARTS; i++) {
-				const part = entityStore.archetypeMasks[archetypeMaskOffset + i]
-				if ((part & this._anyOfMask[i]) !== 0n) {
-					hasAny = true
-					break
-				}
-			}
-			if (!hasAny) {
-				return false
-			}
-		}
-
-		return true
+		return archetypeMatches(archetype, {
+			with: this._requiredMask,
+			without: this._excludedMask,
+			any: this._anyOfMask,
+		})
 	}
 
 	unregisterArchetype(deletedArchetype) {

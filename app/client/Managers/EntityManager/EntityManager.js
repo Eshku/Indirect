@@ -101,6 +101,8 @@ export const entityStore = {
 	archetypeComponentListStartIndices: new Uint32Array(
 		new SharedArrayBuffer(MAX_ARCHETYPES * Uint32Array.BYTES_PER_ELEMENT),
 	),
+	// NEW: A cache for trackable component IDs per archetype.
+	archetypeTrackableComponentIds: new Array(MAX_ARCHETYPES),
 
 	// --- Chunk Management ---
 	nextChunkId: 1, // Start from 1 so 0 can be NULL_CHUNK_ID
@@ -336,7 +338,7 @@ export class EntityManager {
 	 * @param {number} currentTick current game tick.
 	 */
 	createEntityFromSoaPayload(payload, currentTick) {
-		const { archetypeId, buffers, trackableComponentIds } = payload
+		const { archetypeId, buffers } = payload
 
 		const entityId = this._createEntityId()
 		const chunkId = this._findOrCreateChunkId(archetypeId)
@@ -361,13 +363,30 @@ export class EntityManager {
 			const info = Schema.componentInfo[typeId]
 
 			for (const propKey of info.propertyKeys) {
-				destArrays[propKey][indexInChunk] = sourceBuffers[propKey][0] // Read from the first slot of the payload
+				const value = sourceBuffers[propKey][0]
+				destArrays[propKey][indexInChunk] = value
+
+				// Set the initial state mask if this property value corresponds to one.
+				const propMap = this.entityMaskManager.initialStateMap.get(typeId)
+				if (propMap) {
+					const valueMap = propMap.get(propKey)
+					if (valueMap) {
+						const maskId = valueMap.get(value)
+						if (maskId !== undefined) {
+							this.entityMaskManager.setBit(maskId, chunkId, indexInChunk)
+						}
+					}
+				}
 			}
 			this.markComponentDirty(chunkId, typeId, currentTick)
 		}
 
-		if (trackableComponentIds.length > 0) {
-			this.entityMaskManager.markEntitiesDirtyById(entityId, trackableComponentIds, currentTick)
+		// Use the archetype's pre-cached list of trackable components to fire "modified" events.
+		const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
+
+		for (const typeId of trackableIds) {
+			const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(typeId)
+			this.entityMaskManager.fireEventById(modifiedMaskId, entityId, currentTick)
 		}
 		return entityId
 	}
@@ -396,7 +415,7 @@ export class EntityManager {
 		if (componentTypeId === undefined) {
 			throw new Error('EntityManager.addComponent: Payload is missing componentTypeId. This method only accepts single-component payloads.')
 		}
-		if (this.hasComponentType(sourceArchetypeId, componentTypeId)) {
+		if (this.archetypeHasComponent(sourceArchetypeId, componentTypeId)) {
 			console.warn(
 				`EntityManager.addComponent: Entity ${entityId} already has component ${this.componentManager.getComponentNameByTypeID(componentTypeId)}.`,
 			)
@@ -436,14 +455,33 @@ export class EntityManager {
 			const sourceBuffers = buffers[componentName]
 			const destArrays = entityStore.chunkComponentData[newChunkId][componentTypeId]
 			const info = Schema.componentInfo[componentTypeId]
+			const propMap = this.entityMaskManager.initialStateMap.get(componentTypeId)
 
 			for (const propKey of info.propertyKeys) {
-				// Write from the first slot of the payload's buffers
-				destArrays[propKey][newIndexInChunk] = sourceBuffers[propKey][0]
+				const value = sourceBuffers[propKey][0]
+				destArrays[propKey][newIndexInChunk] = value
+
+				// Set the initial state mask for the newly added component.
+				// Since this is an 'add' operation, we only need to set the new bit.
+				if (propMap) {
+					const valueMap = propMap.get(propKey)
+					if (valueMap) {
+						const maskId = valueMap.get(value)
+						if (maskId !== undefined) {
+							this.entityMaskManager.setBit(maskId, newChunkId, newIndexInChunk)
+						}
+					}
+				}
 			}
 
 			// Mark the newly added component as dirty for broad-phase `modified:` queries.
 			this.markComponentDirty(newChunkId, componentTypeId, currentTick)
+
+			// Fire the "modified" event for the newly added component if it's trackable.
+			const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(componentTypeId)
+			if (modifiedMaskId !== undefined) {
+				this.entityMaskManager.fireEventById(modifiedMaskId, entityId, currentTick)
+			}
 			return true
 		}
 		return false
@@ -464,7 +502,7 @@ export class EntityManager {
 		const sourceArchetypeId = oldPackedLocation >> 16
 		const oldChunkId = oldPackedLocation & 0xffff
 		const oldIndexInChunk = entityStore.entityIndicesInChunk[entityIndex]
-		if (!this.hasComponentType(sourceArchetypeId, componentTypeId)) return false
+		if (!this.archetypeHasComponent(sourceArchetypeId, componentTypeId)) return false
 
 		// Use the pre-allocated temporary mask to avoid allocations.
 		const sourceMaskOffset = sourceArchetypeId * MASK_PARTS
@@ -824,6 +862,16 @@ export class EntityManager {
 		// insert, making the new archetype uncached (slower to find, but correct).
 		entityStore.archetypeLookup.set(key, id)
 
+		// --- NEW: Pre-cache trackable component IDs for this archetype ---
+		const trackableIds = []
+		for (let i = 0; i < componentCount; i++) {
+			const typeId = sortedTypeIDs[i]
+			if (this.entityMaskManager.componentToModifiedMaskId.has(typeId)) {
+				trackableIds.push(typeId)
+			}
+		}
+		entityStore.archetypeTrackableComponentIds[id] = new Uint16Array(trackableIds)
+
 		this.queryManager.registerArchetype(id)
 		return id
 	}
@@ -865,7 +913,7 @@ export class EntityManager {
 		}
 	}
 
-	hasComponentType(archetype, componentTypeID) {
+	archetypeHasComponent(archetype, componentTypeID) {
 		const count = entityStore.archetypeComponentCounts[archetype]
 		if (count === 0) return false
 
@@ -897,8 +945,10 @@ export class EntityManager {
 	/**
 	 * Gets the sorted array of component type IDs for a given archetype.
 	 * This is the public interface for querying an archetype's structure.
+	 * This version writes into a pre-allocated `outArray` for performance.
 	 * @param {number} archetypeId The ID of the archetype.
-	 * @returns {Uint16Array | undefined} A newly allocated Uint16Array containing the type IDs, or undefined if the archetype doesn't exist.
+	 * @param {Uint16Array} outArray The array to write the type IDs into.
+	 * @returns {number} The number of component type IDs written to the array.
 	 */
 	getComponentTypeIDsForArchetype(archetypeId, outArray) {
 		const count = entityStore.archetypeComponentCounts[archetypeId]
@@ -929,6 +979,23 @@ export class EntityManager {
 		}
 
 		return count
+	}
+
+	/**
+	 * Gets the sorted array of component type IDs for a given archetype.
+	 * This is a convenience method that allocates a new array. For performance-critical
+	 * code, use the version that accepts an `outArray`.
+	 * @param {number} archetypeId The ID of the archetype.
+	 * @returns {Uint16Array} A newly allocated Uint16Array containing the type IDs.
+	 */
+	getComponentTypeIDsForArchetypeAlloc(archetypeId) {
+		const count = entityStore.archetypeComponentCounts[archetypeId]
+		if (count === undefined || count === 0) {
+			return new Uint16Array(0)
+		}
+		const outArray = new Uint16Array(count)
+		this.getComponentTypeIDsForArchetype(archetypeId, outArray)
+		return outArray
 	}
 
 	getEntityLocation(entityId) {
@@ -1393,7 +1460,10 @@ export class EntityManager {
 
 		// 4. Notify EntityMaskManager of the move. This must happen BEFORE removing the entity
 		// from the old chunk, otherwise the old chunk's mask data might be destroyed before we can read it.
-		this.entityMaskManager.handleEntityMoved(oldChunkId, oldIndexInChunk, newChunkId, newIndexInChunk)
+		this.entityMaskManager.handleEntityMoved(
+			{ chunkId: oldChunkId, indexInChunk: oldIndexInChunk },
+			{ chunkId: newChunkId, indexInChunk: newIndexInChunk },
+		)
 
 		// 5. Remove entity from old chunk
 		this._removeEntity(sourceArchetypeId, entityId, oldChunkId, oldIndexInChunk)
@@ -2107,10 +2177,6 @@ export class EntityManager {
 		const count = reader.readU32()
 		if (count === 0) return
 
-		const trackableCount = reader.readU8()
-		const trackableIdsOffset = reader.offset
-		reader.offset += trackableCount * 2
-
 		// The serializer adds padding to align the data block to 8 bytes.
 		// The reader must skip this same amount of padding.
 		const dataAlignment = 8
@@ -2181,6 +2247,26 @@ export class EntityManager {
 				for (const propKey of Schema.componentInfo[typeId].propertyKeys) {
 					const destArray = destSoaArrays[propKey]
 					const fullSourceView = sourcePropertyViews[viewIndex++]
+					const propMap = this.entityMaskManager.initialStateMap.get(typeId)
+
+					// --- NEW LOGIC: Check for initial state mask ---
+					if (propMap) {
+						const valueMap = propMap.get(propKey)
+						if (valueMap) {
+							// This path is slower as it requires per-entity checks, but it's necessary
+							// for initial state masks. It only runs for components with such masks.
+							for (let k = 0; k < batchSize; k++) {
+								const indexInChunk = startEntityIndexInChunk + k
+								const value = fullSourceView[entitiesCreated + k]
+								destArray[indexInChunk] = value
+								const maskId = valueMap.get(value)
+								if (maskId !== undefined) {
+									this.entityMaskManager.setBit(maskId, chunkId, indexInChunk)
+								}
+							}
+							continue // Skip the bulk copy below
+						}
+					}
 					// Copy the slice of the source data corresponding to this batch
 					this._copyTypedArrayBlock(destArray, startEntityIndexInChunk, fullSourceView, entitiesCreated, batchSize)
 				}
@@ -2191,15 +2277,15 @@ export class EntityManager {
 				this.markComponentDirty(chunkId, typeId, currentTick)
 			}
 
-			if (trackableCount > 0) {
+			// NEW (V2): Use the archetype's pre-cached list of trackable components.
+			const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
+			if (trackableIds.length > 0) {
 				const entities = entityStore.chunkComponentData[chunkId].entities
 				for (let j = 0; j < batchSize; j++) {
 					const entityId = entities[startEntityIndexInChunk + j]
-					// We can't reuse the reader here as it's at the end of the data block.
-					// We must read from the original buffer at the known offset.
-					for (let k = 0; k < trackableCount; k++) {
-						const componentTypeIdToTrack = reader.view.getUint16(trackableIdsOffset + k * 2, true)
-						this.entityMaskManager.maskDirtyById(entityId, componentTypeIdToTrack, currentTick)
+					for (const typeId of trackableIds) {
+						const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(typeId)
+						this.entityMaskManager.fireEventById(modifiedMaskId, entityId, currentTick)
 					}
 				}
 			}
@@ -2255,16 +2341,13 @@ export class EntityManager {
 		this._writeComponentDataFromBuffer(chunkId, indexInChunk, typeId, reader.view, dataBlobOffset, resolutionMap)
 
 		if (!isSilent) {
-			// Mark the component itself as dirty (broad-phase)
+			// Mark the component itself as dirty for broad-phase queries.
 			this.markComponentDirty(chunkId, typeId, currentTick)
 
-			// Mark any specified components as dirty (narrow-phase)
-			if (trackableCount > 0) {
-				const trackableIdsOffset = payloadBaseOffset + 1
-				for (let k = 0; k < trackableCount; k++) {
-					const componentTypeIdToTrack = reader.view.getUint16(trackableIdsOffset + k * 2, true)
-					this.entityMaskManager.maskDirtyById(entityId, componentTypeIdToTrack, currentTick)
-				}
+			// Fire the "modified" event if the component is trackable.
+			const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(typeId)
+			if (modifiedMaskId !== undefined) {
+				this.entityMaskManager.fireEventById(entityId, modifiedMaskId, currentTick)
 			}
 		}
 	}
@@ -2283,6 +2366,7 @@ export class EntityManager {
 		resolutionMap,
 		currentTick,
 		isSilent,
+		isAddComponent = false,
 	) {
 		const componentNamesForLog = this.getComponentTypeIDsForArchetype(archetypeId, this.componentTypesScratch)
 		const componentNames = Array.from(this.componentTypesScratch.subarray(0, componentNamesForLog))
@@ -2297,10 +2381,6 @@ export class EntityManager {
 			console.warn(`[EntityManager] setComponents called with a payload count of ${count}. Expected 1.`)
 			// Even if count is not 1, we proceed assuming it is, as this is a single-entity operation.
 		}
-
-		const trackableCount = reader.readU8()
-		const trackableIdsOffset = reader.offset
-		reader.offset += trackableCount * 2
 
 		// The serializer adds padding to align the data block to 8 bytes.
 		// The reader must skip this same amount of padding.
@@ -2317,42 +2397,65 @@ export class EntityManager {
 		for (const typeId of componentTypeIDs) {
 			const info = Schema.componentInfo[typeId]
 			const destSoaArrays = entityStore.chunkComponentData[chunkId][typeId]
+			const propMap = this.entityMaskManager.initialStateMap.get(typeId)
 			const hasEntityRef = info.propertyKeys.some(pk => info.properties[pk].type === 'entity')
 
-			if (hasEntityRef && resolutionMap) {
-				// SLOW PATH: This component contains an entity reference, so we must write
-				// property by property to resolve any placeholders.
+			// The property-by-property path is needed for entity ref resolution OR state mask updates.
+			const needsSlowPath = propMap || (hasEntityRef && resolutionMap)
+
+			if (needsSlowPath) {
+				// SLOW PATH: This component has entity refs to resolve or state masks to update.
 				for (const propKey of info.propertyKeys) {
 					const propInfo = info.properties[propKey]
 					const bytesPerElement = propInfo.arrayConstructor.BYTES_PER_ELEMENT
 
 					// Align the data offset for the current property.
-					const alignment = bytesPerElement;
+					const alignment = bytesPerElement
 					if (alignment > 0 && dataBlockOffset % alignment !== 0) {
-						dataBlockOffset += alignment - (dataBlockOffset % alignment);
+						dataBlockOffset += alignment - (dataBlockOffset % alignment)
 					}
 
-					let value
+					// --- Get old value if this property has a mask ---
+					const valueMap = propMap?.get(propKey)
+					let oldValue
+					if (valueMap && !isAddComponent) {
+						oldValue = destSoaArrays[propKey][indexInChunk]
+					}
 
-					if (propInfo.type === 'entity') {
+					let newValue
+					if (propInfo.type === 'entity' && resolutionMap) {
 						const placeholderId = reader.view.getBigUint64(dataBlockOffset, true)
 						if (placeholderId >> 63n === 1n) {
 							const placeholderIndex = Number(placeholderId & 0xffffffffn)
 							const resolvedId = resolutionMap.get(placeholderIndex)
 							// Check for the "doomed" bit (bit 62).
 							if ((resolvedId & (1n << 62n)) !== 0n) {
-								value = 0n // The placeholder was destroyed in the same frame. Resolve to null.
+								newValue = 0n // The placeholder was destroyed in the same frame. Resolve to null.
 							} else {
-								value = resolvedId ?? 0n // If not doomed, use the ID (or 0n if not found).
+								newValue = resolvedId ?? 0n // If not doomed, use the ID (or 0n if not found).
 							}
 						} else {
-							value = placeholderId // It's a regular entity ID.
+							newValue = placeholderId // It's a regular entity ID.
 						}
 					} else {
-						value = this._readValue(reader.view, dataBlockOffset, propInfo.type)
+						newValue = this._readValue(reader.view, dataBlockOffset, propInfo.type)
 					}
-					destSoaArrays[propKey][indexInChunk] = value
+					destSoaArrays[propKey][indexInChunk] = newValue
 					dataBlockOffset += bytesPerElement * count // count is 1
+
+					// If this property drives a state mask, update the masks now.
+					if (valueMap && !isSilent && (isAddComponent || oldValue !== newValue)) {
+						if (!isAddComponent) {
+							const oldMaskId = valueMap.get(oldValue)
+							if (oldMaskId !== undefined) {
+								this.entityMaskManager.clearBit(oldMaskId, chunkId, indexInChunk)
+							}
+						}
+						const newMaskId = valueMap.get(newValue)
+						if (newMaskId !== undefined) {
+							this.entityMaskManager.setBit(newMaskId, chunkId, indexInChunk)
+						}
+					}
 				}
 			} else {
 				// FAST PATH: No entity references. bulk copy.
@@ -2362,7 +2465,7 @@ export class EntityManager {
 
 					// Align the data offset for the current property.
 					const alignment = bytesPerElement;
-					if (alignment > 0 && dataBlockOffset % alignment !== 0) {
+					if (alignment > 0 && dataBlockOffset % alignment !== 0) { // prettier-ignore
 						dataBlockOffset += alignment - (dataBlockOffset % alignment);
 					}
 
@@ -2375,16 +2478,17 @@ export class EntityManager {
 
 		// --- 4. Handle Dirty Tracking ---
 		if (!isSilent) {
-			// Broad-phase: Mark all components in the payload as dirty for their chunk.
+			// Mark all components in the payload as dirty for broad-phase queries.
 			for (const typeId of componentTypeIDs) {
 				this.markComponentDirty(chunkId, typeId, currentTick)
+
 			}
-			// Narrow-phase: Mark specific entities as dirty for trackable components.
-			if (trackableCount > 0) {
-				for (let k = 0; k < trackableCount; k++) {
-					const componentTypeIdToTrack = reader.view.getUint16(trackableIdsOffset + k * 2, true)
-					this.entityMaskManager.maskDirtyById(entityId, componentTypeIdToTrack, currentTick)
-				}
+			// Use the archetype's pre-cached list to fire narrow-phase "modified" events.
+			const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
+
+			for (const typeId of trackableIds) {
+				const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(typeId)
+				this.entityMaskManager.fireEventById(modifiedMaskId, entityId, currentTick)
 			}
 		}
 	}
@@ -2432,7 +2536,7 @@ export class EntityManager {
 	 * @param {number} currentTick The current game tick.
 	 * @returns {boolean} True on success.
 	 */
-	setComponentsDataImmediate(entityId, payload, currentTick) {
+	setComponentsDataImmediate(entityId, payload, currentTick, isSilent = false) {
 		if (!this.isEntityActive(entityId)) return false
 		// 1. Get location data without allocating an object.
 		const entityIndex = Number(entityId & 0xffffffffn)
@@ -2450,10 +2554,6 @@ export class EntityManager {
 
 		// Write header
 		buffer.writeU32(count)
-		buffer.writeU8(payload.trackableComponentIds.length)
-		for (const id of payload.trackableComponentIds) {
-			buffer.writeU16(id)
-		}
 
 		// Add padding
 		const dataAlignment = 8
@@ -2485,12 +2585,9 @@ export class EntityManager {
 			0,
 			null,
 			currentTick,
-			false,
+			isSilent,
+			false, // isAddComponent
 		)
-
-		if (payload.trackableComponentIds.length > 0) {
-			this.entityMaskManager.markEntitiesDirtyById(entityId, payload.trackableComponentIds, currentTick)
-		}
 		return true
 	}
 }

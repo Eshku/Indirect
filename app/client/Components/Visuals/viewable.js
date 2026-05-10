@@ -3,8 +3,6 @@
  * This allows an entity to be represented visually on the screen. The actual sprite
  * object is stored and managed by the AssetManager.
  */
-
 export const viewable = {
-    meta: { isTrackable: true },
     spriteRef: { type: 'u32', default: 0 },
 }

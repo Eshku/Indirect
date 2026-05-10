@@ -7,24 +7,25 @@ const {
 	spawnDirector,
 	playerTag,
 	position,
-	prefab,
-	isPooled,
 	lifecycleState,
 	health,
 	velocity,
 	threatCost,
 	tint,
-	hitFlash,
 	aiParameters,
 	visibility,
+	scale,
+	spinningDroneTag,
+	explosiveDroneTag,
 } = ecs.getComponentIDs()
 
 const { SpatialHashGrid } = await import(`@core/DataStructures/SpatialHashGrid.js`)
 
 // A fixed radius around the player considered the "safe zone". Enemies will spawn outside this radius.
-const SAFE_SPAWN_RADIUS = 2200
+const SAFE_SPAWN_RADIUS = 2000
 
-const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
+const SPAWN_ANIMATION_DURATION = 1
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 
 /**
  * The DirectorSystem is responsible for procedurally spawning enemies.
@@ -41,7 +42,6 @@ export class SpawnDirectorSystem {
 
 	init() {
 		this.maxSpawnsPerFrame = 100 //  maximum number of entities to spawn in a single frame.
-		this.entitiesToUnpool = []
 		this.waveChoiceResult = { chosenEnemies: [], spentBudget: 0 }
 		this.affordableEnemiesCache = []
 
@@ -61,50 +61,44 @@ export class SpawnDirectorSystem {
 		// to ensure it exists on the first frame.
 		// --- Define and pre-compile all spawnable enemies ---
 		this.spawnableEnemies = [
-			{ prefabName: 'spinningDrone', cost: 5, weight: 10 },
-			{ prefabName: 'explosiveDrone', cost: 15, weight: 2 },
+			{ prefabName: 'spinningDrone', cost: 5, weight: 10, tagId: spinningDroneTag },
+			{ prefabName: 'explosiveDrone', cost: 15, weight: 2, tagId: explosiveDroneTag },
 		]
 
 		// Add an index to each enemy info object for easy lookup from the spawn queue.
 		this.spawnableEnemies.forEach((enemy, index) => (enemy.index = index))
 
-		// --- Generic Pooling Setup ---
-		// A single query to find all pooled entities that have a prefab ID.
-		this.pooledEnemyQuery = this.getQuery({
-			with: [isPooled, prefab, health],
-		})
-
-		// A reusable map to avoid allocations in the spawn loop.
-		// The map and its arrays are created once and cleared each frame.
-		this.availablePooledEnemies = new Map()
-
 		// Pre-compile payloads and cache prefab IDs for all spawnable enemies.
 		for (const enemy of this.spawnableEnemies) {
-			// Get  numeric prefab ID
-			enemy.prefabId = prefabManager.getPrefabId(enemy.prefabName)
-			if (enemy.prefabId !== undefined) {
-				// This is now a true SoA to avoid object allocations when gathering.
-				const POOLED_ENEMY_CAPACITY = 1024 // A reasonable capacity for pooled enemies of one type.
-				this.availablePooledEnemies.set(enemy.prefabId, {
-					entityIds: new BigUint64Array(POOLED_ENEMY_CAPACITY),
-					maxHealths: new Float32Array(POOLED_ENEMY_CAPACITY),
-					count: 0,
-				})
-				// Pre-compile a max-capacity payload for new creations. This is the core
-				// of the new optimization. We compile once at init and reuse the payload
-				// buffer at runtime.
+			// --- Type-Specific Pooling Setup ---
+			// Create a dedicated query and pool for each enemy type.
+			enemy.pooledQuery = this.getQuery({
+				with: [enemy.tagId, lifecycleState],
+			})
+			enemy.pool = [] // A simple array to hold pooled entity IDs.
+
+			// Pre-compile a max-capacity payload for creating NEW enemies of this type.
+			// This is the core of the new optimization. We compile once at init and
+			// reuse the payload buffer at runtime.
+			if (enemy.tagId) {
 				enemy.creationPayload = this.compile(enemy.prefabName, {
 					count: this.maxSpawnsPerFrame, // Compile with max capacity
 					overrides: {
 						position: {},
 						threatCost: {},
 						aiParameters: {},
+						lifecycleState: {
+							state: LIFECYCLE.SPAWNING,
+							timer: SPAWN_ANIMATION_DURATION,
+							duration: SPAWN_ANIMATION_DURATION,
+						},
+						visibility: { isVisible: 1 },
+						// Set the initial scale to match the start of the spawn animation.
+						scale: { x: 0.01, y: 0.01 },
 					},
 				})
 			}
 		}
-		// Filter out any enemies that failed to compile.
-		this.spawnableEnemies = this.spawnableEnemies.filter(e => e.prefabId !== undefined && e.creationPayload)
 
 		// Pre-calculate the minimum cost of any spawnable enemy.
 		this.minSpawnCost =
@@ -112,20 +106,9 @@ export class SpawnDirectorSystem {
 				? this.spawnableEnemies.reduce((min, e) => Math.min(min, e.cost), Infinity)
 				: Infinity
 
-		// Payload for resetting and reusing a pooled enemy.
-		// This is compiled with a count of 1 and mutated in a loop for each reused entity.
-		this.resetEnemyPayload = this.compile({
-			lifecycleState: { flags: LIFECYCLE.ACTIVE },
-			velocity: { x: 0, y: 0 },
-			tint: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
-			hitFlash: { timer: 0.0 },
-			visibility: { isVisible: 1 }, // Make it visible again
-			// These components have dynamic data that will be set by mutators.
-			aiParameters: {},
-			position: {},
-			health: {},
-			threatCost: {},
-		})
+		// Get mask IDs for lifecycle states
+		this.isSpawningMaskId = this.getMaskId('isSpawning')
+		this.isPooledMaskId = this.getMaskId('isPooled')
 
 		// Get access to the spatial hash grid for finding empty spawn locations.
 		const gridSABs = physicsManager.getSpatialHashGridSABs()
@@ -163,6 +146,9 @@ export class SpawnDirectorSystem {
 		this.spawnIndexCounter = 0 // A counter for positioning entities within a cluster.
 		// A reusable object for finding spawn locations to avoid allocations.
 		this.spawnLocation = { x: 0, y: 0 }
+
+		// A set to track which chunks have had their components modified this frame for reuse.
+		this.modifiedChunksForReactiveSystems = new Set()
 	}
 
 	update({ deltaTime, currentTick }) {
@@ -276,44 +262,36 @@ export class SpawnDirectorSystem {
 		return false // Failed to find a spot.
 	}
 
-	_gatherPooledEnemies() {
-		// Clear the arrays inside the map, but don't re-allocate the map or the arrays themselves.
-		// Iterate over the known spawnable enemies to avoid allocating a map iterator.
+	/**
+	 * Gathers all available pooled entities for each spawnable enemy type.
+	 * This is the "gather" step that populates the pools for reuse.
+	 * @private
+	 */
+	_gatherPooledEnemiesByType() {
 		for (const enemyInfo of this.spawnableEnemies) {
-			const pool = this.availablePooledEnemies.get(enemyInfo.prefabId)
-			// The pool is guaranteed to exist because we created it in init().
-			pool.count = 0
-		}
-
-		const pooledChunkIds = this.pooledEnemyQuery.getChunks()
-		for (let i = 0; i < pooledChunkIds.length; i++) {
-			const chunkId = pooledChunkIds[i]
-			const prefabs = this.getComponentData(chunkId, prefab)
-			const healths = this.getComponentData(chunkId, health)
-			const entities = this.getEntities(chunkId)
-			const chunkSize = this.getChunkSize(chunkId)
-
-			for (let j = 0; j < chunkSize; j++) {
-				const prefabId = prefabs.id[j]
-				const poolForType = this.availablePooledEnemies.get(prefabId)
-				if (poolForType && poolForType.count < poolForType.capacity) {
-					const index = poolForType.count
-					poolForType.entityIds[index] = entities[j]
-					poolForType.maxHealths[index] = healths.max[j]
-					poolForType.count++
+			enemyInfo.pool.length = 0 // Clear the pool from the previous frame.
+			const pooledChunkIds = enemyInfo.pooledQuery.getChunks()
+			for (const chunkId of pooledChunkIds) {
+				const entities = this.getEntities(chunkId)
+				// Use the mask to efficiently find all pooled entities of this type.
+				const pooledCount = this.getIndicesFromMask(this.isPooledMaskId, chunkId, this.spawnQueryResult.entityIndices) // Re-use a scratch buffer
+				for (let j = 0; j < pooledCount; j++) {
+					const indexInChunk = this.spawnQueryResult.entityIndices[j]
+					enemyInfo.pool.push(entities[indexInChunk])
 				}
 			}
 		}
 	}
 
 	_processSpawnQueue(currentTick) {
+		this.modifiedChunksForReactiveSystems.clear()
 		const processCount = Math.min(this.spawnQueue.count, this.maxSpawnsPerFrame)
 		if (processCount === 0) {
 			return
 		}
 
 		// --- Batch Processing Setup ---
-		this._gatherPooledEnemies()
+		this._gatherPooledEnemiesByType()
 		const separation = 48
 		const phi = (1 + Math.sqrt(5)) / 2
 
@@ -321,7 +299,6 @@ export class SpawnDirectorSystem {
 		for (const batch of this.newCreationsBatch.batches) {
 			batch.count = 0
 		}
-		this.entitiesToUnpool.length = 0
 
 		// 1. Group spawn requests into reuses and new creations.
 		for (let i = 0; i < processCount; i++) {
@@ -332,15 +309,9 @@ export class SpawnDirectorSystem {
 			const locationY = this.spawnQueue.y[reqIndex]
 			const index = this.spawnIndexCounter++
 
-			// Look up available entities using the numeric prefabId, not the string name.
-			const pooledForType = this.availablePooledEnemies.get(enemyInfo.prefabId)
-			if (pooledForType && pooledForType.count > 0) {
-				pooledForType.count--
-				const reuseIndex = pooledForType.count
-				const entityToReuseId = pooledForType.entityIds[reuseIndex]
-				const maxHealthToReuse = pooledForType.maxHealths[reuseIndex]
-
-				this.entitiesToUnpool.push(entityToReuseId)
+			// Prioritize reusing an entity from the specific pool for this enemy type.
+			if (enemyInfo.pool.length > 0) {
+				const entityToReuseId = enemyInfo.pool.pop()
 				this._resetReusedEnemy(
 					entityToReuseId,
 					enemyInfo,
@@ -349,7 +320,7 @@ export class SpawnDirectorSystem {
 					index,
 					separation,
 					phi,
-					maxHealthToReuse,
+					currentTick,
 				)
 			} else {
 				const batch = this.newCreationsBatch.batches[enemyInfo.index]
@@ -361,20 +332,23 @@ export class SpawnDirectorSystem {
 			}
 		}
 
-		// 2. Process reuses.
-		if (this.entitiesToUnpool.length > 0) {
-			// Issue one bulk command to remove the 'isPooled' tag from all reused entities.
-			this.removeComponentsFromEntities(this.entitiesToUnpool, isPooled)
-		}
-
 		// 3. Process new creations in batches.
 		for (let i = 0; i < this.newCreationsBatch.batches.length; i++) {
 			const batch = this.newCreationsBatch.batches[i]
 			if (batch.count > 0) {
 				const enemyInfo = this.spawnableEnemies[i]
-				this._createNewEnemiesInBatch(enemyInfo, batch, separation, phi)
+				this._createNewEnemiesInBatch(enemyInfo, batch, separation, phi)			
 			}
 		}
+
+		// After processing, mark the chunks containing reused entities as dirty for reactive systems.
+		for (const chunkId of this.modifiedChunksForReactiveSystems) {
+			this.markComponentDirty(chunkId, lifecycleState, currentTick)
+			this.markComponentDirty(chunkId, health, currentTick)
+			this.markComponentDirty(chunkId, tint, currentTick)
+			this.markComponentDirty(chunkId, scale, currentTick)
+		}
+			
 	}
 
 	/**
@@ -412,28 +386,60 @@ export class SpawnDirectorSystem {
 	 * Issues commands to reset a single pooled enemy's state.
 	 * @private
 	 */
-	_resetReusedEnemy(entityId, enemyInfo, locationX, locationY, index, separation, phi, maxHealth) {
-		// --- 1. Calculate new position ---
+	_resetReusedEnemy(entityId, enemyInfo, locationX, locationY, index, separation, phi, currentTick) {		
+		// --- 1. Calculate new spawn position ---
 		const radius = Math.sqrt(index + 0.5) * separation
 		const angle = 2 * Math.PI * index * phi
 		const enemyX = locationX + radius * Math.cos(angle)
 		const enemyY = locationY + radius * Math.sin(angle)
 
-		// --- 2. set the dynamic data for the reused enemy ---
-		const buffers = this.resetEnemyPayload.buffers
-		buffers.position.x[0] = enemyX
-		buffers.position.y[0] = enemyY
-		buffers.health.current[0] = maxHealth
-		buffers.health.max[0] = maxHealth
-		buffers.threatCost.value[0] = enemyInfo.cost
-		buffers.aiParameters.randomSeed[0] = Math.random()
+		// --- 2. Get component data via direct access ---
+		const location = this.getEntityLocation(entityId)
 
-		// --- 3. Issue a command to reset the entity's state ---
-		// This single command updates all necessary components for the enemy's new life,
-		// It sets lifecycle to ACTIVE, resets velocity and tint to defaults, and applies
-		// the new position, health, and threat cost from buffers.
+		const { chunkId, indexInChunk } = location
 
-		this.setComponents(entityId, this.resetEnemyPayload)
+		const states = this.getComponentData(chunkId, lifecycleState)
+		const positions = this.getComponentData(chunkId, position)
+		const healths = this.getComponentData(chunkId, health)
+		const costs = this.getComponentData(chunkId, threatCost)
+		const aiParams = this.getComponentData(chunkId, aiParameters)
+		const visibilities = this.getComponentData(chunkId, visibility)
+		const velocities = this.getComponentData(chunkId, velocity)
+		const tints = this.getComponentData(chunkId, tint)
+		const scales = this.getComponentData(chunkId, scale)
+
+		// --- 3. Perform direct writes to reset the entity's state immediately ---
+		// Manually flip the state bits for this reused entity.
+		this.clearBit(this.isPooledMaskId, chunkId, indexInChunk)
+		this.setBit(this.isSpawningMaskId, chunkId, indexInChunk)
+
+		states.state[indexInChunk] = LIFECYCLE.SPAWNING
+		states.timer[indexInChunk] = SPAWN_ANIMATION_DURATION
+		states.duration[indexInChunk] = SPAWN_ANIMATION_DURATION
+
+		positions.x[indexInChunk] = enemyX
+		positions.y[indexInChunk] = enemyY
+
+		const maxHealth = healths.max[indexInChunk] // Get max health from the entity itself
+		healths.current[indexInChunk] = maxHealth
+
+		costs.value[indexInChunk] = enemyInfo.cost
+		aiParams.randomSeed[indexInChunk] = Math.random()
+
+		visibilities.isVisible[indexInChunk] = 1
+
+		velocities.x[indexInChunk] = 0
+		velocities.y[indexInChunk] = 0
+
+		tints.r[indexInChunk] = 1.0; tints.g[indexInChunk] = 1.0; tints.b[indexInChunk] = 1.0; tints.a[indexInChunk] = 1.0
+
+		scales.x[indexInChunk] = 0.01; scales.y[indexInChunk] = 0.01
+
+		// --- 4. Mark all trackable components as dirty for same-frame reactivity ---
+		// Narrow-phase marking for specific entities.
+		this.markEntitiesDirtyById(entityId, [lifecycleState, health, visibility, tint, scale], currentTick)
+		// Broad-phase marking for the chunk, so reactive systems pick it up.
+		this.modifiedChunksForReactiveSystems.add(chunkId)
 	}
 
 	/**

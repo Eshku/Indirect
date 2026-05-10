@@ -1,9 +1,11 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { rotation, spinning, isPooled } = ecs.getComponentIDs()
+const { rotation, spinning } = ecs.getComponentIDs()
+const { lifecycleState } = ecs.getComponentIDs()
 const { SyncTransforms } = ecs.getSystemIDs()
 
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 /**
  * This system is responsible for applying a constant rotation to entities
  * that have the `Spinning` component.
@@ -20,9 +22,11 @@ export class SpinningSystem {
 
 	init() {
 		this.query = this.getQuery({
-			with: [rotation, spinning],
-			without: [isPooled],
+			with: [rotation, spinning, lifecycleState],
 		})
+		this.isActiveMaskId = this.getMaskId('isActive')
+		this.scratchBuffer = this.createScratchBuffer()
+
 	}
 
 	update({ deltaTime, currentTick }) {
@@ -35,8 +39,11 @@ export class SpinningSystem {
 			const angle = rotationArrays.angle
 			const rate = spinningArrays.rate
 
-			for (let j = 0; j < this.getChunkSize(chunkId); j++) {
-				angle[j] += rate[j] * deltaTime
+			const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+			for (let j = 0; j < activeCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+
+				angle[indexInChunk] += rate[indexInChunk] * deltaTime
 			}
 		}
 	}

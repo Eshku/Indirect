@@ -115,6 +115,8 @@ export class ReactivityTestSystem {
 				// A full reset is crucial for test isolation to prevent stale state from
 				// other tests (like different chunk capacities) from causing errors.
 				ecs.destroyAll()
+				// After a full reset, we must re-register the declarative masks.
+				ecs.entityMaskManager.registerDeclarativeMasks()
 				this.flush()
 
 				// Get the current tick from the running game loop to make the test realistic.
@@ -177,6 +179,8 @@ export class ReactivityTestSystem {
 				// in the same frame (like CursorSystem). It ensures the deferred command
 				// processing doesn't interfere with the immediate dirty flag.
 				ecs.destroyAll()
+				// After a full reset, we must re-register the declarative masks.
+				ecs.entityMaskManager.registerDeclarativeMasks()
 				this.flush()
 
 				const lastTickBeforeAction = ecs.systemManager.currentTick
@@ -212,8 +216,8 @@ export class ReactivityTestSystem {
 			})
 		})
 
-		// Delay the test run to ensure the engine is fully initialized.
-		setTimeout(() => testManager.runAllTests(), 100)
+
+		testManager.runAllTests()
 	}
 
 	update({ currentTick, lastTick }) {
@@ -557,10 +561,10 @@ export class ReactivityTestSystem {
 					componentA: {},
 					componentC: {},
 				})
-				this.immediateTestPhase = 'IMMEDIATE_QUIET_CHECK'
+				this.immediateTestPhase = 'IMMEDIATE_CREATION_CHECK'
 				break
 
-			case 'IMMEDIATE_QUIET_CHECK':
+			case 'IMMEDIATE_CREATION_CHECK':
 				// On the next tick, the creation should be detected.
 				expect(this.immediateInitQuery.getChunks().length).toBe(
 					1,
@@ -573,6 +577,19 @@ export class ReactivityTestSystem {
 				// Now that we've found it, update the ID to the real one.
 				this.immediateTestEntityId = this.immediateInitQuery.getSingleEntity()
 				expect(this.immediateTestEntityId).toBeDefined()
+				this.immediateTestPhase = 'IMMEDIATE_CREATION_QUIET_CHECK'
+				break
+
+			case 'IMMEDIATE_CREATION_QUIET_CHECK':
+				// On the next tick, the creation queries should be quiet.
+				expect(this.immediateInitQuery.getChunks().length).toBe(
+					0,
+					'[Immediate] immediateInitQuery should be quiet on the tick after reaction',
+				)
+				expect(this.immediateModifiedQuery.getChunks().length).toBe(
+					0,
+					'[Immediate] immediateModifiedQuery should be quiet on the tick after reaction',
+				)
 				this.immediateTestPhase = 'IMMEDIATE_ADD'
 				break
 
@@ -588,6 +605,15 @@ export class ReactivityTestSystem {
 					1,
 					'[Immediate] immediateAddedQuery should detect immediate add',
 				)
+				this.immediateTestPhase = 'IMMEDIATE_ADD_QUIET_CHECK'
+				break
+
+			case 'IMMEDIATE_ADD_QUIET_CHECK':
+				// On the next tick, the added query should be quiet.
+				expect(this.immediateAddedQuery.getChunks().length).toBe(
+					0,
+					'[Immediate] immediateAddedQuery should be quiet on the tick after reaction',
+				)
 				this.immediateTestPhase = 'IMMEDIATE_REMOVE'
 				break
 
@@ -602,6 +628,15 @@ export class ReactivityTestSystem {
 				expect(this.immediateRemovedQuery.getChunks().length).toBe(
 					1,
 					'[Immediate] immediateRemovedQuery should detect immediate remove',
+				)
+				this.immediateTestPhase = 'IMMEDIATE_REMOVE_QUIET_CHECK'
+				break
+
+			case 'IMMEDIATE_REMOVE_QUIET_CHECK':
+				// On the next tick, the removed query should be quiet.
+				expect(this.immediateRemovedQuery.getChunks().length).toBe(
+					0,
+					'[Immediate] immediateRemovedQuery should be quiet on the tick after reaction',
 				)
 				this.immediateTestPhase = 'IMMEDIATE_COMPLETE'
 				break

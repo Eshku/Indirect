@@ -22,8 +22,8 @@
 		"lifecycleState": {},
 		"threatCost": {},
 		"enemyTag": {},
-
+		"explosiveDroneTag": {},
+		"triggersOnDeath": { "prefabRef": "smallExplosionEffect" },
 		"aiParameters": { "orbitBias": 0.8, "orbitAngleSpread": 0.5, "orbitWobbleFrequency": 2.0 }
-
 	}
 }

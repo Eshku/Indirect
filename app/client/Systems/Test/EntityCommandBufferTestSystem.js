@@ -1,7 +1,7 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs, testManager } = engine.getManagers()
 
-const { entityManager, prefabManager, systemManager, entityMaskManager } = ecs
+const { entityManager, prefabManager, systemManager, entityMaskManager, componentManager } = ecs
 const { entityStore, MAX_COMPONENTS } = await import(`@managers/EntityManager/EntityManager.js`)
 
 const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`)
@@ -19,6 +19,7 @@ const {
 	damageCollisionBuffer,
 	destroyByQueryTag,
 	alignmentTestComponent,
+	lifecycleState,
 } = ecs.getComponentIDs()
 
 /**
@@ -55,7 +56,18 @@ export class EntityCommandBufferTestSystem {
 			// interfering with subsequent tests.
 			ecs.destroyAll()
 			flush() // Flush the cleanup commands immediately.
+			// After clearing, re-register all declarative masks for the next test.
+			// This is now the responsibility of the test setup, not ECS.destroyAll().
+			entityMaskManager.registerDeclarativeMasks()
 		}
+		
+		// Get mask IDs once for all tests.
+		const isSpawningMaskId = entityMaskManager.getMaskIdByName('isSpawning')
+		const isActiveMaskId = entityMaskManager.getMaskIdByName('isActive')
+		const isDyingMaskId = entityMaskManager.getMaskIdByName('isDying')
+		const isDeadMaskId = entityMaskManager.getMaskIdByName('isDead')
+		const isPooledMaskId = entityMaskManager.getMaskIdByName('isPooled')
+		const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 
 		// The test suite is organized by the scope and type of command buffer operation,
 		// moving from simple single-entity commands to complex bulk and edge-case scenarios.
@@ -182,6 +194,16 @@ export class EntityCommandBufferTestSystem {
 				flush()
 				const pos = ecs.getComponent(entity, 'position')
 				expect(pos).toEqual({ x: 100, y: 100 })
+			})
+			
+			it('should NOT update state masks on deferred setComponentSilent', () => {
+				cleanup()
+				const entity = ecs.createEntity({ lifecycleState: { state: LIFECYCLE.ACTIVE } })
+				flush()
+				const setPayload = this.compile({ lifecycleState: { state: LIFECYCLE.DYING } })
+				this.setComponentSilent(entity, setPayload)
+				flush()
+				expect(this.isBitSet(isActiveMaskId, this.getEntityLocation(entity).chunkId, this.getEntityLocation(entity).indexInChunk)).toBe(true, 'isActive mask should NOT be cleared by silent set')
 			})
 
 			it('should reset an entity to schema defaults using a defaults payload', () => {
@@ -1303,6 +1325,261 @@ export class EntityCommandBufferTestSystem {
 				const recycledChunkId = queryB.getChunks()[0]
 				const trackedCompData_Recycled = this.getComponentData(recycledChunkId, trackedTestComponent)
 				expect(trackedCompData_Recycled.value[0]).toBe(0, 'Stale data from recycled chunk was not cleared.')
+			})
+		})
+
+		describe('Entity Command Buffer: State Mask Integration', () => {
+
+			it('should automatically set the initial state mask on deferred creation', () => {
+				cleanup()
+
+				// 1. Defer creation of an entity with a specific initial state.
+				const payload = this.compile({
+					lifecycleState: { state: LIFECYCLE.SPAWNING }, 
+					//! would also need a test without overrides to test most basic - to default behaviour.
+				})
+				this.instantiate(payload, 1)
+				flush()
+
+				// 2. Verification
+				const query = this.getQuery({ with: [lifecycleState] })
+				const entityId = query.getSingleEntity()
+				expect(entityId).toBeDefined()
+
+				const location = this.getEntityLocation(entityId)
+				const isSpawningSet = this.isBitSet(isSpawningMaskId, location.chunkId, location.indexInChunk)
+				const isActiveSet = this.isBitSet(isActiveMaskId, location.chunkId, location.indexInChunk)
+
+				expect(isSpawningSet).toBe(true, 'isSpawning mask should be set on creation')
+				expect(isActiveSet).toBe(false, 'isActive mask should not be set on creation')
+			})
+
+			it('should automatically set the default state mask on deferred creation without overrides', () => {
+				cleanup()
+
+				// The schema for lifecycleState defaults to ACTIVE (1).
+				// We create an entity with the component but provide no data, relying on schema defaults.
+				const payload = this.compile({
+					lifecycleState: {},
+				})
+				this.instantiate(payload, 1)
+				flush()
+
+				// Verification
+				const query = this.getQuery({ with: [lifecycleState] })
+				const entityId = query.getSingleEntity()
+				expect(entityId).toBeDefined()
+
+				const location = this.getEntityLocation(entityId)
+				const isActiveSet = this.isBitSet(isActiveMaskId, location.chunkId, location.indexInChunk)
+
+				expect(isActiveSet).toBe(true, 'isActive mask should be set on creation from schema default')
+			})
+
+			it('should automatically update state masks on deferred setComponent', () => {
+				cleanup()
+
+				// 1. Create an entity in the ACTIVE state.
+				const creationPayload = this.compile({
+					lifecycleState: { state: LIFECYCLE.ACTIVE },
+				})
+				this.instantiate(creationPayload, 1)
+				flush()
+
+				const entityId = this.getQuery({ with: [lifecycleState] }).getSingleEntity()
+				const location = this.getEntityLocation(entityId)
+
+				// Verify initial state
+				expect(this.isBitSet(isActiveMaskId, location.chunkId, location.indexInChunk)).toBe(
+					true,
+					'Initial state should be ACTIVE',
+				)
+
+				// 2. Defer a state change using setComponent.
+				const setPayload = this.compile({
+					lifecycleState: { state: LIFECYCLE.DYING },
+				})
+				this.setComponent(entityId, setPayload)
+				flush()
+
+				// 3. Verification
+				const finalLocation = this.getEntityLocation(entityId) // Location might have changed if archetype did, but not in this case.
+				expect(this.isBitSet(isActiveMaskId, finalLocation.chunkId, finalLocation.indexInChunk)).toBe(
+					false,
+					'isActive mask should be cleared after setComponent',
+				)
+				expect(this.isBitSet(isDyingMaskId, finalLocation.chunkId, finalLocation.indexInChunk)).toBe(
+					true,
+					'isDying mask should be set after setComponent',
+				)
+			})
+
+			it('should automatically set state mask on deferred addComponent', () => {
+				cleanup()
+
+				// 1. Create an entity without the lifecycleState component.
+				const entityId = ecs.createEntity({ testEntityTag: {} })
+				flush()
+
+				// 2. Defer adding the component with a specific state.
+				const addPayload = this.compile({ lifecycleState: { state: LIFECYCLE.POOLED } })
+				this.addComponent(entityId, addPayload)
+				flush()
+
+				// 3. Verification
+				const finalLocation = this.getEntityLocation(entityId)
+				expect(this.isBitSet(isPooledMaskId, finalLocation.chunkId, finalLocation.indexInChunk)).toBe(true, 'isPooled mask should be set after addComponent')
+			})
+
+			it('should preserve state masks during a bulk structural change', () => {
+				cleanup()
+
+				// 1. Create two batches of entities with different initial states.
+				const activePayload = this.compile({ lifecycleState: { state: LIFECYCLE.ACTIVE } }, { count: 5 })
+				const spawningPayload = this.compile({ lifecycleState: { state: LIFECYCLE.SPAWNING } }, { count: 5 })
+				this.instantiate(activePayload, 5)
+				this.instantiate(spawningPayload, 5)
+				flush()
+
+				// 2. Verify initial state.
+				const activeQuery = this.getQuery({ with: [lifecycleState] }) // A query to get all of them.
+				const allEntities = activeQuery.getChunks().flatMap(chunkId => Array.from(this.getEntities(chunkId).slice(0, this.getChunkSize(chunkId))))
+				expect(allEntities.length).toBe(10)
+
+				const activeEntities = allEntities.filter(id => this.isBitSet(isActiveMaskId, this.getEntityLocation(id).chunkId, this.getEntityLocation(id).indexInChunk))
+				const spawningEntities = allEntities.filter(id => this.isBitSet(isSpawningMaskId, this.getEntityLocation(id).chunkId, this.getEntityLocation(id).indexInChunk))
+				expect(activeEntities.length).toBe(5, 'Should have 5 active entities initially')
+				expect(spawningEntities.length).toBe(5, 'Should have 5 spawning entities initially')
+
+				// 3. Defer a bulk structural change that moves all entities.
+				const addPayload = this.compile({ testEntityTag: {} })
+				this.addComponentsToEntities(allEntities, addPayload)
+				flush()
+
+				// 4. Verification: Check that the states were preserved in their new locations.
+				const finalActiveCount = activeEntities.filter(id => this.isBitSet(isActiveMaskId, this.getEntityLocation(id).chunkId, this.getEntityLocation(id).indexInChunk)).length
+				const finalSpawningCount = spawningEntities.filter(id => this.isBitSet(isSpawningMaskId, this.getEntityLocation(id).chunkId, this.getEntityLocation(id).indexInChunk)).length
+
+				expect(finalActiveCount).toBe(5, 'Active masks should be preserved after bulk move')
+				expect(finalSpawningCount).toBe(5, 'Spawning masks should be preserved after bulk move')
+				// Also check that they moved.
+				expect(this.getQuery({ with: [testEntityTag] }).count).toBe(10)
+			})
+
+			it('should automatically fire a "modified" event on deferred setComponent', () => {
+				cleanup()
+
+				// 1. Setup: Get the event mask for a trackable component.
+				const modifiedMaskId = entityMaskManager.getDirtyMask(trackedTestComponent)
+				expect(modifiedMaskId).toBeDefined()
+
+				// 2. Create an entity with the trackable component.
+				const creationPayload = this.compile({ trackedTestComponent: { value: 1.0 } })
+				this.instantiate(creationPayload, 1)
+				flush()
+
+				const entityId = this.getQuery({ with: [trackedTestComponent] }).getSingleEntity()
+				const location = this.getEntityLocation(entityId)
+				const scratchBuffer = this.createScratchBuffer()
+
+				// 3. Verify it is NOT dirty initially.
+				let dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, 0, 1, scratchBuffer)
+				expect(dirtyCount).toBe(0, 'Entity should not be dirty on creation')
+
+				// 4. Defer a setComponent command.
+				const setPayload = this.compile({ trackedTestComponent: { value: 2.0 } })
+				this.setComponent(entityId, setPayload)
+				flush(2) // Flush with a new tick (2)
+
+				// 5. Verification: The entity should now be dirty for the tick it was changed.
+				dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, 1, 2, scratchBuffer)
+				expect(dirtyCount).toBe(1, 'Entity should be marked dirty after setComponent')
+			})
+		})
+
+		describe('EntityMaskManager: Immediate Mode & Edge Cases', () => {
+			it('should automatically set initial state mask on ecs.createEntity', () => {
+				cleanup()
+				const entityId = ecs.createEntity({ lifecycleState: { state: LIFECYCLE.SPAWNING } })
+				const location = this.getEntityLocation(entityId)
+				expect(this.isBitSet(isSpawningMaskId, location.chunkId, location.indexInChunk)).toBe(true)
+			})
+
+			it('should automatically update state masks on ecs.setComponent', () => {
+				cleanup()
+				const entityId = ecs.createEntity({ lifecycleState: { state: LIFECYCLE.ACTIVE } })
+				let location = this.getEntityLocation(entityId)
+				expect(this.isBitSet(isActiveMaskId, location.chunkId, location.indexInChunk)).toBe(true)
+
+				ecs.setComponent(entityId, 'lifecycleState', { state: LIFECYCLE.DYING })
+
+				location = this.getEntityLocation(entityId)
+				expect(this.isBitSet(isActiveMaskId, location.chunkId, location.indexInChunk)).toBe(false)
+				expect(this.isBitSet(isDyingMaskId, location.chunkId, location.indexInChunk)).toBe(true)
+			})
+
+			it('should NOT update state masks on ecs.setComponentsSilent', () => {
+				cleanup()
+				const entityId = ecs.createEntity({ lifecycleState: { state: LIFECYCLE.ACTIVE } })
+				let location = this.getEntityLocation(entityId)
+				expect(this.isBitSet(isActiveMaskId, location.chunkId, location.indexInChunk)).toBe(true)
+
+				ecs.setComponentsSilent(entityId, { lifecycleState: { state: LIFECYCLE.DYING } })
+
+				location = this.getEntityLocation(entityId)
+				expect(this.isBitSet(isActiveMaskId, location.chunkId, location.indexInChunk)).toBe(true, 'isActive mask should NOT be cleared by silent set')
+				expect(this.isBitSet(isDyingMaskId, location.chunkId, location.indexInChunk)).toBe(false, 'isDying mask should NOT be set by silent set')
+			})
+
+			it('should automatically set state mask on ecs.addComponent', () => {
+				cleanup()
+				const entityId = ecs.createEntity({ testEntityTag: {} })
+				ecs.addComponent(entityId, 'lifecycleState', { state: LIFECYCLE.POOLED })
+				const location = this.getEntityLocation(entityId)
+				expect(this.isBitSet(isPooledMaskId, location.chunkId, location.indexInChunk)).toBe(true)
+			})
+
+			it('should clear state masks when the defining component is removed', () => {
+				cleanup()
+				const entityId = ecs.createEntity({ lifecycleState: { state: LIFECYCLE.ACTIVE } })
+				const oldLocation = this.getEntityLocation(entityId)
+				expect(this.isBitSet(isActiveMaskId, oldLocation.chunkId, oldLocation.indexInChunk)).toBe(true)
+
+				// This causes an archetype move.
+				ecs.removeComponent(entityId, 'lifecycleState')
+
+				// The entity is now in a new chunk that does not have the lifecycleState component,
+				// so the mask should not be allocated for it.
+				const newLocation = this.getEntityLocation(entityId)
+				expect(newLocation.chunkId).not.toBe(oldLocation.chunkId)
+
+				// Attempting to query the mask for the new chunk should fail gracefully.
+				// The underlying masksByChunk array will be undefined for this maskId/chunkId combo.
+				// The API is designed to throw a TypeError in this case to signal a developer error.
+				expect(() => this.isBitSet(isActiveMaskId, newLocation.chunkId, newLocation.indexInChunk)).toThrow(TypeError)
+			})
+
+			it('should handle being set twice without issue', () => {
+				cleanup()
+				const entityId = ecs.createEntity({ lifecycleState: { state: LIFECYCLE.SPAWNING } })
+				const location = this.getEntityLocation(entityId)
+				const scratch = this.createScratchBuffer()
+
+				// The first set happens automatically on creation.
+				let count = this.getIndicesFromMask(isSpawningMaskId, location.chunkId, scratch)
+				expect(count).toBe(1)
+
+				// Manually set it again.
+				this.setBit(isSpawningMaskId, location.chunkId, location.indexInChunk)
+
+				// The count should still be 1.
+				count = this.getIndicesFromMask(isSpawningMaskId, location.chunkId, scratch)
+				expect(count).toBe(1)
+
+				// Clearing it should work correctly.
+				this.clearBit(isSpawningMaskId, location.chunkId, location.indexInChunk)
+				count = this.getIndicesFromMask(isSpawningMaskId, location.chunkId, scratch)
+				expect(count).toBe(0)
 			})
 		})
 

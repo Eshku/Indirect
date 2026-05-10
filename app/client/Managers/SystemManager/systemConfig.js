@@ -46,7 +46,7 @@
  *   infrequent tasks that don't need to run every frame, like periodic UI refreshes.
  */
 export const systemSchedule = {
- 	Initialization: [
+		Initialization: [
 		{ name: 'UIInputSystem', frequency: 'none' },
 		{ name: 'BackgroundSystem', frequency: 'none' },
 	],
@@ -58,6 +58,7 @@ export const systemSchedule = {
 
 	Logic: [
 		{ name: 'SpawnDirectorSystem', frequency: 'logic' },
+		{ name: 'SpawnAnimationSystem', frequency: 'logic' },
 
 		{ name: 'EnemyAISystem', frequency: 'logic' },
 
@@ -65,11 +66,13 @@ export const systemSchedule = {
 
 		{ name: 'SpinningSystem', frequency: 'logic' },
 
-		{ name: `ApplyVelocity`, frequency: `logic` }, 
+		{ name: `ApplyVelocity`, frequency: `logic` },
 
-		{ name: 'SpatialHashingSystem', frequency: 'logic' }, 
+		{ name: 'SpatialHashingSystem', frequency: 'logic' },
 
-		{ name: 'CollisionDetectionSystem', frequency: 'logic' }, 
+		{ name: 'CollisionDetectionSystem', frequency: 'logic' },
+
+		{ name: 'AreaOfEffectDamageSystem', frequency: 'logic' },
 
 		{ name: 'PlayerWeaponSystem', frequency: 'logic' },
 
@@ -77,19 +80,18 @@ export const systemSchedule = {
 
 		{ name: 'HealthSystem', frequency: 'logic' },
 
-		{ name: 'ImmunityTimerSystem', frequency: 'logic' },
+		{ name: 'LifetimeSystem', frequency: 'logic' },
 
-		{ name: 'HitFlashTimerSystem', frequency: 'logic' },
+		{ name: 'ImmunityTimerSystem', frequency: 'logic' },
 
 		{ name: 'CooldownSystem', frequency: 'logic' },
 
 		{ name: 'ProjectileLifetimeSystem', frequency: 'logic' },
-		
-		{ name: 'PoolingSystem', frequency: 'logic' },
 
-	
-	], 
-	
+		{ name: 'DeathAnimationSystem', frequency: 'logic' },
+
+		{ name: 'PoolingSystem', frequency: 'logic' },
+	],
 
 	// Infrequent UI updates. Runs on a timer, not every frame.
 	Timed: [{ name: 'OffscreenCleanupSystem', frequency: 1 }],
@@ -101,14 +103,12 @@ export const systemSchedule = {
 
 		{ name: 'HitFlashSystem', frequency: 'visuals' },
 
-		{ name: 'LifecycleVisualSystem', frequency: 'visuals' },
-
 		{ name: 'ImmunityVisualSystem', frequency: 'visuals' },
 
 		{ name: 'SyncTransforms', frequency: 'visuals' },
 
 		{ name: 'CameraSystem', frequency: 'visuals' },
-	], 
+	],
 
 	Debug: [
 		{ name: 'PerformanceMonitor', frequency: 'visuals' },
@@ -123,12 +123,12 @@ export const systemSchedule = {
 		/* { name: 'CPUBenchmark', frequency: 'visuals' }, */
 		/* { name: 'MemoryBenchmark', frequency: 'logic' }, */
 		/* { name: 'RWMBenchmark', frequency: 'visuals' },  */
-
-
 		/* { name: 'EntityCommandBufferBenchmarkSystem', frequency: 'visuals' }, */
 	],
 
 	Test: [
+		/* 		{ name: 'EventChannelTestWriterSystem', frequency: 'logic' },
+		{ name: 'EventChannelTestReaderSystem', frequency: 'logic' }, */
 		/* { name: 'DataIntegrityTestSystem', frequency: 'logic' }, */
 		/* { name: 'ParallelismTestSystem', frequency: 'logic' }, */
 		/* { name: 'ContextTestSystem', frequency: 'logic' }, */
@@ -143,18 +143,42 @@ export const systemSchedule = {
 		/* { name: 'SchemaTestSystem', frequency: 'none' }, */
 		/* { name: 'PayloadCompilerTestSystem', frequency: 'none' }, */
 		/* { name: 'GenerationalEntityTestSystem', frequency: 'none' }, */
-		
 		/* { name: 'EntityCommandBufferTestSystem', frequency: 'none' }, */
 		/* { name: 'EntityMaskManagerTestSystem', frequency: 'none' }, */
 		/* { name: 'QueryTestSystem', frequency: 'none' }, */
 	],
 
-	SideQuests: [
-
-	],
+	SideQuests: [],
 
 	TickTests: [
-		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
+		//Timed
 		/* { name: 'TimedSystemTest', frequency: 1 }, */
+
+		// Reactivity
+		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
+
+
+		//! Cross-boundary is messed up.
+		//! lacking silent creation \ addition API, tests are not clean.
+		//! bigger issue = I need to make up my mind in which way I wanna do dirty tracking
+		//! is it versioning? is it masking? Is it Journaling? (last one very fragile, but all has their own pros.)
+
+		//Cross-boundary Reactivity
+		/* { name: 'ReactivityCrossGroupWriterSystem', frequency: 'logic' },
+		{ name: 'ReactivityCrossGroupReaderSystem', frequency: 'visuals' }, */
+
+
+
+		/* { name: 'ReactivityCrossGroupDeferredWriterSystem', frequency: 'logic' },
+		{ name: 'ReactivityCrossGroupDeferredReaderSystem', frequency: 'visuals' }, */
+		
+
+
+
+
+		/* { name: 'ReactivityCrossGroupDeferredWriterSystem', frequency: 'logic' },
+		{ name: 'ReactivityCrossGroupTimedReaderSystem', frequency: 1 }, */
+
+		//tested on 0.01, lowered to not wait for so long */
 	],
 }

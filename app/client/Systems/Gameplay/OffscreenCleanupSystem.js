@@ -1,9 +1,9 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { enemyTag, playerTag, position, isPooled, lifecycleState, threatCost, spawnDirector } = ecs.getComponentIDs()
+const { enemyTag, playerTag, position, lifecycleState, threatCost, spawnDirector, visibility, tint } = ecs.getComponentIDs()
 
-const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 
 // Define a large distance outside of which enemies will be culled.
 // This should be significantly larger than the screen + spawn radius.
@@ -21,15 +21,14 @@ export class OffscreenCleanupSystem {
 		// This system modifies the director's budget and marks entities for pooling.
 		update: {
 			reads: [position, threatCost, spawnDirector],
-			writes: [lifecycleState, spawnDirector],
+			writes: [lifecycleState, spawnDirector, visibility, tint],
 		},
 	}
 
 	init() {
 		// Query for all active enemies that have a threat cost.
 		this.enemyQuery = this.getQuery({
-			with: [enemyTag, position, threatCost, lifecycleState],
-			without: [isPooled],
+			with: [enemyTag, position, threatCost, lifecycleState, visibility, tint],
 		})
 
 		// Singleton queries for the player and the director.
@@ -38,6 +37,10 @@ export class OffscreenCleanupSystem {
 
 		this.playerId = this.playerQuery.getSingleEntity()
 		this.directorId = this.directorQuery.getSingleEntity()
+
+		this.isActiveMaskId = this.getMaskId('isActive')
+		this.isDeadMaskId = this.getMaskId('isDead')
+		this.scratchBuffer = this.createScratchBuffer()
 	}
 
 	update({ currentTick }) {
@@ -61,23 +64,33 @@ export class OffscreenCleanupSystem {
 			const positions = this.getComponentData(chunkId, position)
 			const costs = this.getComponentData(chunkId, threatCost)
 			const states = this.getComponentData(chunkId, lifecycleState)
-			const chunkSize = this.getChunkSize(chunkId)
+			const visibilities = this.getComponentData(chunkId, visibility)
+			const tints = this.getComponentData(chunkId, tint)
 			let wasChunkModified = false
 
-			for (let j = 0; j < chunkSize; j++) {
-				if ((states.flags[j] & LIFECYCLE.ACTIVE) === 0) continue
+			const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+			for (let j = 0; j < activeCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
 
-				const dx = positions.x[j] - playerX
-				const dy = positions.y[j] - playerY
+				const dx = positions.x[indexInChunk] - playerX
+				const dy = positions.y[indexInChunk] - playerY
 				const distSq = dx * dx + dy * dy
 
 				if (distSq > CULLING_DISTANCE_SQ) {
-					totalRefund += costs.value[j]
-					// Directly set lifecycleState to DYING and mark dirty for immediate reactivity.
-					// This ensures LifecycleVisualSystem (running in the same frame) sees the change.
-					states.flags[j] = LIFECYCLE.DYING
+					totalRefund += costs.value[indexInChunk]
+					// Instantly mark for pooling, make invisible, and reset tint.
+					this.clearBit(this.isActiveMaskId, chunkId, indexInChunk)
+					this.setBit(this.isDeadMaskId, chunkId, indexInChunk)
+					states.state[indexInChunk] = LIFECYCLE.DEAD
+					visibilities.isVisible[indexInChunk] = 0
+					tints.r[indexInChunk] = 1.0
+					tints.g[indexInChunk] = 1.0
+					tints.b[indexInChunk] = 1.0
+					tints.a[indexInChunk] = 1.0
 					// Mark the specific entity as dirty for narrow-phase checks.
-					this.markEntityDirty(chunkId, j, lifecycleState, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, visibility, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, tint, currentTick)
 					wasChunkModified = true
 				}
 			}
@@ -85,6 +98,8 @@ export class OffscreenCleanupSystem {
 			// broad-phase dirty mark so that reactive systems like PoolingSystem will process this chunk.
 			if (wasChunkModified) {
 				this.markComponentDirty(chunkId, lifecycleState, currentTick)
+				this.markComponentDirty(chunkId, visibility, currentTick)
+				this.markComponentDirty(chunkId, tint, currentTick)
 			}
 		}
 

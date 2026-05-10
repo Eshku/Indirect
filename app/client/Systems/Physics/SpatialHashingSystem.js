@@ -4,8 +4,11 @@ const { ecs, physicsManager, queryManager } = engine.getManagers()
 
 const { SpatialHashGrid, SPATIAL_GRID_CONFIG } = await import(`@core/DataStructures/SpatialHashGrid.js`)
 
-const { aabb, isPooled, position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer } =
+const { aabb, position, rotation, circleCollider, boxCollider, orientedBoxCollider, collisionLayer, lifecycleState } =
 	ecs.getComponentIDs()
+
+
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 
 /**
  * Manages the spatial hash grid on the main thread.
@@ -37,7 +40,7 @@ export class SpatialHashingSystem {
 			orientedBoxCollider,
 			collisionLayer,
 			aabb,
-			isPooled,
+			lifecycleState,
 		} = ecs.getComponentIDs()
 
 		this.playerQuery = queryManager.getQuery({
@@ -48,9 +51,8 @@ export class SpatialHashingSystem {
 		// We also require the new `collisionLayer` component to ensure everything in the grid is categorized.
 		// This is more efficient than multiple queries as it reduces loop overhead.
 		this.collidablesQuery = queryManager.getQuery({
-			with: [position, collisionLayer, aabb],
+			with: [position, collisionLayer, aabb, lifecycleState],
 			any: [circleCollider, boxCollider, orientedBoxCollider],
-			without: [isPooled],
 		})
 
 		// Cache component type IDs for faster access in the update loop.
@@ -61,6 +63,10 @@ export class SpatialHashingSystem {
 		this.orientedBoxColliderId = orientedBoxCollider
 		this.collisionLayerId = collisionLayer
 		this.aabbId = aabb
+		this.lifecycleStateId = lifecycleState
+
+		this.isActiveMaskId = this.getMaskId('isActive')
+		this.scratchBuffer = this.createScratchBuffer()
 
 		// Cache the last known player position.
 		this.lastPlayerX = 0
@@ -98,7 +104,6 @@ export class SpatialHashingSystem {
 			const chunkId = collidableChunkIds[i]
 			const positions = this.getComponentData(chunkId, this.positionId)
 			const entities = this.getEntities(chunkId)
-			const chunkSize = this.getChunkSize(chunkId)
 
 			// These components may or may not exist on the chunk's archetype.
 			const circleColliders = this.getComponentData(chunkId, this.circleColliderId)
@@ -110,9 +115,12 @@ export class SpatialHashingSystem {
 
 			// This loop calculates a single, unified AABB for each entity,
 			// correctly encompassing all of its potential collider shapes.
-			for (let j = 0; j < chunkSize; j++) {
-				const x = positions.x[j]
-				const y = positions.y[j]
+			const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+			for (let j = 0; j < activeCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+
+				const x = positions.x[indexInChunk]
+				const y = positions.y[indexInChunk]
 
 				let minX = Infinity,
 					minY = Infinity,
@@ -122,7 +130,7 @@ export class SpatialHashingSystem {
 
 				// Accumulate bounds from circle collider if it exists
 				if (circleColliders) {
-					const radius = circleColliders.radius[j]
+					const radius = circleColliders.radius[indexInChunk]
 					minX = Math.min(minX, x - radius)
 					minY = Math.min(minY, y - radius)
 					maxX = Math.max(maxX, x + radius)
@@ -132,8 +140,8 @@ export class SpatialHashingSystem {
 
 				// Accumulate bounds from box collider if it exists
 				if (boxColliders) {
-					const halfWidth = boxColliders.width[j] / 2
-					const halfHeight = boxColliders.height[j] / 2
+					const halfWidth = boxColliders.width[indexInChunk] / 2
+					const halfHeight = boxColliders.height[indexInChunk] / 2
 					minX = Math.min(minX, x - halfWidth)
 					minY = Math.min(minY, y - halfHeight)
 					maxX = Math.max(maxX, x + halfWidth)
@@ -143,9 +151,9 @@ export class SpatialHashingSystem {
 
 				// Accumulate bounds from oriented box collider if it exists
 				if (orientedBoxColliders) {
-					const angle = rotations.angle[j]
-					const halfWidth = orientedBoxColliders.width[j] / 2
-					const halfHeight = orientedBoxColliders.height[j] / 2
+					const angle = rotations.angle[indexInChunk]
+					const halfWidth = orientedBoxColliders.width[indexInChunk] / 2
+					const halfHeight = orientedBoxColliders.height[indexInChunk] / 2
 
 					const c = Math.abs(Math.cos(angle))
 					const s = Math.abs(Math.sin(angle))
@@ -162,12 +170,12 @@ export class SpatialHashingSystem {
 				// Only add to grid if a collider was found and bounds are valid.
 				if (hasCollider) {
 					// Write the calculated AABB to the component for other systems to use.
-					aabbs.minX[j] = minX
-					aabbs.minY[j] = minY
-					aabbs.maxX[j] = maxX
-					aabbs.maxY[j] = maxY
+					aabbs.minX[indexInChunk] = minX
+					aabbs.minY[indexInChunk] = minY
+					aabbs.maxX[indexInChunk] = maxX
+					aabbs.maxY[indexInChunk] = maxY
 
-					this.grid.add(entities[j], chunkId, j, minX, minY, maxX, maxY)
+					this.grid.add(entities[indexInChunk], chunkId, indexInChunk, minX, minY, maxX, maxY)
 				}
 			}
 		}

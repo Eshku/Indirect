@@ -123,13 +123,13 @@ export class SpatialHashDebugSystem {
 					let color = 0x808080 // Default grey for unknown
 					let alpha = 0.2
 
-					if (ecs.entityManager.hasComponentType(archetypeId, this.playerTagId)) {
+					if (ecs.entityManager.archetypeHasComponent(archetypeId, this.playerTagId)) {
 						color = 0x40ff40 // Bright Green
 						alpha = 0.2
-					} else if (ecs.entityManager.hasComponentType(archetypeId, this.enemyTagId)) {
+					} else if (ecs.entityManager.archetypeHasComponent(archetypeId, this.enemyTagId)) {
 						color = 0xff0000 // red
 						alpha = 0.2
-					} else if (ecs.entityManager.hasComponentType(archetypeId, this.playerProjectileId)) {
+					} else if (ecs.entityManager.archetypeHasComponent(archetypeId, this.playerProjectileId)) {
 						color = 0x00ffff // Cyan
 						alpha = 0.1
 					}

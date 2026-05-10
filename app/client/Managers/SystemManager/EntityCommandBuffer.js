@@ -128,7 +128,9 @@ export class EntityCommandBuffer {
 	}
 
 	/**
-	 * Sets component data silently, without triggering reactive queries.
+	 * Sets component data silently. This is a data-only operation that bypasses
+	 * both narrow-phase dirty tracking (for `isTrackable` components) and any
+	 * automatic state mask updates (e.g., for `lifecycleState`).
 	 * @param {bigint} entityId The entity to modify.
 	 * @param {object} payload The compiled SoA payload.
 	 * @param {number} [layer=0] The sorting layer.
@@ -329,11 +331,6 @@ export class EntityCommandBuffer {
 
 		// 1. Write Header directly to frameDataBuffer
 		this.frameDataBuffer.writeU32(count)
-		this.frameDataBuffer.writeU8(payload.trackableComponentIds.length)
-		for (const id of payload.trackableComponentIds) {
-			this.frameDataBuffer.writeU16(id)
-		}
-
 		// 2. Add padding for 8-byte alignment
 		const dataAlignment = 8
 		const padding = (dataAlignment - (this.frameDataBuffer.offset % dataAlignment)) % dataAlignment
@@ -375,10 +372,6 @@ export class EntityCommandBuffer {
 
 		// 1. Write Header
 		this.frameDataBuffer.writeU32(1) // count is always 1
-		this.frameDataBuffer.writeU8(payload.trackableComponentIds.length)
-		for (const id of payload.trackableComponentIds) {
-			this.frameDataBuffer.writeU16(id)
-		}
 
 		// 2. Add padding
 		const dataAlignment = 8
@@ -416,10 +409,6 @@ export class EntityCommandBuffer {
 	_writeSingleEntityPayloadToBuffer(payload, buffer) {
 		// 1. Write Header
 		buffer.writeU32(1) // count is always 1
-		buffer.writeU8(payload.trackableComponentIds.length)
-		for (const id of payload.trackableComponentIds) {
-			buffer.writeU16(id)
-		}
 
 		// 2. Add padding
 		const dataAlignment = 8

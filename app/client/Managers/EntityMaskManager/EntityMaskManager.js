@@ -1,11 +1,8 @@
 import { entityStore, MAX_CHUNKS, MASK_PARTS } from '../EntityManager/EntityManager.js'
 import { DIRTY_HISTORY_LENGTH, componentInfo } from '../ComponentManager/ComponentSchema.js'
+const { archetypeMatches } = await import(`../../Core/ArchetypeMatcher.js`)
 import { radixSort } from '../../Core/Algorithms/RadixSorter.js'
-
-const MASK_TYPE = {
-	STATE: 0,
-	EVENT: 1,
-}
+const { getConstantsForProperty } = await import(`@managers/ComponentManager/ComponentConstants.js`)
 
 /* Turns O(N) problems into O(K) problems (where K is the count of relevant entities). */
 
@@ -16,11 +13,15 @@ const MASK_TYPE = {
 //! Performance at scale needs to be revisited
 //! custom bitmask-oriented implementation of a LSM Tree?
 
-//! Make part of query as enabled:[componentID]?
+//! Make part of query as enabled:[componentID]? but then who "turns off the lights?" check each time we disable? nah.
+//! so many fun things could be applied only for entity-level iterations, yet they do not allow chunk-level optimizations.
 
 export class EntityMaskManager {
-	constructor() {
-		this.entityManager = null
+	async init(engine) {
+		// --- Dynamically imported modules ---
+		const defsModule = await import(`@managers/EntityMaskManager/MaskDefinitions.js`)
+		this.maskDefinitions = defsModule.MaskDefinitions
+		this.MASK_TYPE = defsModule.MASK_TYPE
 
 		// --- Internal State ---
 		this.maskSets = [] // Array of { name, type, allocationQuery, historyLength, masksByChunk }
@@ -29,6 +30,7 @@ export class EntityMaskManager {
 		this.chunksWithEventMasks = new Set()
 		this.componentToEnableMaskId = new Map()
 		this.componentToModifiedMaskId = new Map()
+		this.initialStateMap = new Map() // Map<typeId, Map<propName, Map<value, maskId>>>
 
 		// --- Pre-allocated structures for performance ---
 		this._movesByChunkPair = new Map()
@@ -44,12 +46,60 @@ export class EntityMaskManager {
 		this._tempBatchMoveNewIndices = new Uint32Array(this._batchMoveCapacity)
 
 		this._poolIndex = 0
-	}
 
-	init(engine) {
 		this.entityManager = engine.entityManager
 
-		this.registerAllSchemaMasks()
+		this.registerDeclarativeMasks()
+	}
+
+	registerDeclarativeMasks() {
+		for (const name in this.maskDefinitions) {
+			const def = this.maskDefinitions[name]
+			let maskId
+			if (def.type === this.MASK_TYPE.STATE) {
+				maskId = this.createStateMask(name, def.rule)
+			} else if (def.type === this.MASK_TYPE.EVENT) {
+				// createEventMask has a default for historyLength, so this is safe.
+				maskId = this.createEventMask(name, def.rule, def.historyLength)
+			}
+
+			// --- NEW: Handle declarative enableable/trackable masks ---
+			if (def.isEnableableFor !== undefined) {
+				this.componentToEnableMaskId.set(def.isEnableableFor, maskId)
+			}
+			if (def.isModifiedFor !== undefined) {
+				this.componentToModifiedMaskId.set(def.isModifiedFor, maskId)
+			}
+
+			// --- REFACTORED: Handle automatic mask binding on value change ---
+			if (def.autoMaskOnValue) {
+				const { component, property } = def.autoMaskOnValue
+				let { value } = def.autoMaskOnValue
+
+				// --- NEW: Auto-derive value if not provided ---
+				if (value === undefined) {
+					// Convention: mask name 'isSpawning' -> enum key 'SPAWNING'
+					const enumKey = name.startsWith('is') ? name.substring(2).toUpperCase() : name.toUpperCase()
+					const constants = getConstantsForProperty(component, property)
+					if (constants && constants[enumKey] !== undefined) {
+						value = constants[enumKey]
+					} else {
+						console.warn(`[EntityMaskManager] Could not auto-derive value for autoMaskOnValue on mask "${name}". No constant found for key "${enumKey}".`)
+						continue // Skip adding to the binding map
+					}
+				}
+
+				if (!this.initialStateMap.has(component)) {
+					this.initialStateMap.set(component, new Map())
+				}
+				const propMap = this.initialStateMap.get(component)
+				if (!propMap.has(property)) {
+					propMap.set(property, new Map())
+				}
+				const valueMap = propMap.get(property)
+				valueMap.set(value, maskId)
+			}
+		}
 	}
 
 	_resizeBatchMoveArrays(requiredCapacity) {
@@ -75,30 +125,12 @@ export class EntityMaskManager {
 		this._tempBatchMoveNewIndices = new Uint32Array(newCapacity)
 	}
 
-	registerAllSchemaMasks() {
-		// --- Declarative Mask Registration ---
-		// At startup, discover all components that declared they need masks
-		// and register them upfront. This avoids race conditions from on-demand
-		// registration within systems.
-		const allComponentInfo = componentInfo
-		for (const info of allComponentInfo) {
-			if (info) {
-				if (info.isEnableable) {
-					this.registerEnableableMask(info.typeID)
-				}
-				if (info.isTrackable) {
-					this.registerModifiedMask(info.typeID)
-				}
-			}
-		}
-	}
-
 	// =================================================================
 	// PUBLIC API - HIGH LEVEL HELPERS
 	// =================================================================
 
 	getEnabledMask(componentTypeId) {
-		// This is now a simple getter. The mask must have been registered at startup.
+		// Mask must have been registered at startup.
 		// If this returns undefined, it means the component was not declared with
 		// `meta: { isEnableable: true }` in its schema. The calling function will throw
 		// a native error, which is the desired behavior.
@@ -125,24 +157,12 @@ export class EntityMaskManager {
 		this.clearBitById(maskId, entityId)
 	}
 
-	registerEnableableMask(componentTypeId) {
-		if (this.componentToEnableMaskId.has(componentTypeId)) {
-			return this.componentToEnableMaskId.get(componentTypeId)
-		}
-
-		// Create a direct allocation rule definition.
-		const allocationRuleDef = { with: [componentTypeId] }
-		const maskId = this.createStateMask(`_enableable:${componentTypeId}`, allocationRuleDef)
-		this.componentToEnableMaskId.set(componentTypeId, maskId)
-		return maskId
-	}
-
 	getEnabled(chunkId, componentTypeId, outBuffer) {
 		const maskId = this.componentToEnableMaskId.get(componentTypeId)
 		// If maskId is undefined here, it means the component was not declared as
-		// `isEnableable`. The subsequent call to getStateIndices will throw a native
+		// `isEnableable`. The subsequent call to getIndicesFromMask will throw a native
 		// TypeError, which is the desired behavior.
-		return this.getStateIndices(maskId, chunkId, outBuffer)
+		return this.getIndicesFromMask(maskId, chunkId, outBuffer)
 	}
 
 	getDirtyMask(componentTypeId) {
@@ -151,18 +171,6 @@ export class EntityMaskManager {
 		// `meta: { isTrackable: true }` in its schema. The calling function will throw
 		// a native error, which is the desired behavior.
 		return this.componentToModifiedMaskId.get(componentTypeId)
-	}
-
-	registerModifiedMask(componentTypeId) {
-		if (this.componentToModifiedMaskId.has(componentTypeId)) {
-			return this.componentToModifiedMaskId.get(componentTypeId)
-		}
-
-		// Create a direct allocation rule definition.
-		const allocationRuleDef = { with: [componentTypeId] }
-		const maskId = this.createEventMask(`_modified:${componentTypeId}`, allocationRuleDef)
-		this.componentToModifiedMaskId.set(componentTypeId, maskId)
-		return maskId
 	}
 
 	maskDirty(chunkId, indexInChunk, componentTypeId, tick) {
@@ -238,8 +246,8 @@ export class EntityMaskManager {
 	getDirty(chunkId, componentTypeId, lastTick, currentTick, outBuffer) {
 		const maskId = this.getDirtyMask(componentTypeId)
 		// If maskId is undefined, the component was not declared as `isTrackable`.
-		// The subsequent call to getEventIndicesSince will throw a native TypeError.
-		return this.getEventIndicesSince(maskId, chunkId, lastTick, currentTick, outBuffer)
+		// The subsequent call to getEventsSince will throw a native TypeError.
+		return this.getEventsSince(maskId, chunkId, lastTick, currentTick, outBuffer)
 	}
 
 	// =================================================================
@@ -263,6 +271,10 @@ export class EntityMaskManager {
 		}
 	}
 
+	getMaskIdByName(name) {
+		return this.nameToId.get(name)
+	}
+
 	createStateMask(name, allocationRuleDef) {
 		if (this.nameToId.has(name)) {
 			return this.nameToId.get(name)
@@ -274,7 +286,7 @@ export class EntityMaskManager {
 		const maskSetId = this.maskSetIdCounter++
 		this.maskSets[maskSetId] = {
 			name,
-			type: MASK_TYPE.STATE,
+			type: this.MASK_TYPE.STATE,
 			allocationRule: this._buildAllocationRule(allocationRuleDef),
 			masksByChunk: new Array(MAX_CHUNKS), // Will hold Uint32Array views
 		}
@@ -295,7 +307,7 @@ export class EntityMaskManager {
 		const maskSetId = this.maskSetIdCounter++
 		this.maskSets[maskSetId] = {
 			name,
-			type: MASK_TYPE.EVENT,
+			type: this.MASK_TYPE.EVENT,
 			allocationRule: this._buildAllocationRule(allocationRuleDef),
 			historyLength,
 			masksByChunk: new Array(MAX_CHUNKS), // Will hold Uint32Array views
@@ -313,7 +325,7 @@ export class EntityMaskManager {
 		// This can happen if getEnabledMask() was called for a component that was not
 		// declared as `isEnableable` in its schema. The following line will then throw
 		// a native TypeError, which is the desired behavior to signal a developer error.
-		if (maskSet.type !== MASK_TYPE.STATE) {
+		if (maskSet.type !== this.MASK_TYPE.STATE) {
 			throw new Error(`[EntityMaskManager] setBit called on a non-state mask set "${maskSet.name}".`)
 		}
 
@@ -340,7 +352,7 @@ export class EntityMaskManager {
 		// This can happen if getEnabledMask() was called for a component that was not
 		// declared as `isEnableable` in its schema. The following line will then throw
 		// a native TypeError, which is the desired behavior to signal a developer error.
-		if (maskSet.type !== MASK_TYPE.STATE) {
+		if (maskSet.type !== this.MASK_TYPE.STATE) {
 			throw new Error(`[EntityMaskManager] clearBit called on a non-state mask set "${maskSet.name}".`)
 		}
 
@@ -367,7 +379,7 @@ export class EntityMaskManager {
 		// This can happen if getDirtyMask() was called for a component that was not
 		// declared as `isTrackable` in its schema. The following line will then throw
 		// a native TypeError, which is the desired behavior to signal a developer error.
-		if (maskSet.type !== MASK_TYPE.EVENT) {
+		if (maskSet.type !== this.MASK_TYPE.EVENT) {
 			throw new Error(`[EntityMaskManager] fireEvent called on a non-event mask set "${maskSet.name}".`)
 		}
 
@@ -395,7 +407,7 @@ export class EntityMaskManager {
 		// This can happen if getEnabledMask() was called for a component that was not
 		// declared as `isEnableable` in its schema. The following line will then throw
 		// a native TypeError, which is the desired behavior to signal a developer error.
-		if (maskSet.type !== MASK_TYPE.STATE) {
+		if (maskSet.type !== this.MASK_TYPE.STATE) {
 			throw new Error(`[EntityMaskManager] isBitSet called on a non-state mask set "${maskSet.name}".`)
 		}
 
@@ -414,7 +426,7 @@ export class EntityMaskManager {
 
 	// --- Query API ---
 
-	getStateIndices(maskSetId, chunkId, outBuffer) {
+	getIndicesFromMask(maskSetId, chunkId, outBuffer) {
 		const maskSet = this.maskSets[maskSetId]
 		// If `maskSet` is undefined, it's likely because `maskSetId` was undefined.
 		// This can happen if getEnabled() was called for a component that was not
@@ -448,7 +460,7 @@ export class EntityMaskManager {
 		return count
 	}
 
-	getEventIndicesSince(maskSetId, chunkId, lastTick, currentTick, outBuffer) {
+	getEventsSince(maskSetId, chunkId, lastTick, currentTick, outBuffer) {
 		const maskSet = this.maskSets[maskSetId]
 		// If `maskSet` is undefined, it's likely because `maskSetId` was undefined.
 		// This can happen if getDirty() was called for a component that was not
@@ -458,9 +470,9 @@ export class EntityMaskManager {
 		// If `eventMasks` is undefined, it means this mask was not allocated for this chunk.
 		// This is a developer error. The following line will intentionally throw a TypeError.
 		// A silent `return 0` was removed because it can hide bugs.
-		
+
 		// NEW "Entity-Major" Logic
-		const size = entityStore.chunkSizes[chunkId];
+		const size = entityStore.chunkSizes[chunkId]
 		const historyLength = maskSet.historyLength
 		let count = 0
 
@@ -508,12 +520,13 @@ export class EntityMaskManager {
 		this.chunksWithEventMasks.clear()
 		this.componentToEnableMaskId.clear()
 		this.componentToModifiedMaskId.clear()
+		this.initialStateMap.clear()
 	}
 
 	performMaintenance(chunkId, currentTick) {
 		for (let maskSetId = 0; maskSetId < this.maskSetIdCounter; maskSetId++) {
 			const maskSet = this.maskSets[maskSetId]
-			if (maskSet.type !== MASK_TYPE.EVENT) continue
+			if (maskSet.type !== this.MASK_TYPE.EVENT) continue
 
 			const eventMasks = maskSet.masksByChunk[chunkId]
 			if (!eventMasks) continue
@@ -540,7 +553,7 @@ export class EntityMaskManager {
 	handleChunkCreated = (chunkId, archetypeId) => {
 		for (let maskSetId = 0; maskSetId < this.maskSetIdCounter; maskSetId++) {
 			const maskSet = this.maskSets[maskSetId]
-			if (this._archetypeMatches(archetypeId, maskSet.allocationRule)) {
+			if (archetypeMatches(archetypeId, maskSet.allocationRule)) {
 				this._allocateMaskForChunk(maskSet, chunkId)
 			}
 		}
@@ -551,6 +564,7 @@ export class EntityMaskManager {
 		if (ruleDef.with) {
 			rule.with = new BigUint64Array(MASK_PARTS)
 			for (const id of ruleDef.with) {
+
 				const partIndex = Math.floor(id / 64)
 				rule.with[partIndex] |= 1n << BigInt(id % 64)
 			}
@@ -565,38 +579,14 @@ export class EntityMaskManager {
 		return rule
 	}
 
-	_archetypeMatches(archetypeId, rule) {
-		const { with: withMask, without: withoutMask } = rule
-		const archetypeMaskOffset = archetypeId * MASK_PARTS
-
-		// Check required components
-		if (withMask) {
-			for (let i = 0; i < MASK_PARTS; i++) {
-				if ((entityStore.archetypeMasks[archetypeMaskOffset + i] & withMask[i]) !== withMask[i]) {
-					return false
-				}
-			}
-		}
-
-		// Check excluded components
-		if (withoutMask) {
-			for (let i = 0; i < MASK_PARTS; i++) {
-				if ((entityStore.archetypeMasks[archetypeMaskOffset + i] & withoutMask[i]) !== 0n) {
-					return false
-				}
-			}
-		}
-		return true
-	}
-
 	_allocateMaskForChunk(maskSet, chunkId) {
 		const capacity = entityStore.chunkCapacities[chunkId]
 
-		if (maskSet.type === MASK_TYPE.STATE) {
+		if (maskSet.type === this.MASK_TYPE.STATE) {
 			const words = Math.ceil(capacity / 32)
 			const buffer = new SharedArrayBuffer(words * 4)
 			maskSet.masksByChunk[chunkId] = new Uint32Array(buffer)
-		} else if (maskSet.type === MASK_TYPE.EVENT) {
+		} else if (maskSet.type === this.MASK_TYPE.EVENT) {
 			// NEW "Entity-Major" Layout: One u64 per entity to hold its history.
 			const buffer = new SharedArrayBuffer(capacity * BigUint64Array.BYTES_PER_ELEMENT)
 			maskSet.masksByChunk[chunkId] = new BigUint64Array(buffer)
@@ -631,7 +621,7 @@ export class EntityMaskManager {
 
 			if (!newMask) continue
 
-			if (maskSet.type === MASK_TYPE.STATE) {
+			if (maskSet.type === this.MASK_TYPE.STATE) {
 				let isSet = false
 				if (oldMask) {
 					const oldWordIndex = oldIndex >>> 5
@@ -647,7 +637,7 @@ export class EntityMaskManager {
 				} else {
 					Atomics.and(newMask, newWordIndex, ~newBitInWord)
 				}
-			} else if (maskSet.type === MASK_TYPE.EVENT) {
+			} else if (maskSet.type === this.MASK_TYPE.EVENT) {
 				// NEW "Entity-Major" Logic: Simple history copy.
 				let history = 0n
 				if (oldMask) {
@@ -723,21 +713,23 @@ export class EntityMaskManager {
 
 				if (!newMask) continue
 
-				if (maskSet.type === MASK_TYPE.STATE) {
+				if (maskSet.type === this.MASK_TYPE.STATE) {
 					for (let j = i; j < batchEnd; j++) {
 						const oldIndex = this._batchMoveOldIndices[j]
 						const newIndex = this._batchMoveNewIndices[j]
 						let isSet = false
 						if (oldMask) {
-							const oldWordIndex = oldIndex >>> 5, oldBitInWord = 1 << (oldIndex & 31)
+							const oldWordIndex = oldIndex >>> 5,
+								oldBitInWord = 1 << (oldIndex & 31)
 							isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
 							Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
 						}
-						const newWordIndex = newIndex >>> 5, newBitInWord = 1 << (newIndex & 31)
+						const newWordIndex = newIndex >>> 5,
+							newBitInWord = 1 << (newIndex & 31)
 						if (isSet) Atomics.or(newMask, newWordIndex, newBitInWord)
 						else Atomics.and(newMask, newWordIndex, ~newBitInWord)
 					}
-				} else if (maskSet.type === MASK_TYPE.EVENT) {
+				} else if (maskSet.type === this.MASK_TYPE.EVENT) {
 					// NEW "Entity-Major" Bulk Copy: This is now a simple, fast loop.
 					for (let j = i; j < batchEnd; j++) {
 						const oldIndex = this._batchMoveOldIndices[j]
@@ -799,7 +791,7 @@ export class EntityMaskManager {
 				// If the destination chunk doesn't have this mask, there's nothing to do.
 				if (!newMask) continue
 
-				if (maskSet.type === MASK_TYPE.STATE) {
+				if (maskSet.type === this.MASK_TYPE.STATE) {
 					for (let i = 0; i < oldIndices.length; i++) {
 						const oldIndex = oldIndices[i]
 						const newIndex = newIndices[i]
@@ -827,7 +819,7 @@ export class EntityMaskManager {
 							Atomics.and(newMask, newWordIndex, ~newBitInWord)
 						}
 					}
-				} else if (maskSet.type === MASK_TYPE.EVENT) {
+				} else if (maskSet.type === this.MASK_TYPE.EVENT) {
 					// NEW "Entity-Major" Bulk Copy
 					for (let i = 0; i < oldIndices.length; i++) {
 						const oldIndex = oldIndices[i]
@@ -857,7 +849,7 @@ export class EntityMaskManager {
 			const mask = maskSet.masksByChunk[chunkId]
 			if (!mask) continue
 
-			if (maskSet.type === MASK_TYPE.STATE) {
+			if (maskSet.type === this.MASK_TYPE.STATE) {
 				for (let i = 0; i < swapCount; i++) {
 					const oldIndex = oldIndices[i]
 					const newIndex = newIndices[i]
@@ -876,7 +868,7 @@ export class EntityMaskManager {
 					// this slot. We must clear the bit to prevent the new entity from inheriting a stale state.
 					Atomics.and(mask, oldWordIndex, ~oldBitInWord)
 				}
-			} else if (maskSet.type === MASK_TYPE.EVENT) {
+			} else if (maskSet.type === this.MASK_TYPE.EVENT) {
 				// NEW "Entity-Major" Bulk Copy
 				for (let i = 0; i < swapCount; i++) {
 					const oldIndex = oldIndices[i]

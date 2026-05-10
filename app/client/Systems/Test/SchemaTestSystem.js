@@ -7,8 +7,6 @@ const { describe, it, expect } = await import(`@client/Managers/TestManager/Test
 // Imports needed for the new test
 import { DIRTY_HISTORY_LENGTH } from '@managers/ComponentManager/ComponentSchema.js'
 
-const { enableableTestComponent } = ecs.getComponentIDs()
-
 /**
  * A system dedicated to testing the functionality of the SchemaParser and data layer.
  * It runs a suite of self-contained tests for each schema type during its `init` phase.
@@ -29,7 +27,6 @@ export class SchemaTestSystem {
 			flatArrayEntities: true,
 			componentRef: true,
 			rpn: true,
-			enableable: true,
 			
 		}
 	}
@@ -268,43 +265,6 @@ export class SchemaTestSystem {
 					// One formula was provided, so the starts/lengths arrays should have a count of 1.
 					expect(retrievedData.formulas_formulaStarts.length).toBe(1)
 					expect(retrievedData.formulas_formulaLengths.length).toBe(1)
-
-					ECS.destroyEntity(entityId)
-				})
-			}
-
-			if (this.testConfig.enableable) {
-				it('should correctly toggle and query enableable components', async () => {
-					const entityId = ECS.createEntity({ enableableTestComponent: { value: 1.0 } })
-					// We need to flush to ensure the entity is created and located.
-					this.flush()
-
-					const location = ecs.entityManager.getEntityLocation(entityId)
-					expect(location).toBeDefined()
-
-					const chunkId = location.chunkId
-					const scratchBuffer = new Uint32Array(this.getChunkSize(chunkId))
-
-					// 1. Check initial state (should be disabled by default with the new entityMaskManager)
-					let enabledCount = this.getEnabled(chunkId, enableableTestComponent, scratchBuffer)
-					expect(enabledCount).toBe(0)
-
-					// 2. Enable the component using a deferred command
-					this.enableComponentById(entityId, enableableTestComponent)
-					this.flush()
-
-					// 3. Check enabled state
-					enabledCount = this.getEnabled(chunkId, enableableTestComponent, scratchBuffer)
-					expect(enabledCount).toBe(1)
-					expect(scratchBuffer[0]).toBe(location.indexInChunk)
-
-					// 4. Disable the component again
-					this.disableComponentById(entityId, enableableTestComponent)
-					this.flush()
-
-					// 5. Check disabled state again
-					enabledCount = this.getEnabled(chunkId, enableableTestComponent, scratchBuffer)
-					expect(enabledCount).toBe(0)
 
 					ECS.destroyEntity(entityId)
 				})

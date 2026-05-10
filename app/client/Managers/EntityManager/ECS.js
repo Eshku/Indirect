@@ -20,6 +20,7 @@ export class ECS {
 	 * @param {import('../../Engine.js').Engine} engine
 	 */
 	async init(engine) {
+
 		// Initialize our own scoped managers in the correct dependency order.
 		this.engine = engine
 
@@ -76,14 +77,14 @@ export class ECS {
 	 * @private
 	 */
 	getTick() {
-		// The game loop is not available during the initial manager init phase.
-		if (!this.systemManager || !this.systemManager.gameLoop) return 0
-		// For pre-loop setup (e.g., in client.js), use tick 0.
-		if (this.systemManager.gameLoop.frameCounter === 0) return 0
-		// For in-loop calls, timestamp with the *next* tick (`currentTick + 1`). This is crucial for the engine's
-		// "next-tick" reactivity model. Changes made during tick N are timestamped for tick N+1,
-		// so they are correctly picked up by reactive queries on the next frame.
-		return this.systemManager.currentTick + 1
+		const gameLoop = this.systemManager?.gameLoop
+		if (!gameLoop) return 1 // Not initialized, default to tick 1.
+
+		// Before the loop starts, changes should be part of the first tick.
+		if (gameLoop.frameCounter === 0) return 1
+
+		// During the loop, changes are part of the current world tick.
+		return gameLoop.currentTick
 	}
 
 	/**
@@ -113,10 +114,9 @@ export class ECS {
 		// This is a full world reset. It must clear the state of all managers
 		// that hold world data to ensure true test isolation.
 		this.entityManager.destroyAll()
-		// Clear all existing mask data and re-run the declarative registration
-		// to build a clean state for the next test.
+		// Clear all existing mask data. It's the responsibility of the test setup
+		// (or a full application reload) to re-initialize state if needed.
 		this.entityMaskManager.clear()
-		this.entityMaskManager.registerAllSchemaMasks()
 	}
 
 	/**
@@ -150,15 +150,8 @@ export class ECS {
 		const componentObject = { [componentName]: data }
 		const payload = this.payloadCompiler.compile(componentObject)
 		const tick = this.getTick()
-
-		const success = this.entityManager.addComponent(entityId, payload, tick)
-
-		// If the added component is trackable, we must manually fire the narrow-phase dirty event.
-		if (success && payload.trackableComponentIds.length > 0) {
-			this.entityMaskManager.markEntitiesDirtyById(entityId, payload.trackableComponentIds, tick)
-		}
-
-		return success
+		// The entity manager method now handles dirty tracking internally.
+		return this.entityManager.addComponent(entityId, payload, tick)
 	}
 
 	/**
@@ -192,7 +185,19 @@ export class ECS {
 	setComponents(entityId, componentsInput) {
 		const payload = this.payloadCompiler.compile(componentsInput)
 		const tick = this.getTick()
-		return this.entityManager.setComponentsDataImmediate(entityId, payload, tick)
+		return this.entityManager.setComponentsDataImmediate(entityId, payload, tick, false)
+	}
+
+	/**
+	 * Sets the data for multiple components on an entity immediately, bypassing
+	 * dirty tracking and automatic state mask updates.
+	 * @param {bigint} entityId The entity to modify.
+	 * @param {object} componentsInput An object of component data.
+	 */
+	setComponentsSilent(entityId, componentsInput) {
+		const payload = this.payloadCompiler.compile(componentsInput)
+		const tick = this.getTick()
+		return this.entityManager.setComponentsDataImmediate(entityId, payload, tick, true)
 	}
 
 	/**
@@ -202,6 +207,11 @@ export class ECS {
 		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
 
 		const location = this.entityManager.getEntityLocation(entityId)
+		
+		if (!location) {
+			console.error(`[ECS.getComponent] Could not find location for entity ${entityId}. Is it active?`)
+			return undefined
+		}
 
 		const { chunkId, indexInChunk } = location
 
@@ -254,7 +264,7 @@ export class ECS {
 		if (componentTypeId === undefined) return false
 		if (!this.entityManager.isEntityActive(entityId)) return false
 		const archetypeId = this.entityManager.getArchetypeForEntity(entityId)
-		return archetypeId !== undefined ? this.entityManager.hasComponentType(archetypeId, componentTypeId) : false
+		return archetypeId !== undefined ? this.entityManager.archetypeHasComponent(archetypeId, componentTypeId) : false
 	}
 
 	/**
@@ -307,6 +317,17 @@ export class ECS {
 	 */
 	getKernelIDs() {
 		return this.systemManager.getKernelIds()
+	}
+
+	/**
+	 * Retrieves the read-only registry of all event channels.
+	 * This is the primary, type-safe way to access event channels from outside of a system.
+	 * @returns {Object.<string, import('../EventManager/EventManager.js').InstantEventChannel>}
+	 */
+	getEvents() {
+		// We access the eventManager via the engine instance, as it is guaranteed to be
+		// initialized by the time this method is called.
+		return this.engine.eventManager.getChannelRegistry()
 	}
 
 	/**

@@ -54,6 +54,15 @@ export const extensions = {
 		entityMaskManager.isComponentEnabled(chunkId, indexInChunk, componentTypeId),
 	getEnabled: (chunkId, componentTypeId, outBuffer) =>
 		entityMaskManager.getEnabled(chunkId, componentTypeId, outBuffer),
+	getIndicesFromMask: (maskId, chunkId, outBuffer) => entityMaskManager.getIndicesFromMask(maskId, chunkId, outBuffer),
+	getMaskId: name =>
+		entityMaskManager.getMaskIdByName(name),
+	setBit: (maskId, chunkId, indexInChunk) =>
+		entityMaskManager.setBit(maskId, chunkId, indexInChunk),
+	clearBit: (maskId, chunkId, indexInChunk) =>
+		entityMaskManager.clearBit(maskId, chunkId, indexInChunk),
+	isBitSet: (maskId, chunkId, indexInChunk) =>
+		entityMaskManager.isBitSet(maskId, chunkId, indexInChunk),
 
 	// --- Dirty Tracking Component Pattern Helpers ---
 	// Broad-phase: Marks the entire component type as dirty for a chunk. Call this ONCE per chunk, outside the entity loop.
@@ -84,7 +93,7 @@ export const extensions = {
 	getComponentData: (chunkId, componentTypeId) => entityStore.chunkComponentData[chunkId][componentTypeId],
 	getChunkSize: chunkId => entityStore.chunkSizes[chunkId],
 	getEntities: chunkId => entityStore.chunkComponentData[chunkId].entities,
-	getComponentTypeIDsForArchetype: archetypeId => entityManager.getComponentTypeIDsForArchetype(archetypeId),
+	getComponentTypeIDsForArchetype: archetypeId => entityManager.getComponentTypeIDsForArchetypeAlloc(archetypeId),
 
 	//query
 	getQuery: options => queryManager.getQuery(options),

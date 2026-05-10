@@ -1,6 +1,6 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
-const LIFECYCLE = ecs.getConstantsForProperty('LifecycleState', 'flags')
+
 const {
 	playerTag,
 	shootingIntent,
@@ -14,14 +14,16 @@ const {
 	cursorTag,
 	rotation,
 	playerProjectile,
-	isPooled,
 	range,
 	damage,
 	hitHistory,
 	viewable,
+	visibility,
 	spriteDescriptor,
 	layer,
 } = ecs.getComponentIDs()
+
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 
 /**
  * Handles the player's firing action.
@@ -51,16 +53,19 @@ export class PlayerWeaponSystem {
 			with: [playerTag, shootingIntent, playerWeaponStats, weaponCooldown, position],
 		})
 
-		// Query for projectiles in the pool using the `isPooled` tag component.
-		// This is highly efficient as it only iterates over inactive entities.
+		// Query for projectiles in the pool.
 		this.pooledProjectileQuery = this.getQuery({
-			with: [playerProjectile, isPooled],
+			with: [playerProjectile, lifecycleState],
 		})
 
 		// Query for the cursor singleton.
 		this.cursorQuery = this.getQuery({
 			with: [cursorTag, position],
 		})
+
+		this.isPooledMaskId = this.getMaskId('isPooled')
+		this.isActiveMaskId = this.getMaskId('isActive')
+		this.scratchBuffer = this.createScratchBuffer()
 
 		// Cache singleton IDs for fast access in update().
 		this.playerId = this.playerQuery.getSingleEntity()
@@ -70,21 +75,6 @@ export class PlayerWeaponSystem {
 		// We will use mutators to set dynamic values (position, velocity, owner) at fire time.
 		this.projectilePayload = this.compile('slashingArc')
 		this.projectileMutators = this.projectilePayload.buffers
-
-
-		this.reuseProjectilePayload = this.compile({
-			lifecycleState: { flags: LIFECYCLE.ACTIVE },
-			distanceTraveled: { value: 0 },
-			hitHistory: { count: 0 }, // Explicitly reset hit history here.
-			// These are dynamic and will be set by mutators just before firing.
-			owner: {},
-			position: {},
-			velocity: {},
-			rotation: {},
-			range: {},
-			damage: {},
-		})
-		this.reuseProjectileMutators = this.reuseProjectilePayload.buffers
 	}
 
 	update({ currentTick }) {
@@ -170,8 +160,11 @@ export class PlayerWeaponSystem {
 		const chunkIds = this.pooledProjectileQuery.getChunks()
 		for (let i = 0; i < chunkIds.length; i++) {
 			const chunkId = chunkIds[i]
-			if (this.getChunkSize(chunkId) > 0) {
-				return this.getEntities(chunkId)[0]
+			const pooledCount = this.getIndicesFromMask(this.isPooledMaskId, chunkId, this.scratchBuffer)
+			if (pooledCount > 0) {
+				// Return the first one we find.
+				const indexInChunk = this.scratchBuffer[0]
+				return this.getEntities(chunkId)[indexInChunk]
 			}
 		}
 		return null
@@ -179,28 +172,39 @@ export class PlayerWeaponSystem {
 
 	//! pre-allocate all to get rid of branching once we have some idea how many we can have.
 
+	/**
+	 * Resets a pooled projectile for immediate reuse using direct component writes.
+	 * This is more consistent and keeps masks and component data in sync.
+	 */
 	reuseProjectile(entityId, fireData, currentTick) {
-		// Use the pre-compiled mutators to modify the pre-compiled payload's buffer
-		this.reuseProjectileMutators.owner.entityId[0] = fireData.playerId
-		this.reuseProjectileMutators.position.x[0] = fireData.spawnX
-		this.reuseProjectileMutators.position.y[0] = fireData.spawnY
-		this.reuseProjectileMutators.velocity.x[0] = fireData.normFireX * fireData.finalSpeed
-		this.reuseProjectileMutators.velocity.y[0] = fireData.normFireY * fireData.finalSpeed
-		this.reuseProjectileMutators.rotation.angle[0] = fireData.angle
-		this.reuseProjectileMutators.range.value[0] = fireData.projectileRange
-		this.reuseProjectileMutators.damage.value[0] = fireData.projectileDamage
-		// distanceTraveled and hitHistory are reset by the payload's defaults.
+		const location = this.getEntityLocation(entityId)
+		const { chunkId, indexInChunk } = location
 
-		const loc = this.getEntityLocation(entityId)
+		// --- Direct Writes for Immediate State Reset ---
+		this.clearBit(this.isPooledMaskId, chunkId, indexInChunk)
+		this.setBit(this.isActiveMaskId, chunkId, indexInChunk)
 
-		// Issue deferred commands to make the state change atomic from the perspective of other systems.
-		// 1. This is the structural change that moves the entity to an "active" archetype.
-		this.removeComponent(entityId, isPooled)
-		// 2. This single command updates all necessary components for the projectile's new life.
-		// It resets state and applies new dynamic values from the mutators.
+		this.getComponentData(chunkId, lifecycleState).state[indexInChunk] = LIFECYCLE.ACTIVE
+		this.getComponentData(chunkId, visibility).isVisible[indexInChunk] = 1
+		this.getComponentData(chunkId, distanceTraveled).value[indexInChunk] = 0
+		this.getComponentData(chunkId, hitHistory).count[indexInChunk] = 0
 
-		
-		this.setComponents(entityId, this.reuseProjectilePayload)
+		const owners = this.getComponentData(chunkId, owner)
+		owners.entityId[indexInChunk] = fireData.playerId
+
+		const positions = this.getComponentData(chunkId, position)
+		positions.x[indexInChunk] = fireData.spawnX
+		positions.y[indexInChunk] = fireData.spawnY
+
+		const velocities = this.getComponentData(chunkId, velocity)
+		velocities.x[indexInChunk] = fireData.normFireX * fireData.finalSpeed
+		velocities.y[indexInChunk] = fireData.normFireY * fireData.finalSpeed
+
+		this.getComponentData(chunkId, rotation).angle[indexInChunk] = fireData.angle
+		this.getComponentData(chunkId, range).value[indexInChunk] = fireData.projectileRange
+		this.getComponentData(chunkId, damage).value[indexInChunk] = fireData.projectileDamage
+
+		this.markEntitiesDirtyById(entityId, [lifecycleState, visibility], currentTick)
 	}
 
 	createNewProjectile(fireData, currentTick) {

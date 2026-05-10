@@ -206,8 +206,6 @@ class PayloadCompiler {
 			}
 		}
 
-		const trackableComponentIds = componentTypeIDs.filter(typeId => Schema.componentInfo[typeId].isTrackable)
-
 		// The single, pre-packed buffer for all component data.
 		const singleBuffer = new ArrayBuffer(totalDataSize)
 
@@ -247,7 +245,6 @@ class PayloadCompiler {
 			capacity: count,
 			layout,
 			buffers, // mutable
-			trackableComponentIds,
 			// componentTypeId is only attached for single-component payloads,
 			// which is useful for commands like `addComponent`.
 			...(componentTypeIDs.length === 1 && {

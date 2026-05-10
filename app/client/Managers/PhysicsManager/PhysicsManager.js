@@ -15,11 +15,12 @@ const MAX_PHYSICS_LAYERS = 32 // We can have up to 32 distinct layers.
  */
 
 export const PhysicsLayers = Object.freeze({
-	NONE: 0,
+	NONE: 0, // 0
 	PLAYER: 1 << 0, // 1
 	ENEMY: 1 << 1, // 2
 	PLAYER_PROJECTILE: 1 << 2, // 4
 	PICKUP: 1 << 3, // 8
+	HAZARD: 1 << 4, // 16
 })
 
 /**
@@ -27,13 +28,13 @@ export const PhysicsLayers = Object.freeze({
  * of all layers it can collide with. This serves as the single source of truth for collision rules
  * when authoring prefabs.
  */
-
 export const LayerMasks = Object.freeze({
-	[PhysicsLayers.NONE]: PhysicsLayers.NONE,
-	[PhysicsLayers.PLAYER]: PhysicsLayers.ENEMY | PhysicsLayers.PICKUP,
-	[PhysicsLayers.ENEMY]: PhysicsLayers.PLAYER | PhysicsLayers.PLAYER_PROJECTILE,
-	[PhysicsLayers.PLAYER_PROJECTILE]: PhysicsLayers.ENEMY,
-	[PhysicsLayers.PICKUP]: PhysicsLayers.PLAYER,
+	[PhysicsLayers.NONE]: PhysicsLayers.NONE, // 0
+	[PhysicsLayers.PLAYER]: PhysicsLayers.ENEMY | PhysicsLayers.PICKUP | PhysicsLayers.HAZARD, // 2 | 8 | 16 = 26
+	[PhysicsLayers.ENEMY]: PhysicsLayers.PLAYER | PhysicsLayers.PLAYER_PROJECTILE | PhysicsLayers.HAZARD, // 1 | 4 | 16 = 21
+	[PhysicsLayers.PLAYER_PROJECTILE]: PhysicsLayers.ENEMY, // 2
+	[PhysicsLayers.PICKUP]: PhysicsLayers.PLAYER, // 1
+	[PhysicsLayers.HAZARD]: PhysicsLayers.PLAYER | PhysicsLayers.ENEMY, // 1 | 2 = 3
 })
 
 /**

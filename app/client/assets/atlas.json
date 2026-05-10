@@ -3,7 +3,7 @@
     "image": "atlas.png",
     "size": {
       "w": 1024,
-      "h": 256
+      "h": 512
     }
   },
   "frames": {
@@ -89,6 +89,66 @@
       "sourceSize": {
         "w": 128,
         "h": 64
+      }
+    },
+    "aoe_mech_hex": {
+      "frame": {
+        "x": 624,
+        "y": 2,
+        "w": 128,
+        "h": 128
+      },
+      "sourceSize": {
+        "w": 128,
+        "h": 128
+      }
+    },
+    "aoe_emp": {
+      "frame": {
+        "x": 754,
+        "y": 2,
+        "w": 128,
+        "h": 128
+      },
+      "sourceSize": {
+        "w": 128,
+        "h": 128
+      }
+    },
+    "aoe_target_break": {
+      "frame": {
+        "x": 884,
+        "y": 2,
+        "w": 128,
+        "h": 128
+      },
+      "sourceSize": {
+        "w": 128,
+        "h": 128
+      }
+    },
+    "aoe_explosion_core": {
+      "frame": {
+        "x": 2,
+        "y": 132,
+        "w": 128,
+        "h": 128
+      },
+      "sourceSize": {
+        "w": 128,
+        "h": 128
+      }
+    },
+    "smallExplosionEffect": {
+      "frame": {
+        "x": 132,
+        "y": 132,
+        "w": 256,
+        "h": 256
+      },
+      "sourceSize": {
+        "w": 256,
+        "h": 256
       }
     }
   }

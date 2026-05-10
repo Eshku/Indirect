@@ -1,0 +1,21 @@
+{
+	"components": {
+		"position": {},
+		"damage": { "value": 50 },
+		"areaOfEffectDamage": {
+			"radius": 128,
+			"mask": 3
+		},
+		"lifetime": { "timer": 0.5, "duration": 0.5 },
+
+		
+		"spriteDescriptor": { "assetName": "smallExplosionEffect" },
+		"layer": { "name": "vfx" },
+		"viewable": {},
+		"visibility": {},
+		"scale": {},
+		"tint": {},
+		"lifecycleState": {},
+		"explosionEffectTag": {}
+	}
+}

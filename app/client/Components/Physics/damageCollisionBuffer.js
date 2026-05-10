@@ -4,10 +4,6 @@
  * This is implemented as a fixed-size array to be cache-friendly and avoid dynamic allocations.
  */
 export const damageCollisionBuffer = {
-	meta: { isTrackable: true },
-
-
-
 	/**
 	 * The current number of collisions recorded in this buffer for this frame.
 	 * This is reset to 0 by the CollisionSystem at the start of its update.

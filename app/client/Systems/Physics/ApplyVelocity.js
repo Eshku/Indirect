@@ -1,8 +1,10 @@
 const { engine } = await import(`@client/Engine.js`)
 const { ecs } = engine.getManagers()
 
-const { position, velocity, isPooled } = ecs.getComponentIDs()
+const { position, velocity } = ecs.getComponentIDs()
+const { lifecycleState } = ecs.getComponentIDs()
 
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 /**
  * A final-pass physics system that integrates velocity into position.
  * This system should run after all other systems that can modify an entity's velocity
@@ -19,9 +21,10 @@ export class ApplyVelocity {
 
 	init() {
 		this.query = this.getQuery({
-			with: [position, velocity],
-			without: [isPooled],
+			with: [position, velocity, lifecycleState],
 		})
+		this.isActiveMaskId = this.getMaskId('isActive')
+		this.scratchBuffer = this.createScratchBuffer()
 	}
 
 	update({ deltaTime, currentTick, lastTick }) {
@@ -33,9 +36,11 @@ export class ApplyVelocity {
 			const chunkId = chunkIds[i]
 			const posArrays = this.getComponentData(chunkId, position)
 			const velArrays = this.getComponentData(chunkId, velocity)
-			const chunkSize = this.getChunkSize(chunkId)
 
-			for (let indexInChunk = 0; indexInChunk < chunkSize; indexInChunk++) {
+			const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+			for (let j = 0; j < activeCount; j++) {
+				const indexInChunk = this.scratchBuffer[j]
+
 				posArrays.x[indexInChunk] += velArrays.x[indexInChunk] * deltaTime
 				posArrays.y[indexInChunk] += velArrays.y[indexInChunk] * deltaTime
 			}

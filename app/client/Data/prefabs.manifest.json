@@ -12,7 +12,9 @@
 	"explosiveDrone": {
 		"path": "client/Data/Prefabs/Enemies/explosiveDrone.json"
 	},
-
+	"smallExplosionEffect": {
+		"path": "client/Data/Prefabs/Effects/smallExplosionEffect.json"
+	},
 	"item_base": {
 		"path": "client/Data/Prefabs/Items/Item.json"
 	},

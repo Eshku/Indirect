@@ -10,10 +10,9 @@ const { parallelMemory } = ecs.getKernelIDs()
 //! But could be useful to measure and investigate scheduler overhead.
 
 const benchmarkConfig = {
-	activeMode: 'parallel', // Options: 'singleThread', 'parallel'
+	activeMode: 'singleThread', // Options: 'singleThread', 'parallel'
 	singleThreadEntityCount: 10_000_000,
-	parallelEntityCount: 7_000_000, //! WTF hapenned there?! it was supposed to be 7 mil
-	//! WORKERS ARE SLEEPING NOW
+	parallelEntityCount: 9_000_000,
 }
  
 /**

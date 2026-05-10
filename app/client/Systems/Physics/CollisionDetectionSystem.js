@@ -12,10 +12,12 @@ const {
 	collisionLayer,
 	damageCollisionBuffer,
 	aabb,
-	isPooled,
+	lifecycleState,
 } = ecs.getComponentIDs()
 
 const { SpatialHashingSystem } = ecs.getSystemIDs()
+
+const LIFECYCLE = ecs.getConstantsForProperty(lifecycleState, 'state')
 
 /**
  * Performs collision detection for all collidable entities.
@@ -43,16 +45,16 @@ export class CollisionDetectionSystem {
 
 		// Query for all entities that can receive damage events. Used for clearing buffers.
 		this.damageableQuery = this.getQuery({
-			with: [damageCollisionBuffer],
-			without: [isPooled],
+			with: [damageCollisionBuffer, lifecycleState],
+
 		})
 
 		// Query for "aggressors" - entities that initiate collision checks (player, projectiles).
 		// This is the key optimization: we iterate over the small set of aggressors, not the large set of all enemies.
 		this.aggressorQuery = this.getQuery({
-			with: [position, collisionLayer, aabb],
+			with: [position, collisionLayer, aabb, lifecycleState],
 			any: [circleCollider, boxCollider, orientedBoxCollider], // Must have a shape
-			without: [isPooled],
+
 		})
 
 		// Cache component type IDs for fast access.
@@ -64,6 +66,9 @@ export class CollisionDetectionSystem {
 		this.collisionLayerId = collisionLayer
 		this.damageCollisionBufferId = damageCollisionBuffer // This is the only buffer we write to now
 		this.aabbId = aabb
+
+		this.isActiveMaskId = this.getMaskId('isActive')
+		this.scratchBuffer = this.createScratchBuffer()
 
 		const MAX_QUERY_RESULTS = 1024 // A reasonable default, can be tuned.
 		// Reusable objects to reduce garbage collection pressure in the update loop.
@@ -107,7 +112,12 @@ export class CollisionDetectionSystem {
 		for (const chunkId of damageableChunkIds) {
 			const damageBuffers = this.getComponentData(chunkId, this.damageCollisionBufferId)
 			if (damageBuffers) {
-				damageBuffers.count.fill(0, 0, this.getChunkSize(chunkId))
+				const activeCount = this.getIndicesFromMask(this.isActiveMaskId, chunkId, this.scratchBuffer)
+
+				for (let i = 0; i < activeCount; i++) {
+					const indexInChunk = this.scratchBuffer[i]
+					damageBuffers.count[indexInChunk] = 0
+				}
 			}
 		}
 		this.currentTick = currentTick
@@ -119,19 +129,20 @@ export class CollisionDetectionSystem {
 			const aabbsA = this.getComponentData(chunkIdA, this.aabbId)
 			const layersA = this.getComponentData(chunkIdA, this.collisionLayerId)
 			const entitiesA = this.getEntities(chunkIdA)
-			const sizeA = this.getChunkSize(chunkIdA)
+			const activeCountA = this.getIndicesFromMask(this.isActiveMaskId, chunkIdA, this.scratchBuffer)
 
-			for (let i = 0; i < sizeA; i++) {
+			for (let i = 0; i < activeCountA; i++) {
+				const indexA = this.scratchBuffer[i]
 				// If this entity is an enemy, skip it. Enemies don't initiate checks in this model.
-				const groupA = layersA.group[i]
+				const groupA = layersA.group[indexA]
 				if (groupA === PhysicsLayers.ENEMY) {
 					continue
 				}
 
-				const entityAId = entitiesA[i]
+				const entityAId = entitiesA[indexA]
 				// Broad-phase: Get potential colliders from the grid.
 				// The queryBox method now resets the count internally.
-				this.grid.queryBox(aabbsA.minX[i], aabbsA.minY[i], aabbsA.maxX[i], aabbsA.maxY[i], this.spatialQueryResult)
+				this.grid.queryBox(aabbsA.minX[indexA], aabbsA.minY[indexA], aabbsA.maxX[indexA], aabbsA.maxY[indexA], this.spatialQueryResult)
 
 
 				// Narrow-phase: Check each potential pair.
@@ -164,7 +175,7 @@ export class CollisionDetectionSystem {
 					const canBCollideA = (this.collisionMatrix[groupB] & groupA) !== 0
 
 					if (canACollideB && canBCollideA) {
-						this._checkAndRecordCollision(chunkIdA, i, chunkIdB, indexBInChunk, entityAId, entityBId)
+						this._checkAndRecordCollision(chunkIdA, indexA, chunkIdB, indexBInChunk, entityAId, entityBId)
 					}
 				}
 			}

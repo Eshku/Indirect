@@ -1,6 +1,4 @@
 export const tint = {
-	meta: { isTrackable: true },
-
 	r: {
 		type: 'f32',
 		default: 1.0,
