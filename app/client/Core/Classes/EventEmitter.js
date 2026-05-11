@@ -1,10 +1,3 @@
-//? rooms?
-// not worth using it for entity events
-// global doesn't really care about order, worst case scenario - can do simple priority based events
-// doing whole order thing, inserting in order, shifting going to overcomplicate it for global events
-// which just does not need that complexity.
-//+ preferred to store ?whatever data structure on entity directly.
-
 export class EventEmitter {
 	constructor() {
 		this.listeners = new Map() // event -> Map(id -> {callback, event})

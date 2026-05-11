@@ -65,13 +65,7 @@ const TYPED_ARRAY_MAP = {
 //! It is developer's responsibility to ensure reads follow only after writes and never in parallel (reads + writes)
 //! That is by design.
 
-
 //! classic double-buffer implementation will be added eventually, so both approaches avaliable.
-
-
-//! figure out storage \ where we clear this thing, as "per group" as in per-ECB call is pretty limiting
-//! While per-frame is unintuitive and barely achieves anything, since groups more often run on different ticks then not.
-//! let some special system clear it? Could be a thing and be viable alternative for transient entities.
 
 export class InstantEventChannel {
 	/**
@@ -82,13 +76,12 @@ export class InstantEventChannel {
 		this.schema = schema
 		this.capacity = capacity
 		this.propertyKeys = Object.keys(schema)
+		// The atomic counter for the number of events. Stored in a SAB so it can be shared.
+		this.count = new Uint32Array(new SharedArrayBuffer(4))
 
-		// The `buffer` object holds the SoA data and the atomic counter.
-		// This is the object that reader systems will interact with directly.
-		this.buffer = {
-			// Atomic counter for the number of events. Stored in a SAB so it can be shared.
-			count: new Uint32Array(new SharedArrayBuffer(4)),
-		}
+		// The `buffers` object holds the SoA data arrays.
+		// This is the object that reader systems will interact with directly for data.
+		this.buffers = {}
 
 		for (const propKey of this.propertyKeys) {
 			const type = schema[propKey]
@@ -98,7 +91,7 @@ export class InstantEventChannel {
 			}
 			// Buffers must be in SABs to be accessible from workers.
 			const buffer = new SharedArrayBuffer(capacity * constructor.BYTES_PER_ELEMENT)
-			this.buffer[propKey] = new constructor(buffer)
+			this.buffers[propKey] = new constructor(buffer)
 		}
 	}
 
@@ -108,7 +101,48 @@ export class InstantEventChannel {
 	 */
 	clear() {
 		// This is only ever called by the main thread when workers are idle. A non-atomic write is safe and faster.
-		this.buffer.count[0] = 0
+		this.count[0] = 0
+	}
+
+	/**
+	 * Gets the current number of events in the channel.
+	 * This is a non-atomic read, safe as long as no writes happens in parallel with read.
+	 * @returns {number}
+	 */
+	getCount() {
+		return this.count[0]
+	}
+
+	/**
+	 * Atomically gets the current number of events in the channel.
+	 * @returns {number}
+	 */
+	getCountAtomic() {
+		return Atomics.load(this.count, 0)
+	}
+
+	/**
+	 * Gets the raw Structure-of-Arrays buffers for direct, high-performance reading.
+	 * @returns {object}
+	 */
+	getBuffers() {
+		return this.buffers
+	}
+
+	/**
+	 * Creates a reusable, allocation-free batch object for this event channel.
+	 * This is a developer-experience helper to avoid manual TypedArray creation in systems.
+	 * @param {number} capacity - The number of events the batch object should be able to hold.
+	 * @returns {object} An SoA object with pre-allocated TypedArrays, e.g., { prop1: new Float32Array(capacity), ... }.
+	 */
+	createBatch(capacity) {
+		const batch = {}
+		for (const propKey of this.propertyKeys) {
+			const type = this.schema[propKey]
+			const constructor = TYPED_ARRAY_MAP[type]
+			batch[propKey] = new constructor(capacity)
+		}
+		return batch
 	}
 
 	/**
@@ -118,16 +152,16 @@ export class InstantEventChannel {
 	 * @param  {...any} values - The primitive values for the event.
 	 */
 	push(/*...values*/) {
-		const index = this.buffer.count[0]
+		const index = this.count[0]
 		if (index >= this.capacity) {
 			console.warn(`InstantEventChannel for schema is full. Dropping event.`)
 			return
 		}
-		this.buffer.count[0]++
+		this.count[0]++
 		// Write the data into the reserved slot.
 		for (let i = 0; i < this.propertyKeys.length; i++) {
 			const propKey = this.propertyKeys[i]
-			this.buffer[propKey][index] = arguments[i]
+			this.buffers[propKey][index] = arguments[i]
 		}
 	}
 
@@ -142,7 +176,7 @@ export class InstantEventChannel {
 
 		// Use a CAS loop to safely reserve a slot. This is race-condition-safe.
 		do {
-			currentCount = Atomics.load(this.buffer.count, 0)
+			currentCount = Atomics.load(this.count, 0)
 			newCount = currentCount + 1
 
 			if (newCount > this.capacity) {
@@ -150,13 +184,13 @@ export class InstantEventChannel {
 				console.warn(`InstantEventChannel for schema is full. Dropping event.`)
 				return
 			}
-		} while (Atomics.compareExchange(this.buffer.count, 0, currentCount, newCount) !== currentCount)
+		} while (Atomics.compareExchange(this.count, 0, currentCount, newCount) !== currentCount)
 
 		const index = currentCount
 		// Write the data into the reserved slot.
 		for (let i = 0; i < this.propertyKeys.length; i++) {
 			const propKey = this.propertyKeys[i]
-			this.buffer[propKey][index] = arguments[i]
+			this.buffers[propKey][index] = arguments[i]
 		}
 	}
 
@@ -169,19 +203,19 @@ export class InstantEventChannel {
 	pushBatch(eventBatchSoA, count) {
 		if (count === 0) return
 
-		const startIndex = this.buffer.count[0]
+		const startIndex = this.count[0]
 		if (startIndex + count > this.capacity) {
 			console.warn(`InstantEventChannel for schema is full. Dropping batch of ${count} events.`)
 			return
 		}
 
-		this.buffer.count[0] += count
+		this.count[0] += count
 
 		// Perform a highly optimized bulk copy for each property array.
 		for (const propKey of this.propertyKeys) {
 			const sourceArray = eventBatchSoA[propKey]
 			if (sourceArray) {
-				this.buffer[propKey].set(sourceArray.subarray(0, count), startIndex)
+				this.buffers[propKey].set(sourceArray.subarray(0, count), startIndex)
 			} else {
 				console.warn(`pushBatch: Missing property array for "${propKey}" in event batch. Data will be zeroed.`)
 			}
@@ -205,7 +239,7 @@ export class InstantEventChannel {
 		// and prevents the "wasted space" issue where the counter is incremented even if
 		// the batch doesn't fit, which would lead to readers processing invalid "ghost" events.
 		do {
-			currentCount = Atomics.load(this.buffer.count, 0)
+			currentCount = Atomics.load(this.count, 0)
 			newCount = currentCount + count
 
 			if (newCount > this.capacity) {
@@ -213,14 +247,14 @@ export class InstantEventChannel {
 				console.warn(`InstantEventChannel for schema is full. Dropping batch of ${count} events.`)
 				return
 			}
-		} while (Atomics.compareExchange(this.buffer.count, 0, currentCount, newCount) !== currentCount)
+		} while (Atomics.compareExchange(this.count, 0, currentCount, newCount) !== currentCount)
 
 		const startIndex = currentCount
 		// Perform a highly optimized bulk copy for each property array.
 		for (const propKey of this.propertyKeys) {
 			const sourceArray = eventBatchSoA[propKey]
 			if (sourceArray) {
-				this.buffer[propKey].set(sourceArray.subarray(0, count), startIndex)
+				this.buffers[propKey].set(sourceArray.subarray(0, count), startIndex)
 			} else {
 				// If a property is missing from the batch, its data in the channel will be
 				// undefined/zero for this batch. This is a developer error, so we warn.
@@ -281,23 +315,14 @@ class EventManager {
 	getSharedData() {
 		const sharedData = {}
 		for (const [name, channel] of this.channelsByName.entries()) {
-			// The `buffer` object contains the SABs and is what needs to be shared.
-			sharedData[name] = channel.buffer
+			// The `buffers` object contains the data SABs, and `count` is the counter SAB.
+			// Both need to be shared for workers to read and write.
+			sharedData[name] = {
+				count: channel.count,
+				buffers: channel.buffers,
+			}
 		}
 		return sharedData
-	}
-
-	/**
-	 * Retrieves an existing InstantEventChannel instance by name. @deprecated Prefer using `getChannelRegistry()` for type-safe access.
-	 * @param {string} name - The unique name of the channel.
-	 * @returns {InstantEventChannel}
-	 */
-	getChannel(name) {
-		const channel = this.channelsByName.get(name)
-		if (!channel) {
-			throw new Error(`EventManager: No channel with the name "${name}" has been created.`)
-		}
-		return channel
 	}
 
 	/**
@@ -305,26 +330,8 @@ class EventManager {
 	 * This is the preferred, type-safe way for systems to access channels.
 	 * @returns {Object.<string, InstantEventChannel>}
 	 */
-	getChannelRegistry() {
+	getChannels() {
 		return this.channelRegistry
-	}
-
-	/**
-	 * Creates a reusable, allocation-free batch object for a specific event channel.
-	 * This is a developer-experience helper to avoid manual TypedArray creation in systems.
-	 * @param {string} name - The unique name of the channel.
-	 * @param {number} capacity - The number of events the batch object should be able to hold.
-	 * @returns {object} An SoA object with pre-allocated TypedArrays, e.g., { prop1: new Float32Array(capacity), ... }.
-	 */
-	createBatch(name, capacity) {
-		const channel = this.getChannel(name) // This will throw if the channel doesn't exist.
-		const batch = {}
-		for (const propKey of channel.propertyKeys) {
-			const type = channel.schema[propKey]
-			const constructor = TYPED_ARRAY_MAP[type]
-			batch[propKey] = new constructor(capacity)
-		}
-		return batch
 	}
 
 	clearAllChannels() {

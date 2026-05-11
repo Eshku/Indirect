@@ -1,9 +1,7 @@
 import { engine } from '@client/Engine.js'
 const { ecs, eventManager } = engine.getManagers()
 const { EventChannelTestWriterSystem } = ecs.getSystemIDs()
-
 const { testEvents } = ecs.getEvents()
-
 
 /**
  * A simple system to test reading from an InstantEventChannel.
@@ -14,20 +12,21 @@ export class EventChannelTestReaderSystem {
 	static runsAfter = [EventChannelTestWriterSystem]
 
 	init() {
-		// Retrieve the channel registry and get a direct reference to the channel's buffer for reading.
-
-		this.testChannelBuffer = testEvents.buffer
+		// The channel object itself now holds the shared data.
+		// We can also access helper methods like getCount() from it.
+		this.testChannel = testEvents
 	}
 
 	update({ currentTick }) {
-		const { count, value, tick } = this.testChannelBuffer
 		// The scheduler guarantees that all writer systems have completed before this
 		// reader system runs. Therefore, the `count` value is stable for this frame,
 		// and a direct, non-atomic read is safe, more performant, and sufficient.
-		const eventCount = count[0]
+		// Use the new helper methods for a cleaner API.
+		const eventCount = this.testChannel.getCount()
 
 		// Only log once every 60 ticks to reduce console spam.
 		if (currentTick > 0 && currentTick % 60 === 0 && eventCount > 0) {
+			const { value, tick } = this.testChannel.getBuffers()
 			console.log(`  [Reader] Reading ${eventCount} events at tick ${currentTick}:`)
 			for (let i = 0; i < eventCount; i++) {
 				console.log(`    - Event ${i}: { value: ${value[i]}, tick: ${tick[i]} }`)

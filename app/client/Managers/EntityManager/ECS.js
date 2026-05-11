@@ -327,7 +327,7 @@ export class ECS {
 	getEvents() {
 		// We access the eventManager via the engine instance, as it is guaranteed to be
 		// initialized by the time this method is called.
-		return this.engine.eventManager.getChannelRegistry()
+		return this.engine.eventManager.getChannels()
 	}
 
 	/**

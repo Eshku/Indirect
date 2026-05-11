@@ -1,5 +1,5 @@
 import { engine } from '@client/Engine.js'
-const { eventManager, ecs } = engine.getManagers()
+const { ecs } = engine.getManagers()
 
 const { testEvents } = ecs.getEvents()
 
@@ -7,14 +7,13 @@ const { testEvents } = ecs.getEvents()
  * A simple system to test writing to an InstantEventChannel.
  */
 export class EventChannelTestWriterSystem {
+	BATCH_CAPACITY = 10
+	
 	init() {
 		// Retrieve the channel registry and destructure the specific channel we need.
 		// This is type-safe and avoids magic strings.
 
-		// Pre-allocate a batch buffer with a capacity larger than what we might use in a single frame.
-		// This is a common pattern to avoid re-allocations in the update loop.
-		this.BATCH_CAPACITY = 10
-		this.batch = eventManager.createBatch('testEvents', this.BATCH_CAPACITY)
+		this.batch = testEvents.createBatch(this.BATCH_CAPACITY)
 	}
 
 	update({ currentTick }) {

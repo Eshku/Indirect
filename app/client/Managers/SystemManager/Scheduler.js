@@ -1013,7 +1013,7 @@ export class Scheduler {
 	 */
 	_resolveDataFlowDependencies() {
 		const lastWriter = new Int32Array(MAX_COMPONENTS).fill(-1)
-		const lastReaders = Array.from({ length: MAX_COMPONENTS }, () => [])
+		const lastReaders = Array.from({ length: MAX_COMPONENTS }, () => []) //!
 
 		for (let i = 0; i < this.jobCounter; i++) {
 			const job = this.jobs[i]
