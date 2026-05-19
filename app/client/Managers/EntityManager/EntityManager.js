@@ -34,6 +34,13 @@ import { CommandBufferReader } from '../SystemManager/CommandBufferReader.js'
  *         optimized for fast structural changes (e.g., adding/removing components) and efficient memory pooling.
  */
 
+// --- Reactivity Tier Configuration ---
+// These constants define the structure of the LSM-Tree for dirty tracking.
+export const DIRTY_HISTORY_LENGTH = 256
+export const TIER0_SLOTS = 16 // "Hot" tier, 1 mask per version
+export const TIER1_SLOTS = 16 // "Warm" tier, each mask aggregates TIER0_SLOTS/4 versions
+export const TIER2_SLOTS = 4 // "Cool" tier, each mask aggregates TIER1_SLOTS versions
+
 import { MAX_COMPONENTS, MASK_PARTS } from '../ComponentManager/ComponentSchema.js'
 export const MAX_ARCHETYPES = 4096 // Maximum number of unique archetypes
 export const MAX_CHUNKS = 65536 // Maximum number of chunks
@@ -101,8 +108,6 @@ export const entityStore = {
 	archetypeComponentListStartIndices: new Uint32Array(
 		new SharedArrayBuffer(MAX_ARCHETYPES * Uint32Array.BYTES_PER_ELEMENT),
 	),
-	// NEW: A cache for trackable component IDs per archetype.
-	archetypeTrackableComponentIds: new Array(MAX_ARCHETYPES),
 
 	// --- Chunk Management ---
 	nextChunkId: 1, // Start from 1 so 0 can be NULL_CHUNK_ID
@@ -119,10 +124,15 @@ export const entityStore = {
 	// The array itself is what needs to be shared in structure.
 	chunkMetadata: new Array(MAX_CHUNKS),
 	chunkComponentData: new Array(MAX_CHUNKS),
-	chunkDirtyTicks: new Array(MAX_CHUNKS),
-	chunkArchetypeDirtyTicks: new Array(MAX_CHUNKS),
-	chunkAddedComponentMasks: new Array(MAX_CHUNKS),
+	chunkArchetypeDirtyVersions: new Array(MAX_CHUNKS),
+	chunkArchetypeAddedVersions: new Array(MAX_CHUNKS),
+	// NEW: Store for narrow-phase reactivity data ({ticks, dirtyMask})
+	chunkReactivityData: new Array(MAX_CHUNKS),
 	chunkRemovedComponentMasks: new Array(MAX_CHUNKS),
+	// --- Compaction Tracking ---
+	compactionDirtySetTier0: new Set(),
+	compactionDirtySetTier1: new Set(),
+	compactionDirtySetTier2: new Set(),
 }
 
 // Initialize atomic nextArchetypeId to 0. The first archetype will be ID 0.
@@ -204,6 +214,11 @@ export class EntityManager {
 		this._fillerBlockStarts = new Uint16Array(this._fillerBlockCapacity)
 		this._fillerBlockCounts = new Uint16Array(this._fillerBlockCapacity)
 
+		// --- Reusable buffers for getDirty ---
+		this._getDirtyScratchMeta = new Uint32Array(Math.ceil(MAX_CHUNK_CAPACITY / 32 / 32))
+		this._compactionScratchMeta = new Uint32Array(Math.ceil(MAX_CHUNK_CAPACITY / 32 / 32))
+		this._getDirtyScratchRelevantMasks = { data: [], meta: [] }
+
 		// --- Reusable buffers for _allocateSpaceForNEntities ---
 		this._allocatedBlockCapacity = 32 // Usually very few blocks are needed
 		this._allocatedBlockChunkIds = new Uint16Array(this._allocatedBlockCapacity)
@@ -234,7 +249,7 @@ export class EntityManager {
 			if (entityStore.chunkArchetypeIds[i]) {
 				initialChunks[i] = {
 					data: this.getSharedComponentData(i),
-					archetypeTicks: entityStore.chunkArchetypeDirtyTicks[i],
+					archetypeVersions: entityStore.chunkArchetypeDirtyVersions[i],
 					metadata: entityStore.chunkMetadata[i],
 				}
 			}
@@ -271,7 +286,7 @@ export class EntityManager {
 			chunkNextInArchetype: entityStore.chunkNextInArchetype.buffer,
 
 			// --- Shared Data Structures ---
-			chunkArchetypeDirtyTicks: entityStore.chunkArchetypeDirtyTicks,
+			chunkArchetypeDirtyVersions: entityStore.chunkArchetypeDirtyVersions,
 			chunkMetadata: entityStore.chunkMetadata,
 
 			// --- Constants & Limits ---
@@ -291,7 +306,7 @@ export class EntityManager {
 			for (const chunkId of this.newlyCreatedChunks) {
 				newChunks[chunkId] = {
 					data: entityStore.chunkComponentData[chunkId],
-					archetypeTicks: entityStore.chunkArchetypeDirtyTicks[chunkId],
+					archetypeVersions: entityStore.chunkArchetypeDirtyVersions[chunkId],
 					metadata: entityStore.chunkMetadata[chunkId],
 				}
 			}
@@ -335,9 +350,9 @@ export class EntityManager {
 	 * Creates a single entity from a pre-compiled "live" SoA payload.
 	 * This is the internal "fast path" for immediate-mode single entity creation.
 	 * @param {object} payload - The compiled payload object from `PayloadCompiler`.
-	 * @param {number} currentTick current game tick.
+	 * @param {number} version current game version.
 	 */
-	createEntityFromSoaPayload(payload, currentTick) {
+	createEntityFromSoaPayload(payload, version, isSilent = false) {
 		const { archetypeId, buffers } = payload
 
 		const entityId = this._createEntityId()
@@ -348,10 +363,12 @@ export class EntityManager {
 		entityStore.entityPackedLocations[entityIndex] = (archetypeId << 16) | chunkId
 		entityStore.entityIndicesInChunk[entityIndex] = indexInChunk
 
-		// --- Log structural change for `added:` queries ---
-		const archetypeMaskOffset = archetypeId * MASK_PARTS
-		const addedMask = entityStore.archetypeMasks.subarray(archetypeMaskOffset, archetypeMaskOffset + MASK_PARTS)
-		this._logStructuralChange(chunkId, addedMask, null, currentTick)
+		if (!isSilent) {
+			// --- Log structural change for `added:` queries ---
+			const archetypeMaskOffset = archetypeId * MASK_PARTS
+			const addedMask = entityStore.archetypeMasks.subarray(archetypeMaskOffset, archetypeMaskOffset + MASK_PARTS)
+			this._logStructuralChange(chunkId, addedMask, null, version)
+		}
 
 		// --- Write component data from the live payload's buffers ---
 		const componentCount = this.getComponentTypeIDsForArchetype(archetypeId, this.componentTypesScratch)
@@ -378,16 +395,12 @@ export class EntityManager {
 					}
 				}
 			}
-			this.markComponentDirty(chunkId, typeId, currentTick)
+			if (!isSilent) {
+				this.markComponentDirty(chunkId, typeId, version)
+				this.markEntityDirty(chunkId, indexInChunk, typeId, version)
+			}
 		}
 
-		// Use the archetype's pre-cached list of trackable components to fire "modified" events.
-		const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
-
-		for (const typeId of trackableIds) {
-			const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(typeId)
-			this.entityMaskManager.fireEventById(modifiedMaskId, entityId, currentTick)
-		}
 		return entityId
 	}
 	/**
@@ -399,9 +412,9 @@ export class EntityManager {
 	 * @param {ArrayBuffer} data pre-compiled binary payload for new component.
 	 * @returns {boolean} True on success.
 	 */
-	addComponent(entityId, payload, currentTick) {
+	addComponent(entityId, payload, version) {
 		if (!this.isEntityActive(entityId)) return false
-		
+
 		const entityIndex = Number(entityId & 0xffffffffn)
 		const oldPackedLocation = entityStore.entityPackedLocations[entityIndex]
 		if (oldPackedLocation === 0) return false
@@ -413,7 +426,9 @@ export class EntityManager {
 		// attaches the componentTypeId directly to the payload.
 		const componentTypeId = payload.componentTypeId
 		if (componentTypeId === undefined) {
-			throw new Error('EntityManager.addComponent: Payload is missing componentTypeId. This method only accepts single-component payloads.')
+			throw new Error(
+				'EntityManager.addComponent: Payload is missing componentTypeId. This method only accepts single-component payloads.',
+			)
 		}
 		if (this.archetypeHasComponent(sourceArchetypeId, componentTypeId)) {
 			console.warn(
@@ -444,7 +459,7 @@ export class EntityManager {
 			oldChunkId,
 			oldIndexInChunk,
 			targetArchetypeId,
-			currentTick,
+			version,
 		)
 
 		if (newLocationData) {
@@ -475,13 +490,8 @@ export class EntityManager {
 			}
 
 			// Mark the newly added component as dirty for broad-phase `modified:` queries.
-			this.markComponentDirty(newChunkId, componentTypeId, currentTick)
-
-			// Fire the "modified" event for the newly added component if it's trackable.
-			const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(componentTypeId)
-			if (modifiedMaskId !== undefined) {
-				this.entityMaskManager.fireEventById(modifiedMaskId, entityId, currentTick)
-			}
+			this.markComponentDirty(newChunkId, componentTypeId, version)
+			this.markEntityDirty(newChunkId, newIndexInChunk, componentTypeId, version)
 			return true
 		}
 		return false
@@ -491,10 +501,10 @@ export class EntityManager {
 	 * Removes a component from an entity immediately.
 	 * @param {bigint} entityId The entity to modify.
 	 * @param {number} componentTypeId The type ID of the component to remove.
-	 * @param {number} currentTick The current game tick.
+	 * @param {number} version The current game version.
 	 * @returns {boolean} True on success.
 	 */
-	removeComponent(entityId, componentTypeId, currentTick) {
+	removeComponent(entityId, componentTypeId, version) {
 		if (!this.isEntityActive(entityId)) return false
 		const entityIndex = Number(entityId & 0xffffffffn)
 		const oldPackedLocation = entityStore.entityPackedLocations[entityIndex]
@@ -522,7 +532,14 @@ export class EntityManager {
 
 		// The move method now returns the new location object or null.
 		// We can convert this to a boolean for the public API.
-		return !!this._moveEntityToNewArchetype(entityId, sourceArchetypeId, oldChunkId, oldIndexInChunk, targetArchetypeId, currentTick)
+		return !!this._moveEntityToNewArchetype(
+			entityId,
+			sourceArchetypeId,
+			oldChunkId,
+			oldIndexInChunk,
+			targetArchetypeId,
+			version,
+		)
 	}
 
 	/**
@@ -719,7 +736,7 @@ export class EntityManager {
 	}
 
 	destroyAll() {
-		// This is a full reset. 
+		// This is a full reset.
 		this.clearAllArchetypes() // Removes all chunks
 		this.clearAll() // Resets all entity-related arrays and counters
 
@@ -731,7 +748,6 @@ export class EntityManager {
 		// but without destroying the query objects themselves.
 		this.queryManager.unregisterAllArchetypes()
 	}
-
 
 	isEntityActive(entityID) {
 		if (!entityID || typeof entityID !== 'bigint') return false
@@ -861,16 +877,6 @@ export class EntityManager {
 		// Only insert into the hash map if it was a true "miss". On collision, we don't
 		// insert, making the new archetype uncached (slower to find, but correct).
 		entityStore.archetypeLookup.set(key, id)
-
-		// --- NEW: Pre-cache trackable component IDs for this archetype ---
-		const trackableIds = []
-		for (let i = 0; i < componentCount; i++) {
-			const typeId = sortedTypeIDs[i]
-			if (this.entityMaskManager.componentToModifiedMaskId.has(typeId)) {
-				trackableIds.push(typeId)
-			}
-		}
-		entityStore.archetypeTrackableComponentIds[id] = new Uint16Array(trackableIds)
 
 		this.queryManager.registerArchetype(id)
 		return id
@@ -1070,7 +1076,7 @@ export class EntityManager {
 		this.newlyCreatedArchetypePages.push(initialPage.buffer)
 
 		entityStore.nextPackedComponentIdIndex = 0
-		entityStore.chunkArchetypeDirtyTicks = new Array(MAX_CHUNKS)
+		entityStore.chunkArchetypeDirtyVersions = new Array(MAX_CHUNKS)
 	}
 
 	_createEntityId() {
@@ -1106,7 +1112,7 @@ export class EntityManager {
 
 	_removeEntity(archetype, entityId, chunkId, indexInChunk) {
 		const oldSize = entityStore.chunkSizes[chunkId]
-		
+
 		// Use scratch buffer for component types
 		const componentCount = this.getComponentTypeIDsForArchetype(archetype, this.componentTypesScratch)
 		const componentTypeIDs = this.componentTypesScratch.subarray(0, componentCount)
@@ -1223,6 +1229,7 @@ export class EntityManager {
 			for (let k = 0; k < componentCount; k++) {
 				const typeID = componentTypeIDs[k]
 				this._copyComponentDataBlock(chunkId, typeID, sourceIndex, chunkId, destIndex, numToCopy)
+				// Reactivity history is handled for swapped entities in a separate pass below.
 			}
 
 			// --- Record the swaps for location updates ---
@@ -1244,6 +1251,33 @@ export class EntityManager {
 			if (fillerOffset >= fillerCount) {
 				fillerIdx--
 				fillerOffset = 0
+			}
+		}
+
+		// After all component data has been moved, fix up the reactivity history for the swapped entities.
+		for (let i = 0; i < swapCount; i++) {
+			const oldIndex = this._swappedOldIndices[i]
+			const newIndex = this._swappedNewIndices[i]
+
+			const oldWordIndex = oldIndex >> 5, oldBitInWord = 1 << (oldIndex & 31) // prettier-ignore
+			const newWordIndex = newIndex >> 5, newBitInWord = 1 << (newIndex & 31) // prettier-ignore
+
+			for (const typeId of componentTypeIDs) {
+				const reactivity = entityStore.chunkReactivityData[chunkId]?.[typeId]
+				if (!reactivity) continue
+
+				const moveBitsInTier = (tier) => {
+					for (const dataMask of tier.dataMasks) {
+						const isSet = (Atomics.load(dataMask, oldWordIndex) & oldBitInWord) !== 0
+						if (isSet) Atomics.or(dataMask, newWordIndex, newBitInWord)
+						else Atomics.and(dataMask, newWordIndex, ~newBitInWord)
+						Atomics.and(dataMask, oldWordIndex, ~oldBitInWord)
+					}
+				}
+
+				moveBitsInTier(reactivity.tier0)
+				moveBitsInTier(reactivity.tier1)
+				moveBitsInTier(reactivity.tier2)
 			}
 		}
 
@@ -1399,22 +1433,31 @@ export class EntityManager {
 		}
 	}
 
-	_logStructuralChange(chunkId, addedMask, removedMask, tick) {
+	_logStructuralChange(chunkId, addedMask, removedMask, version) {
 		if (addedMask) {
-			const ring = entityStore.chunkAddedComponentMasks[chunkId]
-			if (ring) {
-				const tickSlot = tick % Schema.DIRTY_HISTORY_LENGTH
-				const maskOffset = tickSlot * MASK_PARTS
+			const archetypeId = entityStore.chunkArchetypeIds[chunkId]
+			const addedVersions = entityStore.chunkArchetypeAddedVersions[chunkId]
+			if (addedVersions) {
 				for (let i = 0; i < MASK_PARTS; i++) {
-					Atomics.or(ring, maskOffset + i, addedMask[i])
+					const maskPart = addedMask[i]
+					if (maskPart === 0n) continue
+					for (let j = 0; j < 64; j++) {
+						if ((maskPart & (1n << BigInt(j))) !== 0n) {
+							const typeId = i * 64 + j
+							const indexInArchetype = entityStore.archetypeComponentIndexMapData[archetypeId * MAX_COMPONENTS + typeId]
+							if (indexInArchetype !== 0xffff) {
+								this._updateArchetypeTick(addedVersions, indexInArchetype, version)
+							}
+						}
+					}
 				}
 			}
 		}
 		if (removedMask) {
 			const ring = entityStore.chunkRemovedComponentMasks[chunkId]
 			if (ring) {
-				const tickSlot = tick % Schema.DIRTY_HISTORY_LENGTH
-				const maskOffset = tickSlot * MASK_PARTS
+				const versionSlot = version % Schema.DIRTY_HISTORY_LENGTH
+				const maskOffset = versionSlot * MASK_PARTS
 				for (let i = 0; i < MASK_PARTS; i++) {
 					Atomics.or(ring, maskOffset + i, removedMask[i])
 				}
@@ -1432,11 +1475,11 @@ export class EntityManager {
 	 * @param {number} oldChunkId The entity's current chunk ID.
 	 * @param {number} oldIndexInChunk The entity's current index in its chunk.
 	 * @param {number} targetArchetypeId The entity's destination archetype ID.
-	 * @param {number} currentTick The current game tick.
+	 * @param {number} version The current game version.
 	 * @returns {[number, number] | null} A tuple of `[newChunkId, newIndexInChunk]`, or null on failure.
 	 * @private
 	 */
-	_moveEntityToNewArchetype(entityId, sourceArchetypeId, oldChunkId, oldIndexInChunk, targetArchetypeId, currentTick) {
+	_moveEntityToNewArchetype(entityId, sourceArchetypeId, oldChunkId, oldIndexInChunk, targetArchetypeId, version) {
 		// 1. Find/create a spot in the new archetype
 		const newChunkId = this._findOrCreateChunkId(targetArchetypeId)
 		const newIndexInChunk = this._addEntityToChunk(newChunkId, entityId)
@@ -1448,12 +1491,14 @@ export class EntityManager {
 		for (let i = 0; i < MASK_PARTS; i++) {
 			const commonMaskPart =
 				entityStore.archetypeMasks[sourceMaskOffset + i] & entityStore.archetypeMasks[targetMaskOffset + i]
+
 			if (commonMaskPart === 0n) continue
 
 			for (let j = 0; j < 64; j++) {
 				if ((commonMaskPart & (1n << BigInt(j))) !== 0n) {
 					const typeId = i * 64 + j
 					this._copyComponentData(oldChunkId, typeId, oldIndexInChunk, newChunkId, newIndexInChunk)
+					this._copyReactivityData(oldChunkId, typeId, oldIndexInChunk, newChunkId, newIndexInChunk)
 				}
 			}
 		}
@@ -1490,7 +1535,7 @@ export class EntityManager {
 		// Log both added and removed component masks on the NEW chunk.
 		// A reactive query that matches the entity's new state needs to find
 		// the structural change event at the entity's new location.
-		this._logStructuralChange(newChunkId, addedMask, removedMask, currentTick)
+		this._logStructuralChange(newChunkId, addedMask, removedMask, version)
 
 		return [newChunkId, newIndexInChunk]
 	}
@@ -1519,7 +1564,7 @@ export class EntityManager {
 	 * @param {Uint32Array} oldPackedLocations The packed old locations of the entities.
 	 * @param {Uint32Array} oldIndicesInChunk The old indices in chunk for the entities.
 	 * @param {number} count The number of entities in the batch.
-	 * @param {number} currentTick The current game tick for logging structural changes.
+	 * @param {number} version The current game version for logging structural changes.
 	 * @private
 	 */
 	moveEntitiesToNewArchetypeInBatch(
@@ -1529,14 +1574,14 @@ export class EntityManager {
 		oldPackedLocations,
 		oldIndicesInChunk,
 		count,
-		currentTick,
+		version,
+		isSilentFlags,
 	) {
 		if (count === 0) return
 		if (count > this._moveBatchCapacity) this._resizeMoveBatchArrays(count)
 
 		// Ensure copy batch arrays are large enough.
 		if (count > this._copyBatchCapacity) this._resizeCopyBatchArrays(count)
-
 
 		// --- 1. PREPARATION ---
 		const sourceMaskOffset = sourceArchetypeId * MASK_PARTS
@@ -1585,7 +1630,20 @@ export class EntityManager {
 				this._copyBatchNewIndices[currentIndexInBatch] = newIndexInChunk
 				this._copyBatchEntityIds[currentIndexInBatch] = entityId
 			}
-			this._logStructuralChange(chunkId, addedMask, removedMask, currentTick)
+
+			let isBlockSilent = true
+			if (isSilentFlags) {
+				for (let j = 0; j < numInBlock; j++) {
+					if (isSilentFlags[entityBatchIndex + j] === 0) {
+						isBlockSilent = false
+						break
+					}
+				}
+			} else {
+				isBlockSilent = false
+			}
+
+			if (!isBlockSilent) this._logStructuralChange(chunkId, addedMask, removedMask, version)
 			entityBatchIndex += numInBlock
 		}
 
@@ -1638,6 +1696,11 @@ export class EntityManager {
 					for (let bit = 0; bit < 64; bit++) {
 						if ((maskPart & (1n << BigInt(bit))) !== 0n) {
 							const typeId = part * 64 + bit
+							// Reactivity data must be copied entity by entity, not as a block, because the tiered
+							// bitmasks are not simple linear arrays like component data.
+							for (let k = 0; k < blockSize; k++) {
+								this._copyReactivityData(oldChunkId, typeId, currentOldIndex + k, newChunkId, currentNewIndex + k)
+							}
 							this._copyComponentDataBlock(oldChunkId, typeId, currentOldIndex, newChunkId, currentNewIndex, blockSize)
 						}
 					}
@@ -1646,7 +1709,6 @@ export class EntityManager {
 			}
 			copyIdx = copyBatchEnd
 		}
-
 
 		// --- 4. MASK MANAGER UPDATE ---
 		// This MUST happen BEFORE the removal pass. The removal pass performs swap-and-pop,
@@ -1923,9 +1985,13 @@ export class EntityManager {
 		entityStore.chunkSizes[chunkId] = 0
 		// We don't clear chunkComponentData here, as they will be overwritten
 		// on re-initialization. However, we should clear the archetype-level ticks.
-		entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined
+		entityStore.chunkArchetypeDirtyVersions[chunkId] = undefined
 		entityStore.chunkMetadata[chunkId] = undefined
-		entityStore.chunkAddedComponentMasks[chunkId] = undefined
+		entityStore.chunkArchetypeAddedVersions[chunkId] = undefined
+
+		// Also clear the narrow-phase reactivity data.
+		entityStore.chunkReactivityData[chunkId] = undefined
+
 		entityStore.chunkRemovedComponentMasks[chunkId] = undefined
 		// Explicitly zero out pointers to prevent stale data traversal on bugs.
 		entityStore.chunkPrevInArchetype[chunkId] = NULL_CHUNK_ID
@@ -1949,7 +2015,6 @@ export class EntityManager {
 
 			// If a resolution map is provided and this property is an entity, resolve placeholders.
 			if (resolutionMap && propInfo.type === 'entity') {
-
 				const placeholderId = sourceView.getBigUint64(readOffset, true)
 				if (placeholderId >> 63n === 1n) {
 					const placeholderIndex = Number(placeholderId & 0xffffffffn)
@@ -1998,6 +2063,9 @@ export class EntityManager {
 		// The entities buffer is always kept.
 		const newComponentData = { entities: oldComponentData.entities }
 
+		const oldReactivityData = entityStore.chunkReactivityData[chunkId]
+		const newReactivityData = new Array(MAX_COMPONENTS)
+
 		// --- Intelligent Recycling Logic ---
 		// 1. Get component lists for both archetypes.
 		const newComponentCount = this.getComponentTypeIDsForArchetype(archetypeId, this.componentTypesScratch)
@@ -2026,6 +2094,15 @@ export class EntityManager {
 					}
 				}
 				newComponentData[typeId] = propArrays
+
+				// Reuse reactivity buffers
+				const reactivityTiers = oldReactivityData?.[typeId]
+				if (reactivityTiers) {
+					this._clearReactivityTiers(reactivityTiers)
+					newReactivityData[typeId] = reactivityTiers
+				} else {
+					newReactivityData[typeId] = this._allocateReactivityTiers(typeId, capacity)
+				}
 			} else {
 				// --- ALLOCATE PATH (Component is new to this chunk) ---
 				const propArrays = {}
@@ -2035,6 +2112,8 @@ export class EntityManager {
 					propArrays[propKey] = new constructor(buffer)
 				}
 				newComponentData[typeId] = propArrays
+				// Allocate new reactivity buffers
+				newReactivityData[typeId] = this._allocateReactivityTiers(typeId, capacity)
 			}
 		}
 
@@ -2042,13 +2121,15 @@ export class EntityManager {
 		// The old objects (oldComponentData) and any un-reused buffers
 		// are now unreferenced and will be garbage collected.
 		entityStore.chunkComponentData[chunkId] = newComponentData
+		entityStore.chunkReactivityData[chunkId] = newReactivityData
 
-		// The chunkArchetypeDirtyTicks buffer is size-dependent, so it must always be recreated.
-		entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined // De-reference old one for GC
+		// The chunkArchetypeDirtyVersions buffer is size-dependent, so it must always be recreated.
+		entityStore.chunkArchetypeDirtyVersions[chunkId] = undefined // De-reference old one for GC
 		// Also clear the structural change logs. Although their size is constant,
 		// this ensures we get fresh buffers from the allocation call.
-		entityStore.chunkAddedComponentMasks[chunkId] = undefined
+		entityStore.chunkArchetypeAddedVersions[chunkId] = undefined
 		entityStore.chunkRemovedComponentMasks[chunkId] = undefined
+
 		this._allocateChunkSharedMetadata(chunkId, capacity, this.componentTypesScratch, newComponentCount)
 
 		const tailId = entityStore.archetypeTailChunkIds[archetypeId]
@@ -2071,6 +2152,38 @@ export class EntityManager {
 		this.newlyCreatedChunks.push(chunkId)
 		return chunkId
 	}
+
+	/**
+	 * @private
+	 */
+	_allocateReactivityTiers(typeId, capacity) {
+		const words = Math.ceil(capacity / 32)
+		const metaWords = Math.ceil(words / 32)
+
+		const createTier = slots => ({
+			dataMasks: Array.from({ length: slots }, () => new Uint32Array(new SharedArrayBuffer(words * 4))),
+			metaMasks: Array.from({ length: slots }, () => new Uint32Array(new SharedArrayBuffer(metaWords * 4))),
+		})
+
+		return {
+			tier0: createTier(TIER0_SLOTS),
+			tier1: createTier(TIER1_SLOTS),
+			tier2: createTier(TIER2_SLOTS),
+		}
+	}
+
+	_clearReactivityTiers(reactivityTiers) {
+		const clearTier = tier => {
+			for (const mask of tier.dataMasks) mask.fill(0)
+			for (const mask of tier.metaMasks) mask.fill(0)
+		}
+		if (reactivityTiers) {
+			clearTier(reactivityTiers.tier0)
+			clearTier(reactivityTiers.tier1)
+			clearTier(reactivityTiers.tier2)
+		}
+	}
+
 	/**
 	 * Allocates or re-allocates the shared metadata buffers for a chunk (dirty ticks, enableable masks, etc.).
 	 * @param {number} chunkId The ID of the chunk.
@@ -2081,43 +2194,56 @@ export class EntityManager {
 	_allocateChunkSharedMetadata(chunkId, capacity, componentIdArray, componentCount) {
 		// Allocate the per-component-type dirty tick buffer.
 		const count = componentCount ?? componentIdArray.length
-		const archetypeTicksBuffer = new SharedArrayBuffer(count * Uint32Array.BYTES_PER_ELEMENT)
-		entityStore.chunkArchetypeDirtyTicks[chunkId] = new Uint32Array(archetypeTicksBuffer)
-		entityStore.chunkArchetypeDirtyTicks[chunkId].fill(0)
+		const archetypeVersionsBuffer = new SharedArrayBuffer(count * Uint32Array.BYTES_PER_ELEMENT)
 
-		// Allocate the structural change (added/removed) log buffers.
+		// --- NEW: Allocate all narrow-phase reactivity buffers ---
+		const reactivityData = new Array(MAX_COMPONENTS)
+		for (let i = 0; i < count; i++) {
+			reactivityData[componentIdArray[i]] = this._allocateReactivityTiers(componentIdArray[i], capacity)
+		}
+		entityStore.chunkReactivityData[chunkId] = reactivityData
+		entityStore.chunkArchetypeDirtyVersions[chunkId] = new Uint32Array(archetypeVersionsBuffer)
+		entityStore.chunkArchetypeDirtyVersions[chunkId].fill(0)
+
+		// Allocate the structural change tick buffer for `added`.
+		const addedVersionsBuffer = new SharedArrayBuffer(count * Uint32Array.BYTES_PER_ELEMENT)
+		entityStore.chunkArchetypeAddedVersions[chunkId] = new Uint32Array(addedVersionsBuffer)
+		entityStore.chunkArchetypeAddedVersions[chunkId].fill(0)
+
+		// Allocate the structural change log buffer for `removed` using the BigInt ring buffer.
 		const structuralMasksSize = MASK_PARTS * Schema.DIRTY_HISTORY_LENGTH * BigUint64Array.BYTES_PER_ELEMENT
-		const addedMasksBuffer = new SharedArrayBuffer(structuralMasksSize)
 		const removedMasksBuffer = new SharedArrayBuffer(structuralMasksSize)
-		entityStore.chunkAddedComponentMasks[chunkId] = new BigUint64Array(addedMasksBuffer)
 		entityStore.chunkRemovedComponentMasks[chunkId] = new BigUint64Array(removedMasksBuffer)
 	}
 
 	/**
 	 * Atomically updates the per-component-type high-water mark for a given chunk.
-	 * @param {number} chunkId The chunk to update.
+	 * This is a generic helper used for modified, added, and removed ticks.
+	 * @param {Uint32Array} versionArray The specific version array to update (e.g., chunkArchetypeDirtyVersions[chunkId]).
 	 * @param {number} indexInArchetype The 0-based index of the component within its archetype's sorted list.
-	 * @param {number} tick The current game tick.
+	 * @param {number} version The current game version.
 	 * @private
 	 */
-	_updateArchetypeDirtyTick(chunkId, indexInArchetype, tick) {
-		const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[chunkId]
-		if (!archetypeDirtyTicks) return
+	_updateArchetypeTick(versionArray, indexInArchetype, version) {
+		if (!versionArray) return
 
-		let oldValue = Atomics.load(archetypeDirtyTicks, indexInArchetype)
-		while (tick > oldValue) {
-			const result = Atomics.compareExchange(archetypeDirtyTicks, indexInArchetype, oldValue, tick)
+		let oldValue = Atomics.load(versionArray, indexInArchetype)
+		while (version > oldValue) {
+			// This CAS loop ensures that if multiple threads try to update the tick,
+			// only the highest value wins, and it does so without a lock.
+			const result = Atomics.compareExchange(versionArray, indexInArchetype, oldValue, version)
 			if (result === oldValue) break
 			oldValue = result
 		}
 	}
 
-	_updateDirtyStateForComponent(chunkId, typeID, currentTick) {
+	_updateDirtyStateForComponent(chunkId, typeID, version) {
 		const archetypeId = entityStore.chunkArchetypeIds[chunkId]
 		const indexInArchetype = entityStore.archetypeComponentIndexMapData[archetypeId * MAX_COMPONENTS + typeID]
 
 		if (indexInArchetype !== 0xffff) {
-			this._updateArchetypeDirtyTick(chunkId, indexInArchetype, currentTick)
+			const versionArray = entityStore.chunkArchetypeDirtyVersions[chunkId]
+			this._updateArchetypeTick(versionArray, indexInArchetype, version)
 		}
 	}
 
@@ -2132,14 +2258,314 @@ export class EntityManager {
 	 *
 	 * @param {number} chunkId The ID of the chunk containing the component.
 	 * @param {number} componentTypeId The type ID of the component to mark.
-	 * @param {number} tick The current game tick.
+	 * @param {number} version The current game version.
 	 */
-	markComponentDirty(chunkId, componentTypeId, tick) {
+	markComponentDirty(chunkId, componentTypeId, version) {
 		const archetypeId = entityStore.chunkArchetypeIds[chunkId]
 		const indexInArchetype = entityStore.archetypeComponentIndexMapData[archetypeId * MAX_COMPONENTS + componentTypeId]
 		if (indexInArchetype !== 0xffff) {
-			this._updateArchetypeDirtyTick(chunkId, indexInArchetype, tick)
+			const versionArray = entityStore.chunkArchetypeDirtyVersions[chunkId]
+			this._updateArchetypeTick(versionArray, indexInArchetype, version)
 		}
+	}
+
+	// =================================================================
+	// NEW PUBLIC API - NARROW-PHASE DIRTY TRACKING
+	// =================================================================
+
+	markEntityDirty(chunkId, indexInChunk, componentTypeId, version) {
+		const reactivity = entityStore.chunkReactivityData[chunkId][componentTypeId]
+
+		// --- Write to the "Hot" Tier (Tier 0) ---
+		const slot = version % TIER0_SLOTS
+		const tier0 = reactivity.tier0
+
+		const wordIndex = indexInChunk >> 5
+		const bitInWord = 1 << (indexInChunk & 31)
+		const metaWordIndex = wordIndex >> 5
+		const metaBitInWord = 1 << (wordIndex & 31)
+
+		Atomics.or(tier0.dataMasks[slot], wordIndex, bitInWord)
+		Atomics.or(tier0.metaMasks[slot], metaWordIndex, metaBitInWord)
+
+		// Add this buffer to the set of buffers that need Tier 0 -> Tier 1 compaction.
+		const key = (chunkId << 16) | componentTypeId
+		entityStore.compactionDirtySetTier0.add(key)
+	}
+
+	markEntityDirtyById(entityId, componentTypeId, version) {
+		if (!this.isEntityActive(entityId)) return
+		const entityIndex = Number(entityId & 0xffffffffn)
+		const packedLocation = entityStore.entityPackedLocations[entityIndex]
+		const chunkId = packedLocation & 0xffff
+		const indexInChunk = entityStore.entityIndicesInChunk[entityIndex]
+		this.markEntityDirty(chunkId, indexInChunk, componentTypeId, version)
+	}
+
+	markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version) {
+		for (const componentTypeId of componentTypeIds) {
+			this.markEntityDirty(chunkId, indexInChunk, componentTypeId, version)
+		}
+	}
+
+	markEntitiesDirtyById(entityId, componentTypeIds, version) {
+		if (Array.isArray(entityId)) {
+			for (const id of entityId) {
+				this.markEntitiesDirtyById(id, componentTypeIds, version)
+			}
+		} else {
+			if (!this.isEntityActive(entityId)) return
+			const entityIndex = Number(entityId & 0xffffffffn)
+			const packedLocation = entityStore.entityPackedLocations[entityIndex]
+			const chunkId = packedLocation & 0xffff
+			const indexInChunk = entityStore.entityIndicesInChunk[entityIndex]
+			this.markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version)
+		}
+	}
+
+	getDirty(chunkId, componentTypeId, lastVersion, currentVersion, outBuffer) {
+		const reactivity = entityStore.chunkReactivityData[chunkId][componentTypeId]
+		if (!reactivity) return 0
+
+		const size = entityStore.chunkSizes[chunkId]
+		if (size === 0) return 0
+
+		const numWords = Math.ceil(size / 32)
+		const metaWords = Math.ceil(numWords / 32)
+
+		// --- 1. Identify Relevant Masks ---
+		const relevantMasks = this._getMasksForVersionRange(reactivity, lastVersion, currentVersion)
+		if (relevantMasks.data.length === 0) return 0
+
+		// --- 2. Aggregate Meta-Masks ---
+		const effectiveMetaMask = this._getDirtyScratchMeta
+		effectiveMetaMask.fill(0)
+
+		for (const mask of relevantMasks.meta) {
+			for (let i = 0; i < metaWords; i++) {
+				effectiveMetaMask[i] |= Atomics.load(mask, i)
+			}
+		}
+
+		let count = 0
+
+		// --- 3. Find Dirty Words ---
+		for (let metaWordIndex = 0; metaWordIndex < metaWords; metaWordIndex++) {
+			let metaBits = effectiveMetaMask[metaWordIndex]
+			if (metaBits === 0) continue
+
+			const metaOffset = metaWordIndex << 5
+			while (metaBits !== 0) {
+				const t = metaBits & -metaBits
+				const wordIndexInMeta = 31 - Math.clz32(t)
+				const wordIndex = metaOffset | wordIndexInMeta
+
+				if (wordIndex >= numWords) break
+
+				// --- 4. Aggregate Final Data for this Dirty Word ---
+				let effectiveDataWord = 0
+				for (const mask of relevantMasks.data) {
+					effectiveDataWord |= Atomics.load(mask, wordIndex)
+				}
+
+				// --- 5. Extract Indices ---
+				if (effectiveDataWord !== 0) {
+					const entityOffset = wordIndex << 5
+					while (effectiveDataWord !== 0) {
+						const t2 = effectiveDataWord & -effectiveDataWord
+						const indexInWord = 31 - Math.clz32(t2)
+						const entityIndex = entityOffset | indexInWord
+
+						if (entityIndex >= size) break
+
+						outBuffer[count++] = entityIndex
+						effectiveDataWord ^= t2
+					}
+				}
+
+				metaBits ^= t
+			}
+		}
+		return count
+	}
+
+	_getMasksForVersionRange(reactivityTiers, lastVersion, currentVersion) {
+		const { data, meta } = this._getDirtyScratchRelevantMasks
+		data.length = 0
+		meta.length = 0
+
+		const TIER1_COVERAGE = TIER0_SLOTS
+		const TIER2_COVERAGE = TIER0_SLOTS * TIER1_SLOTS
+
+		let v = lastVersion + 1
+		while (v <= currentVersion) {
+			const tier2BlockStart = Math.floor((v - 1) / TIER2_COVERAGE) * TIER2_COVERAGE
+			if (v === tier2BlockStart + 1 && v + TIER2_COVERAGE - 1 <= currentVersion) {
+				const destSlot = (tier2BlockStart / TIER2_COVERAGE) % TIER2_SLOTS
+				data.push(reactivityTiers.tier2.dataMasks[destSlot])
+				meta.push(reactivityTiers.tier2.metaMasks[destSlot])
+				v += TIER2_COVERAGE
+				continue
+			}
+
+			const tier1BlockStart = Math.floor((v - 1) / TIER1_COVERAGE) * TIER1_COVERAGE
+			if (v === tier1BlockStart + 1 && v + TIER1_COVERAGE - 1 <= currentVersion) {
+				const destSlot = (tier1BlockStart / TIER1_COVERAGE) % TIER1_SLOTS
+				data.push(reactivityTiers.tier1.dataMasks[destSlot])
+				meta.push(reactivityTiers.tier1.metaMasks[destSlot])
+				v += TIER1_COVERAGE
+				continue
+			}
+
+			const slot = v % TIER0_SLOTS
+			data.push(reactivityTiers.tier0.dataMasks[slot])
+			meta.push(reactivityTiers.tier0.metaMasks[slot])
+			v++
+		}
+
+		return this._getDirtyScratchRelevantMasks
+	}
+
+	/**
+	 * @private
+	 */
+	_copyReactivityData(fromChunkId, typeId, fromIndex, toChunkId, toIndex) {
+		const fromReactivity = entityStore.chunkReactivityData[fromChunkId]?.[typeId]
+		const toReactivity = entityStore.chunkReactivityData[toChunkId]?.[typeId]
+		if (!fromReactivity || !toReactivity) return
+
+		const fromWordIndex = fromIndex >> 5
+		const fromBitInWord = 1 << (fromIndex & 31)
+		const toWordIndex = toIndex >> 5
+		const toBitInWord = 1 << (toIndex & 31)
+
+		const copyTier = (fromTier, toTier) => {
+			for (let i = 0; i < fromTier.dataMasks.length; i++) {
+				const fromDataMask = fromTier.dataMasks[i]
+				const toDataMask = toTier.dataMasks[i]
+				const isSet = (Atomics.load(fromDataMask, fromWordIndex) & fromBitInWord) !== 0
+				if (isSet) Atomics.or(toDataMask, toWordIndex, toBitInWord)
+				else Atomics.and(toDataMask, toWordIndex, ~toBitInWord)
+			}
+			for (let i = 0; i < fromTier.metaMasks.length; i++) {
+				const toMetaMask = toTier.metaMasks[i]
+				const toMetaWordIndex = toWordIndex >> 5
+				const toMetaBitInWord = 1 << (toWordIndex & 31)
+				Atomics.or(toMetaMask, toMetaWordIndex, toMetaBitInWord)
+			}
+		}
+
+		copyTier(fromReactivity.tier0, toReactivity.tier0)
+		copyTier(fromReactivity.tier1, toReactivity.tier1)
+		copyTier(fromReactivity.tier2, toReactivity.tier2)
+	}
+
+	performReactivityCompaction(currentVersion) {
+		// This method is called synchronously by the GameLoop after all systems and jobs have finished.
+		// It is safe to use non-atomic operations here.
+
+		// --- Tier 0 -> Tier 1 Compaction ---
+		if (currentVersion > 0 && currentVersion % TIER0_SLOTS === 0) {
+			this._compactTierNonAtomic(0, currentVersion, entityStore.compactionDirtySetTier0, entityStore.compactionDirtySetTier1)
+		}
+
+		// --- Tier 1 -> Tier 2 Compaction ---
+		const TIER1_COVERAGE = TIER0_SLOTS * TIER1_SLOTS
+		if (currentVersion > 0 && currentVersion % TIER1_COVERAGE === 0) {
+			this._compactTierNonAtomic(1, currentVersion, entityStore.compactionDirtySetTier1, entityStore.compactionDirtySetTier2)
+		}
+	}
+
+	_compactTierNonAtomic(sourceTierIndex, currentVersion, dirtySet, nextDirtySet) {
+		if (dirtySet.size === 0) return
+
+		for (const key of dirtySet) {
+			const chunkId = key >> 16
+			const typeId = key & 0xffff
+
+			const reactivityTiers = entityStore.chunkReactivityData[chunkId][typeId]
+			if (!reactivityTiers) continue
+			const capacity = entityStore.chunkCapacities[chunkId]
+			const numWords = Math.ceil(capacity / 32)
+			const metaWords = Math.ceil(numWords / 32)
+
+			if (sourceTierIndex === 0) {
+				const { tier0: sourceTier, tier1: destTier } = reactivityTiers
+				const versionToCompact = currentVersion - TIER0_SLOTS
+				const destSlot = (versionToCompact / TIER0_SLOTS) % TIER1_SLOTS
+				const destDataMask = destTier.dataMasks[destSlot]
+				const destMetaMask = destTier.metaMasks[destSlot]
+				destDataMask.fill(0)
+				destMetaMask.fill(0)
+
+				for (let s = 0; s < TIER0_SLOTS; s++) {
+					const sourceSlot = (versionToCompact + s) % TIER0_SLOTS
+					const sourceDataMask = sourceTier.dataMasks[sourceSlot]
+					const sourceMetaMask = sourceTier.metaMasks[sourceSlot]
+
+					for (let w = 0; w < metaWords; w++) {
+						const metaBits = sourceMetaMask[w] // Non-atomic read
+						if (metaBits === 0) continue
+
+						destMetaMask[w] |= metaBits
+						const metaOffset = w << 5
+						let bits = metaBits
+						while (bits !== 0) {
+							const t = bits & -bits
+							const wordIndexInMeta = 31 - Math.clz32(t)
+							const wordIndex = metaOffset | wordIndexInMeta
+							if (wordIndex >= numWords) break
+
+							destDataMask[wordIndex] |= sourceDataMask[wordIndex] // Non-atomic read
+							bits ^= t
+						}
+					}
+
+					sourceDataMask.fill(0)
+					sourceMetaMask.fill(0)
+				}
+			} else if (sourceTierIndex === 1) {
+				const { tier1: sourceTier, tier2: destTier } = reactivityTiers
+				const TIER1_COVERAGE = TIER0_SLOTS * TIER1_SLOTS
+				const versionBlockStart = currentVersion - TIER1_COVERAGE
+				const destSlot = (versionBlockStart / TIER1_COVERAGE) % TIER2_SLOTS
+				const destDataMask = destTier.dataMasks[destSlot]
+				const destMetaMask = destTier.metaMasks[destSlot]
+				destDataMask.fill(0)
+				destMetaMask.fill(0)
+
+				for (let s = 0; s < TIER1_SLOTS; s++) {
+					const sourceSlot = (versionBlockStart / TIER0_SLOTS + s) % TIER1_SLOTS
+					const sourceDataMask = sourceTier.dataMasks[sourceSlot]
+					const sourceMetaMask = sourceTier.metaMasks[sourceSlot]
+
+					for (let w = 0; w < metaWords; w++) {
+						const metaBits = sourceMetaMask[w] // Non-atomic read
+						if (metaBits === 0) continue
+
+						destMetaMask[w] |= metaBits
+						const metaOffset = w << 5
+						let bits = metaBits
+						while (bits !== 0) {
+							const t = bits & -bits
+							const wordIndexInMeta = 31 - Math.clz32(t)
+							const wordIndex = metaOffset | wordIndexInMeta
+							if (wordIndex >= numWords) break
+
+							destDataMask[wordIndex] |= sourceDataMask[wordIndex] // Non-atomic read
+							bits ^= t
+						}
+					}
+					sourceTier.dataMasks[sourceSlot].fill(0)
+					sourceTier.metaMasks[sourceSlot].fill(0)
+				}
+			}
+
+			if (nextDirtySet) {
+				nextDirtySet.add(key)
+			}
+		}
+		dirtySet.clear()
 	}
 
 	/**
@@ -2158,7 +2584,7 @@ export class EntityManager {
 	 * @param {number} archetypeId The target archetype for the entities.
 	 * @param {import('../SystemManager/CommandBufferReader.js').CommandBufferReader} reader The command buffer reader.
 	 * @param {number} payloadBaseOffset The starting offset of this command's payload.
-	 * @param {number} currentTick The current game tick.
+	 * @param {number} version The current game version.
 	 * @param {import('../SystemManager/PlaceholderMap.js').PlaceholderMap} resolutionMap The map for resolving placeholder IDs.
 	 * @param {number} placeholderStartIndex The starting index for placeholder resolution.
 	 * @private
@@ -2167,9 +2593,10 @@ export class EntityManager {
 		archetypeId,
 		reader,
 		payloadBaseOffset,
-		currentTick,
+		version,
 		resolutionMap,
 		placeholderStartIndex,
+		isSilent = false,
 	) {
 		reader.seek(payloadBaseOffset)
 
@@ -2193,18 +2620,18 @@ export class EntityManager {
 		for (const typeId of componentTypeIDs) {
 			const info = Schema.componentInfo[typeId]
 			for (const propKey of info.propertyKeys) {
-				const propInfo = info.properties[propKey];
+				const propInfo = info.properties[propKey]
 
-				const bytesPerElement = propInfo.arrayConstructor.BYTES_PER_ELEMENT;
+				const bytesPerElement = propInfo.arrayConstructor.BYTES_PER_ELEMENT
 
 				// Align the data offset for the current property.
-				const alignment = bytesPerElement;
+				const alignment = bytesPerElement
 				if (alignment > 0 && dataOffset % alignment !== 0) {
-					dataOffset += alignment - (dataOffset % alignment);
+					dataOffset += alignment - (dataOffset % alignment)
 				}
-				const sourceView = new propInfo.arrayConstructor(reader.buffer, dataOffset, count);
-				sourcePropertyViews.push(sourceView);
-				dataOffset += count * bytesPerElement;
+				const sourceView = new propInfo.arrayConstructor(reader.buffer, dataOffset, count)
+				sourcePropertyViews.push(sourceView)
+				dataOffset += count * bytesPerElement
 			}
 		}
 		const totalDataSize = dataOffset - reader.offset
@@ -2219,10 +2646,12 @@ export class EntityManager {
 			const startEntityIndexInChunk = this._allocatedBlockStartIndices[i]
 			const batchSize = this._allocatedBlockCounts[i]
 
-			// --- Log structural change for `added:` queries (once per chunk) ---
-			const archetypeMaskOffset = archetypeId * MASK_PARTS
-			const addedMask = entityStore.archetypeMasks.subarray(archetypeMaskOffset, archetypeMaskOffset + MASK_PARTS)
-			this._logStructuralChange(chunkId, addedMask, null, currentTick)
+			if (!isSilent) {
+				// --- Log structural change for `added:` queries (once per chunk) ---
+				const archetypeMaskOffset = archetypeId * MASK_PARTS
+				const addedMask = entityStore.archetypeMasks.subarray(archetypeMaskOffset, archetypeMaskOffset + MASK_PARTS)
+				this._logStructuralChange(chunkId, addedMask, null, version)
+			}
 
 			// Create entity IDs and update their locations for this block
 			for (let j = 0; j < batchSize; j++) {
@@ -2272,27 +2701,22 @@ export class EntityManager {
 				}
 			}
 
-			// --- Handle Dirty Tracking ---
-			for (const typeId of componentTypeIDs) {
-				this.markComponentDirty(chunkId, typeId, currentTick)
-			}
-
-			// NEW (V2): Use the archetype's pre-cached list of trackable components.
-			const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
-			if (trackableIds.length > 0) {
-				const entities = entityStore.chunkComponentData[chunkId].entities
+			if (!isSilent) {
+				// --- Handle Dirty Tracking ---
+				for (const typeId of componentTypeIDs) {
+					this.markComponentDirty(chunkId, typeId, version)
+				}
+				// Also do narrow-phase marking for all created entities
 				for (let j = 0; j < batchSize; j++) {
-					const entityId = entities[startEntityIndexInChunk + j]
-					for (const typeId of trackableIds) {
-						const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(typeId)
-						this.entityMaskManager.fireEventById(modifiedMaskId, entityId, currentTick)
+					const indexInChunk = startEntityIndexInChunk + j
+					for (const typeId of componentTypeIDs) {
+						this.markEntityDirty(chunkId, indexInChunk, typeId, version)
 					}
 				}
 			}
 
 			entitiesCreated += batchSize
 		}
-
 		// Advance the reader past all the data blocks
 		reader.offset += totalDataSize
 	}
@@ -2320,41 +2744,7 @@ export class EntityManager {
 	}
 
 	/**
-	 * Internal helper to set component data at a known location.
-	 * @private
-	 */
-	_setComponentDataFromAosBufferAtLocation(
-		chunkId,
-		indexInChunk,
-		entityId,
-		typeId,
-		reader,
-		payloadBaseOffset,
-		resolutionMap,
-		currentTick,
-		isSilent,
-	) {
-		// Payload format: [trackableCount, trackableIds..., dataBlob]
-		const trackableCount = reader.view.getUint8(payloadBaseOffset)
-		const dataBlobOffset = payloadBaseOffset + 1 + trackableCount * 2
-
-		this._writeComponentDataFromBuffer(chunkId, indexInChunk, typeId, reader.view, dataBlobOffset, resolutionMap)
-
-		if (!isSilent) {
-			// Mark the component itself as dirty for broad-phase queries.
-			this.markComponentDirty(chunkId, typeId, currentTick)
-
-			// Fire the "modified" event if the component is trackable.
-			const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(typeId)
-			if (modifiedMaskId !== undefined) {
-				this.entityMaskManager.fireEventById(entityId, modifiedMaskId, currentTick)
-			}
-		}
-	}
-	/**
 	 * Sets the data for a single component on an entity from a command buffer payload.
-	 * Internal helper to set a batch of component data at a known location.
-	 * @private
 	 */
 	_setComponentsDataFromSoaBufferAtLocation(
 		chunkId,
@@ -2364,7 +2754,7 @@ export class EntityManager {
 		reader,
 		payloadBaseOffset,
 		resolutionMap,
-		currentTick,
+		version,
 		isSilent,
 		isAddComponent = false,
 	) {
@@ -2464,8 +2854,9 @@ export class EntityManager {
 					const bytesPerElement = propInfo.arrayConstructor.BYTES_PER_ELEMENT
 
 					// Align the data offset for the current property.
-					const alignment = bytesPerElement;
-					if (alignment > 0 && dataBlockOffset % alignment !== 0) { // prettier-ignore
+					const alignment = bytesPerElement
+					if (alignment > 0 && dataBlockOffset % alignment !== 0) {
+						// prettier-ignore
 						dataBlockOffset += alignment - (dataBlockOffset % alignment);
 					}
 
@@ -2480,15 +2871,9 @@ export class EntityManager {
 		if (!isSilent) {
 			// Mark all components in the payload as dirty for broad-phase queries.
 			for (const typeId of componentTypeIDs) {
-				this.markComponentDirty(chunkId, typeId, currentTick)
-
-			}
-			// Use the archetype's pre-cached list to fire narrow-phase "modified" events.
-			const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
-
-			for (const typeId of trackableIds) {
-				const modifiedMaskId = this.entityMaskManager.componentToModifiedMaskId.get(typeId)
-				this.entityMaskManager.fireEventById(modifiedMaskId, entityId, currentTick)
+				this.markComponentDirty(chunkId, typeId, version)
+				// Also mark for narrow-phase.
+				this.markEntityDirty(chunkId, indexInChunk, typeId, version)
 			}
 		}
 	}
@@ -2533,10 +2918,10 @@ export class EntityManager {
 	 * Immediate-mode method to set the data for a batch of components.
 	 * @param {bigint} entityId The entity to modify.
 	 * @param {object} payload The compiled payload from PayloadCompiler.
-	 * @param {number} currentTick The current game tick.
+	 * @param {number} version The current game version.
 	 * @returns {boolean} True on success.
 	 */
-	setComponentsDataImmediate(entityId, payload, currentTick, isSilent = false) {
+	setComponentsDataImmediate(entityId, payload, version, isSilent = false) {
 		if (!this.isEntityActive(entityId)) return false
 		// 1. Get location data without allocating an object.
 		const entityIndex = Number(entityId & 0xffffffffn)
@@ -2584,7 +2969,7 @@ export class EntityManager {
 			reader,
 			0,
 			null,
-			currentTick,
+			version,
 			isSilent,
 			false, // isAddComponent
 		)

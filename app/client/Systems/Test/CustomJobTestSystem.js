@@ -37,9 +37,9 @@ export class CustomJobTestSystem {
 	/**
 	 * Runs on the main thread. We will write a "dynamic request" to the shared buffer.
 	 */
-	update({ currentTick }) {
+	update({ currentVersion }) {
 		// Every 60 ticks, post a new request.
-		if (currentTick > 0 && currentTick % 60 === 0) {
+		if (currentVersion > 0 && currentVersion % 60 === 0) {
 			const value = Math.floor(Math.random() * 100) + 1
 			if (testConfig.logVerbose) {
 				console.log(`%c[CustomJobTestSystem] update: Posting dynamic request -> ${value}`, 'color: orange')
@@ -61,9 +61,9 @@ export class CustomJobTestSystem {
 	/**
 	 * Runs on the main thread after kernels are complete. We'll check for a result.
 	 */
-	process({ currentTick }) {
+	process({ currentVersion }) {
 		// Reset the worker's log flag periodically if verbose logging is on.
-		if (testConfig.logVerbose && currentTick > 0 && currentTick % 60 === 0) {
+		if (testConfig.logVerbose && currentVersion > 0 && currentVersion % 60 === 0) {
 			self.hasRunCustomJobTest = false
 		}
 

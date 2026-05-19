@@ -86,6 +86,31 @@ export class EntityCommandBuffer {
 		this.sortableBuffer.add(key, payloadOffset, payloadLength, opAndType, generation)
 	}
 
+	addComponentSilent(entityId, payload, layer = 0) {
+		const isPlaceholder = entityId >> 63n === 1n
+		const phase = SortPhase.MODIFY
+		const generation = isPlaceholder ? 0 : Number((entityId >> 32n) & 0x7fffffffn)
+
+		if (payload.componentTypeId === undefined) {
+			throw new Error(
+				'EntityCommandBuffer.addComponentSilent: Payload is missing componentTypeId. Payloads for addComponent must be compiled from a single component.',
+			)
+		}
+		const componentTypeId = payload.componentTypeId
+		let subKey = componentTypeId
+		if (isPlaceholder) {
+			subKey |= 1 << 15
+		}
+
+		const { payloadOffset, payloadLength } = this._writeSingleEntityPayload(payload)
+		const entityIndex = Number(entityId & 0xffffffffn)
+
+		const key = SortableCommandBuffer.encodeKey(phase, layer, entityIndex, subKey)
+		const opAndType = (OpCodes.ADD_COMPONENT_SILENT << 16) | payload.archetypeId
+
+		this.sortableBuffer.add(key, payloadOffset, payloadLength, opAndType, generation)
+	}
+
 	/**
 	 * Records a command to add multiple components to an entity from a single payload.
 	 * @param {bigint} entityId The entity to modify.
@@ -103,6 +128,20 @@ export class EntityCommandBuffer {
 		const subKey = isPlaceholder ? 1 << 15 : 0 // Subkey 0, but with placeholder flag if needed.
 		const key = SortableCommandBuffer.encodeKey(phase, layer, entityIndex, subKey)
 		const opAndType = (OpCodes.ADD_COMPONENTS << 16) | payload.archetypeId
+		this.sortableBuffer.add(key, payloadOffset, payloadLength, opAndType, generation)
+	}
+
+	addComponentsSilent(entityId, payload, layer = 0) {
+		const isPlaceholder = entityId >> 63n === 1n
+		const phase = SortPhase.MODIFY
+		const entityIndex = Number(entityId & 0xffffffffn)
+		const generation = isPlaceholder ? 0 : Number((entityId >> 32n) & 0x7fffffffn)
+
+		const { payloadOffset, payloadLength } = this._writeSingleEntityPayload(payload)
+
+		const subKey = isPlaceholder ? 1 << 15 : 0
+		const key = SortableCommandBuffer.encodeKey(phase, layer, entityIndex, subKey)
+		const opAndType = (OpCodes.ADD_COMPONENTS_SILENT << 16) | payload.archetypeId
 		this.sortableBuffer.add(key, payloadOffset, payloadLength, opAndType, generation)
 	}
 
@@ -326,36 +365,29 @@ export class EntityCommandBuffer {
 		const firstPlaceholderId = this._generateFirstPlaceholderId(count)
 		const entityIndex = Number(firstPlaceholderId & 0xffffffffn)
 
-		// --- True Zero-Serialization Assembly ---
-		const payloadStartOffset = this.frameDataBuffer.offset
-
-		// 1. Write Header directly to frameDataBuffer
-		this.frameDataBuffer.writeU32(count)
-		// 2. Add padding for 8-byte alignment
-		const dataAlignment = 8
-		const padding = (dataAlignment - (this.frameDataBuffer.offset % dataAlignment)) % dataAlignment
-		for (let i = 0; i < padding; i++) {
-			this.frameDataBuffer.writeU8(0)
-		}
-
-		// 3. Write data blocks by copying slices directly from the payload's master buffer
-		for (const item of payload.layout) {
-			// Add padding to align the start of this property's data block.
-			const propAlignment = item.bytesPerElement
-			const padding = (propAlignment - (this.frameDataBuffer.offset % propAlignment)) % propAlignment
-			for (let i = 0; i < padding; i++) {
-				this.frameDataBuffer.writeU8(0)
-			}
-
-			const sourceBuffer = payload.buffers[item.componentName][item.propKey]
-			const sliceView = new Uint8Array(sourceBuffer.buffer, sourceBuffer.byteOffset, count * item.bytesPerElement)
-			this.frameDataBuffer.writeBuffer(sliceView)
-		}
-		const payloadLength = this.frameDataBuffer.offset - payloadStartOffset
+		const { payloadOffset, payloadLength } = this._writeInstantiatePayload(payload, count)
 
 		const key = SortableCommandBuffer.encodeKey(SortPhase.CREATE, layer, entityIndex, 0)
 		const opAndType = (OpCodes.INSTANTIATE << 16) | payload.archetypeId
-		this.sortableBuffer.add(key, payloadStartOffset, payloadLength, opAndType, 0)
+		this.sortableBuffer.add(key, payloadOffset, payloadLength, opAndType, 0)
+
+		return firstPlaceholderId
+	}
+
+	instantiateSilent(payload, count = 1, layer = 0) {
+		if (count <= 0) return count === 1 ? undefined : []
+		if (count > payload.capacity) {
+			throw new Error(`Payload count ${count} exceeds compiled capacity ${payload.capacity}.`)
+		}
+
+		const firstPlaceholderId = this._generateFirstPlaceholderId(count)
+		const entityIndex = Number(firstPlaceholderId & 0xffffffffn)
+
+		const { payloadOffset, payloadLength } = this._writeInstantiatePayload(payload, count)
+
+		const key = SortableCommandBuffer.encodeKey(SortPhase.CREATE, layer, entityIndex, 0)
+		const opAndType = (OpCodes.INSTANTIATE_SILENT << 16) | payload.archetypeId
+		this.sortableBuffer.add(key, payloadOffset, payloadLength, opAndType, 0)
 
 		return firstPlaceholderId
 	}
@@ -397,6 +429,35 @@ export class EntityCommandBuffer {
 		const payloadLength = this.frameDataBuffer.offset - payloadStartOffset
 
 		//!
+		return { payloadOffset: payloadStartOffset, payloadLength }
+	}
+
+	_writeInstantiatePayload(payload, count) {
+		const payloadStartOffset = this.frameDataBuffer.offset
+
+		// 1. Write Header directly to frameDataBuffer
+		this.frameDataBuffer.writeU32(count)
+		// 2. Add padding for 8-byte alignment
+		const dataAlignment = 8
+		const padding = (dataAlignment - (this.frameDataBuffer.offset % dataAlignment)) % dataAlignment
+		for (let i = 0; i < padding; i++) {
+			this.frameDataBuffer.writeU8(0)
+		}
+
+		// 3. Write data blocks by copying slices directly from the payload's master buffer
+		for (const item of payload.layout) {
+			// Add padding to align the start of this property's data block.
+			const propAlignment = item.bytesPerElement
+			const padding = (propAlignment - (this.frameDataBuffer.offset % propAlignment)) % propAlignment
+			for (let i = 0; i < padding; i++) {
+				this.frameDataBuffer.writeU8(0)
+			}
+
+			const sourceBuffer = payload.buffers[item.componentName][item.propKey]
+			const sliceView = new Uint8Array(sourceBuffer.buffer, sourceBuffer.byteOffset, count * item.bytesPerElement)
+			this.frameDataBuffer.writeBuffer(sliceView)
+		}
+		const payloadLength = this.frameDataBuffer.offset - payloadStartOffset
 		return { payloadOffset: payloadStartOffset, payloadLength }
 	}
 

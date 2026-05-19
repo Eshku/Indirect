@@ -52,7 +52,7 @@ export class CameraSystem {
 		this.starfieldSprite = layerManager.get('starfieldSprite')
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		this.screenWidth = gameManager.getApp().screen.width
 		this.screenHeight = gameManager.getApp().screen.height
 

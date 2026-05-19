@@ -66,13 +66,13 @@ export class PlayerInputSystem {
 		}
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		if (!this.playerId) return
 
-		this._processContinuousInputs(currentTick)
+		this._processContinuousInputs()
 	}
 
-	_processContinuousInputs(currentTick) {
+	_processContinuousInputs() {
 		const { moveLeft, moveRight, moveUp, moveDown, mainAttack } = this.inputState
 
 		let intentX = 0

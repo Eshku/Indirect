@@ -26,14 +26,14 @@ export class SpriteFactorySystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ deltaTime, currentTick, lastTick }) {
+	update() {
 		// Broad-phase: Get all chunks where `spriteDescriptor` was modified.
-		const changedChunkIds = this.initializationQuery.getChunks(lastTick, currentTick)
+		const changedChunkIds = this.initializationQuery.getChunks()
 
 		for (let i = 0; i < changedChunkIds.length; i++) {
 			const chunkId = changedChunkIds[i]
 			// Narrow-phase: Get the specific indices of entities whose `spriteDescriptor` was marked dirty.
-			const dirtyCount = this.getDirty(chunkId, spriteDescriptor, lastTick, currentTick, this.scratchBuffer)
+			const dirtyCount = this.getDirty(chunkId, spriteDescriptor, this.scratchBuffer)
 
 			const descriptorArrays = this.getComponentData(chunkId, spriteDescriptor)
 			const viewableArrays = this.getComponentData(chunkId, viewable)
@@ -62,14 +62,14 @@ export class SpriteFactorySystem {
 					// Mark this specific entity's `viewable` component as dirty again.
 					// This is crucial for downstream systems like LayerFactorySystem to react
 					// to the fact that a sprite has just been assigned.
-					this.markEntityDirty(chunkId, indexInChunk, viewable, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, viewable)
 					wasChunkModified = true
 				}
 			}
 			// If we modified any `viewable` components in this chunk, we must perform a
 			// broad-phase mark so that other reactive systems see the change.
 			if (wasChunkModified) {
-				this.markComponentDirty(chunkId, viewable, currentTick)
+				this.markComponentDirty(chunkId, viewable)
 			}
 		}
 	}

@@ -27,7 +27,7 @@ export class ApplyVelocity {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ deltaTime, currentTick, lastTick }) {
+	update({ deltaTime }) {
 		// This is a high-volatility system. We assume most entities are moving.
 		// We do not use a reactive query and we do not mark any data as dirty.
 		// The corresponding reader system (SyncTransforms) will also be non-reactive.

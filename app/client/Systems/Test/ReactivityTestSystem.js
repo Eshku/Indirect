@@ -18,9 +18,12 @@ export class ReactivityTestSystem {
 		this.immediateTestPhase = 'INIT'
 		this.testEntityId = null
 		this.immediateTestEntityId = null
+		this.silentTestEntityId = null
 		this.poolingTestPhase = 'INIT'
 		this.poolingTestEntityId = null
 		this.poolingTestComplete = false
+		this.silentTestPhase = 'INIT'
+		this.silentTestComplete = false
 
 		this.testComplete = false
 		this.immediateTestComplete = false
@@ -64,6 +67,11 @@ export class ReactivityTestSystem {
 		this.immediateRemovedQuery = this.getQuery({ with: [componentA], removed: [componentC] })
 		this.immediateInitQuery = this.getQuery({ with: [componentA, componentC], added: [componentA] })
 
+		// --- Silent Test Queries ---
+		this.silentCreationQuery = this.getQuery({ with: [trackedTestComponent], without: [componentA] })
+		this.silentAddedQuery = this.getQuery({ with: [trackedTestComponent, componentA], added: [componentA] })
+		this.silentModifiedQuery = this.getQuery({ with: [trackedTestComponent], modified: [trackedTestComponent] })
+
 		// --- Pooling Test Queries & Payloads ---
 		this.poolTag = componentA // Use componentA as our "isPooled" tag.
 		// Add componentB as a permanent tag to isolate this test's entity.
@@ -99,6 +107,14 @@ export class ReactivityTestSystem {
 			})
 		})
 
+		describe('Reactivity API (Silent Operations)', () => {
+			it('should not trigger reactivity for silent commands', async () => {
+				await new Promise(resolve => {
+					this.resolveSilentTest = resolve
+				})
+			})
+		})
+
 		describe('Reactivity API (Pooling Simulation)', () => {
 			it('should correctly reset state on reactivation from pool', async () => {
 				await new Promise(resolve => {
@@ -119,15 +135,15 @@ export class ReactivityTestSystem {
 				ecs.entityMaskManager.registerDeclarativeMasks()
 				this.flush()
 
-				// Get the current tick from the running game loop to make the test realistic.
-				const lastTickBeforeAction = ecs.systemManager.currentTick
-				const tickOfAction = lastTickBeforeAction + 1
+				// Get the current version from the game loop to make the test realistic.
+				const lastVersionBeforeAction = ecs.systemManager.gameLoop.globalVersion
+				const versionOfAction = lastVersionBeforeAction + 1
 
 				// 1. Setup: Create two entities in the same chunk.
 				const payload = this.compile({ trackedTestComponent: { value: 0 } })
 				this.instantiate(payload, 1) // This will be at index 0, the one we move.
 				this.instantiate(payload, 1) // This will be at index 1, the one we swap and test.
-				this.flush()
+				this.flush(versionOfAction) // Flush with a version to ensure consistency
 
 				// Make the query specific to the archetype *before* the structural change.
 				const query = this.getQuery({ with: [trackedTestComponent], without: [componentA] })
@@ -145,9 +161,9 @@ export class ReactivityTestSystem {
 
 				// 2. Action: Mark the entity that will be swapped as dirty.
 				// Then, in the same frame, trigger a structural change on the *other* entity.
-				this.markEntityDirtyById(entityToSwapAndTest, trackedTestComponent, tickOfAction)
+				ecs.entityManager.markEntityDirtyById(entityToSwapAndTest, trackedTestComponent, versionOfAction)
 				this.addComponent(entityToMove, this.addCompAPayload)
-				this.flush(tickOfAction)
+				this.flush(versionOfAction)
 
 				// 3. Verification: The `addComponent` moved entityToMove. entityToSwapAndTest was
 				// swapped into its place (index 0). The dirty flag must be preserved.
@@ -162,11 +178,11 @@ export class ReactivityTestSystem {
 				expect(finalChunkIds[0]).toBe(chunkId, 'The chunk ID should be the same.')
 
 				const scratchBuffer = this.createScratchBuffer()
-				const dirtyCount = this.getDirty(
+				const dirtyCount = ecs.entityManager.getDirty(
 					chunkId,
 					trackedTestComponent,
-					lastTickBeforeAction,
-					tickOfAction,
+					lastVersionBeforeAction,
+					versionOfAction,
 					scratchBuffer,
 				)
 				expect(dirtyCount).toBe(1, 'Narrow-phase should find the dirty swapped entity in its original chunk')
@@ -183,12 +199,12 @@ export class ReactivityTestSystem {
 				ecs.entityMaskManager.registerDeclarativeMasks()
 				this.flush()
 
-				const lastTickBeforeAction = ecs.systemManager.currentTick
-				const tickOfAction = lastTickBeforeAction + 1
+				const lastVersionBeforeAction = ecs.systemManager.gameLoop.globalVersion
+				const versionOfAction = lastVersionBeforeAction + 1
 
 				// 1. Setup: Create two entities in the same chunk.
 				const payload = this.compile({ trackedTestComponent: { value: 0 } })
-				this.instantiate(payload, 1) // This will be entity A
+				this.instantiate(payload, 1) // This will be entity A,
 				this.instantiate(payload, 1) // This will be entity B
 				this.flush()
 
@@ -199,17 +215,17 @@ export class ReactivityTestSystem {
 				const entityB_toSet = entities[1]
 
 				// 2. Action: Mark entity A dirty directly. Queue a setComponent for entity B.
-				this.markEntityDirtyById(entityA_toMark, trackedTestComponent, tickOfAction)
+				ecs.entityManager.markEntityDirtyById(entityA_toMark, trackedTestComponent, versionOfAction)
 
 				const setPayload = this.compile({ trackedTestComponent: { value: 99 } })
 				this.setComponent(entityB_toSet, setPayload)
 
 				// 3. Flush commands.
-				this.flush(tickOfAction)
+				this.flush(versionOfAction)
 
 				// 4. Verification: Check for dirty entities in the next "tick".
 				const scratchBuffer = this.createScratchBuffer()
-				const dirtyCount = this.getDirty(chunkId, trackedTestComponent, lastTickBeforeAction, tickOfAction, scratchBuffer)
+				const dirtyCount = ecs.entityManager.getDirty(chunkId, trackedTestComponent, lastVersionBeforeAction, versionOfAction, scratchBuffer)
 
 				// We expect 2 dirty entities: one from markEntityDirtyById, one from setComponent.
 				expect(dirtyCount).toBe(2, 'Should find both the directly marked and the setComponent-marked entities')
@@ -220,20 +236,23 @@ export class ReactivityTestSystem {
 		testManager.runAllTests()
 	}
 
-	update({ currentTick, lastTick }) {
+	update() {
 		// Run state machines concurrently, but only if their test has been started by the test runner.
 		if (this.resolveTest) {
-			this._runDeferredTest(lastTick, currentTick)
+			this._runDeferredTest()
 		}
 		if (this.resolveImmediateTest) {
-			this._runImmediateTest(lastTick, currentTick)
+			this._runImmediateTest()
 		}
 		if (this.resolvePoolingTest) {
-			this._runPoolingTest(lastTick, currentTick)
+			this._runPoolingTest()
+		}
+		if (this.resolveSilentTest) {
+			this._runSilentTest()
 		}
 	}
 
-	_runPoolingTest(lastTick, currentTick) {
+	_runPoolingTest(lastVersion, currentVersion) {
 		if (this.poolingTestComplete) return
 
 		switch (this.poolingTestPhase) {
@@ -304,7 +323,7 @@ export class ReactivityTestSystem {
 				)
 
 				// Verify that the reactive query detected the change.
-				const modifiedChunks = this.poolingTestModifiedQuery.getChunks(lastTick, currentTick)
+				const modifiedChunks = this.poolingTestModifiedQuery.getChunks()
 				expect(modifiedChunks.length).toBe(
 					1,
 					'[PoolingTest] Reactive query should detect modification after reactivation',
@@ -327,7 +346,7 @@ export class ReactivityTestSystem {
 		}
 	}
 
-	_runDeferredTest(lastTick, currentTick) {
+	_runDeferredTest() {
 		if (this.testComplete) return
 		switch (this.testPhase) {
 			case 'INIT':
@@ -362,11 +381,8 @@ export class ReactivityTestSystem {
 				// Verify NARROW-PHASE dirty marking on creation.
 
 				const scratch = this.createScratchBuffer()
-				const dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, lastTick, currentTick, scratch)
-				expect(dirtyCount).toBe(
-					1,
-					'[Deferred] createEntity should mark trackable component as dirty on the creation tick (narrow-phase)',
-				)
+				const dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, scratch)
+				expect(dirtyCount).toBe(1, `[Deferred] createEntity should mark trackable component as dirty on the creation tick (narrow-phase).`)
 				expect(scratch[0]).toBe(location.indexInChunk)
 
 				expect(this.creationAddedQuery.getChunks().length).toBe(
@@ -407,7 +423,7 @@ export class ReactivityTestSystem {
 				// 2. Narrow-phase: For each changed chunk, get the specific entities that were dirty in this tick's range.
 				let modifiedCountAfterChange = 0
 				for (const chunkId of changedChunks) {
-					modifiedCountAfterChange += this.getDirty(chunkId, trackedTestComponent, lastTick, currentTick, [])
+					modifiedCountAfterChange += this.getDirty(chunkId, trackedTestComponent, [])
 				}
 				expect(modifiedCountAfterChange).toBe(
 					1,
@@ -532,7 +548,7 @@ export class ReactivityTestSystem {
 				// Narrow-phase check for the modification.
 				let modCount = 0
 				for (const chunkId of modChunks) {
-					modCount += this.getDirty(chunkId, trackedTestComponent, lastTick, currentTick, [])
+					modCount += this.getDirty(chunkId, trackedTestComponent, [])
 				}
 				expect(modCount).toBe(1, '[Deferred] Narrow-phase should find one modified entity during a structural move')
 
@@ -552,7 +568,94 @@ export class ReactivityTestSystem {
 		}
 	}
 
-	_runImmediateTest(lastTick, currentTick) {
+	_runSilentTest() {
+		if (this.silentTestComplete) return
+
+		switch (this.silentTestPhase) {
+			case 'INIT': {
+				// Test instantiateSilent
+				const silentCreationPayload = this.compile({ trackedTestComponent: { value: 100 } })
+				this.instantiateSilent(silentCreationPayload, 1)
+				this.silentTestPhase = 'CHECK_SILENT_CREATION'
+				break
+			}
+
+			case 'CHECK_SILENT_CREATION': {
+				// The silent creation was flushed last frame.
+				// Verify no reactive queries were triggered.
+				expect(this.silentModifiedQuery.getChunks().length).toBe(
+					0,
+					'[Silent] modifiedQuery should not trigger on instantiateSilent',
+				)
+				expect(this.creationAddedQuery.getChunks().length).toBe(
+					0,
+					'[Silent] addedQuery should not trigger on instantiateSilent',
+				)
+
+				// Verify the entity was actually created.
+				this.silentTestEntityId = this.silentCreationQuery.getSingleEntity()
+				expect(this.silentTestEntityId).toBeDefined()
+				const data = this.ECS.getComponent(this.silentTestEntityId, 'trackedTestComponent')
+				expect(data.value).toBe(100)
+
+				this.silentTestPhase = 'PERFORM_SILENT_ADD'
+				break
+			}
+
+			case 'PERFORM_SILENT_ADD': {
+				// Test addComponentSilent
+				const silentAddPayload = this.compile({ componentA: {} })
+				this.addComponentSilent(this.silentTestEntityId, silentAddPayload)
+				this.silentTestPhase = 'CHECK_SILENT_ADD'
+				break
+			}
+
+			case 'CHECK_SILENT_ADD': {
+				// The silent add was flushed last frame.
+				expect(this.silentAddedQuery.getChunks().length).toBe(0, '[Silent] addedQuery should not trigger on addComponentSilent')
+				expect(this.silentModifiedQuery.getChunks().length).toBe(
+					0,
+					'[Silent] modifiedQuery should not trigger on addComponentSilent',
+				)
+
+
+				// Verify component was added.
+				expect(this.ECS.hasComponent(this.silentTestEntityId, 'componentA')).toBe(true)
+
+				this.silentTestPhase = 'PERFORM_SILENT_SET'
+				break
+			}
+
+			case 'PERFORM_SILENT_SET': {
+				// Test setComponentSilent (deferred)
+				const silentSetPayload = this.compile({ trackedTestComponent: { value: 200 } })
+				this.setComponentSilent(this.silentTestEntityId, silentSetPayload)
+				this.silentTestPhase = 'CHECK_SILENT_SET'
+				break
+			}
+
+			case 'CHECK_SILENT_SET': {
+				// The silent set was flushed last frame.
+				expect(this.silentModifiedQuery.getChunks().length).toBe(0, '[Silent] modifiedQuery should not trigger on setComponentSilent')
+
+				// Verify data was changed.
+				const setData = this.ECS.getComponent(this.silentTestEntityId, 'trackedTestComponent')
+				expect(setData.value).toBe(200)
+
+				this.silentTestPhase = 'COMPLETE'
+				break
+			}
+
+			case 'COMPLETE': {
+				this.silentTestComplete = true
+				this.ECS.destroyEntity(this.silentTestEntityId)
+				this.resolveSilentTest()
+				break
+			}
+		}
+	}
+
+	_runImmediateTest() {
 		if (this.immediateTestComplete) return
 
 		switch (this.immediateTestPhase) {
@@ -656,6 +759,9 @@ export class ReactivityTestSystem {
 		}
 		if (this.immediateTestEntityId) {
 			this.ECS.destroyEntity(this.immediateTestEntityId)
+		}
+		if (this.silentTestEntityId) {
+			this.ECS.destroyEntity(this.silentTestEntityId)
 		}
 		if (this.poolingTestEntityId) {
 			this.destroyEntity(this.poolingTestEntityId)

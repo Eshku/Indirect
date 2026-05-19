@@ -30,6 +30,7 @@ export class QueryManager {
 	async init(ecs) {
 		// This manager is now owned by ECS, so it gets its dependencies from there.
 		this.componentManager = ecs.componentManager
+		this.systemManager = ecs.systemManager
 		this.entityManager = ecs.entityManager
 	}
 

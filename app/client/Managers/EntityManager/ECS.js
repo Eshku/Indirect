@@ -72,19 +72,16 @@ export class ECS {
 	}
 
 	/**
-	 * Gets the correct tick for an immediate-mode operation.
-	 * Before the game loop starts, this is 0. During the loop, it's the current tick.
+	 * Gets a unique, incremented version for an immediate-mode operation.
 	 * @private
 	 */
-	getTick() {
+	_generateImmediateVersion() {
 		const gameLoop = this.systemManager?.gameLoop
-		if (!gameLoop) return 1 // Not initialized, default to tick 1.
+		if (!gameLoop) return 1 // Default to version 1 if loop not running
 
-		// Before the loop starts, changes should be part of the first tick.
-		if (gameLoop.frameCounter === 0) return 1
-
-		// During the loop, changes are part of the current world tick.
-		return gameLoop.currentTick
+		// Get and immediately increment the global version to create a unique, atomic version for this operation.
+		gameLoop.globalVersion++
+		return gameLoop.globalVersion
 	}
 
 	/**
@@ -99,9 +96,24 @@ export class ECS {
 		// but executes immediately. This ensures all entity creation is consistent. We use the SoA path for single entity creation as it's the most efficient.
 		const payload = this.payloadCompiler.compile(componentsInput)
 		payload.count = 1 // Ensure it's a single entity payload
-		const tick = this.getTick()
+		const version = this._generateImmediateVersion()
 		// The entity manager method now handles dirty tracking internally.
-		return this.entityManager.createEntityFromSoaPayload(payload, tick)
+		return this.entityManager.createEntityFromSoaPayload(payload, version)
+	}
+
+	/**
+	 * Creates an entity immediately, without triggering reactivity.
+	 */
+	createEntitySilent(componentsInput = {}) {
+		if (Object.keys(componentsInput).length === 0) {
+			return this.entityManager.createEntity() // This is already silent.
+		}
+
+		const payload = this.payloadCompiler.compile(componentsInput)
+		payload.count = 1
+		const version = this._generateImmediateVersion()
+		// The entity manager method now handles dirty tracking internally.
+		return this.entityManager.createEntityFromSoaPayload(payload, version, true)
 	}
 
 	/**
@@ -129,9 +141,23 @@ export class ECS {
 
 		// Use the compiler to handle prefab logic and all overrides consistently.
 		const payload = this.payloadCompiler.compile(prefabName, { overrides: finalOverrides })
-		const tick = this.getTick()
+		const version = this._generateImmediateVersion()
 		// The entity manager method now handles dirty tracking internally.
-		return this.entityManager.createEntityFromSoaPayload(payload, tick)
+		return this.entityManager.createEntityFromSoaPayload(payload, version)
+	}
+
+	/**
+	 * Instantiates an entity from a prefab immediately, without triggering reactivity.
+	 */
+	instantiateSilent(prefabName, overrides = {}, { parentId = null, ownerId = null } = {}) {
+		const finalOverrides = { ...overrides } // Create a copy to avoid mutating the caller's object
+		if (parentId) finalOverrides.Parent = { entityId: parentId }
+		if (ownerId) finalOverrides.Owner = { entityId: ownerId }
+
+		const payload = this.payloadCompiler.compile(prefabName, { overrides: finalOverrides })
+		const version = this._generateImmediateVersion()
+		// Call the silent version of the entity manager method.
+		return this.entityManager.createEntityFromSoaPayload(payload, version, true)
 	}
 
 	/**
@@ -149,9 +175,9 @@ export class ECS {
 		// core task of creating SoA payloads from a standard object format.
 		const componentObject = { [componentName]: data }
 		const payload = this.payloadCompiler.compile(componentObject)
-		const tick = this.getTick()
+		const version = this._generateImmediateVersion()
 		// The entity manager method now handles dirty tracking internally.
-		return this.entityManager.addComponent(entityId, payload, tick)
+		return this.entityManager.addComponent(entityId, payload, version)
 	}
 
 	/**
@@ -161,7 +187,7 @@ export class ECS {
 		const componentTypeId = Schema.componentNameToTypeID.get(componentName.toLowerCase())
 
 		//! todo mask removal once API is there
-		return this.entityManager.removeComponent(entityId, componentTypeId, this.getTick())
+		return this.entityManager.removeComponent(entityId, componentTypeId, this._generateImmediateVersion())
 	}
 
 	/**
@@ -184,8 +210,8 @@ export class ECS {
 	 */
 	setComponents(entityId, componentsInput) {
 		const payload = this.payloadCompiler.compile(componentsInput)
-		const tick = this.getTick()
-		return this.entityManager.setComponentsDataImmediate(entityId, payload, tick, false)
+		const version = this._generateImmediateVersion()
+		return this.entityManager.setComponentsDataImmediate(entityId, payload, version, false)
 	}
 
 	/**
@@ -196,8 +222,8 @@ export class ECS {
 	 */
 	setComponentsSilent(entityId, componentsInput) {
 		const payload = this.payloadCompiler.compile(componentsInput)
-		const tick = this.getTick()
-		return this.entityManager.setComponentsDataImmediate(entityId, payload, tick, true)
+		const version = this._generateImmediateVersion()
+		return this.entityManager.setComponentsDataImmediate(entityId, payload, version, true)
 	}
 
 	/**
@@ -333,16 +359,16 @@ export class ECS {
 	/**
 	 * A test and debug helper to immediately execute all commands in the global command buffer.
 	 * This is equivalent to the `flush()` helper available inside systems.
-	 * @param {number} [timestampTick] - The tick to timestamp the changes with. If not provided, it defaults to the current tick + 1.
+	 * @param {number} [timestampVersion] - The version to timestamp the changes with. If not provided, it defaults to a new immediate version.
 	 */
-	executeCommandBuffer(timestampTick) {
+	executeCommandBuffer(timestampVersion) {
 		if (!this.systemManager) {
 			throw new Error('ECS.executeCommandBuffer called before ECS was initialized with a SystemManager.')
 		}
-		// If no tick is provided, default to the next tick for reactivity.
-		const tick = timestampTick ?? this.systemManager.currentTick + 1
+		// If no version is provided, get a new immediate version.
+		const version = timestampVersion ?? this._generateImmediateVersion()
 
-		this.systemManager.commandBufferExecutor.flush(this.systemManager.entityCommandBuffer, tick)
+		this.systemManager.commandBufferExecutor.flush(this.systemManager.entityCommandBuffer, version)
 	}
 }
 

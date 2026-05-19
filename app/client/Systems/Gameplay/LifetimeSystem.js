@@ -26,7 +26,7 @@ export class LifetimeSystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		const chunkIds = this.query.getChunks()
 
 		for (const chunkId of chunkIds) {
@@ -47,12 +47,12 @@ export class LifetimeSystem {
 					states.state[indexInChunk] = LIFECYCLE.DYING
 					states.timer[indexInChunk] = DEATH_ANIMATION_DURATION
 					states.duration[indexInChunk] = DEATH_ANIMATION_DURATION
-					this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, lifecycleState)
 					wasChunkModified = true
 				}
 			}
 			if (wasChunkModified) {
-				this.markComponentDirty(chunkId, lifecycleState, currentTick)
+				this.markComponentDirty(chunkId, lifecycleState)
 			}
 		}
 	}

@@ -46,7 +46,7 @@ export class SyncTransforms {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ deltaTime, currentTick, lastTick, frameCounter }) {
+	update() {
 		// --- Position Sync ---
 		const positionChunkIds = this.positionQuery.getChunks()
 		for (let i = 0; i < positionChunkIds.length; i++) {
@@ -99,7 +99,7 @@ export class SyncTransforms {
 			const displayObjectStorage = this.displayObjectStorage
 
 			// Get the indices of entities whose `scale` component has changed.
-			const changedCount = this.getDirty(chunkId, scale, lastTick, currentTick, this.scratchBuffer)
+			const changedCount = this.getDirty(chunkId, scale, this.scratchBuffer)
 
 			for (let j = 0; j < changedCount; j++) {
 				const indexInChunk = this.scratchBuffer[j]
@@ -117,7 +117,7 @@ export class SyncTransforms {
 			const tints = this.getComponentData(chunkId, tint)
 
 			// Get the indices of entities whose `tint` component has changed.
-			const changedCount = this.getDirty(chunkId, tint, lastTick, currentTick, this.scratchBuffer)
+			const changedCount = this.getDirty(chunkId, tint, this.scratchBuffer)
 			for (let j = 0; j < changedCount; j++) {
 				const indexInChunk = this.scratchBuffer[j]
 				const spriteRef = viewableRefs[indexInChunk]
@@ -139,7 +139,7 @@ export class SyncTransforms {
 			const visibilities = this.getComponentData(chunkId, visibility)
 
 			// Use the narrow-phase check to find entities whose visibility has changed since the last visual frame.
-			const changedCount = this.getDirty(chunkId, visibility, lastTick, currentTick, this.scratchBuffer)
+			const changedCount = this.getDirty(chunkId, visibility, this.scratchBuffer)
 			for (let j = 0; j < changedCount; j++) {
 				const indexInChunk = this.scratchBuffer[j]
 				const isVisible = !!visibilities.isVisible[indexInChunk]

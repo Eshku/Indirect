@@ -1253,7 +1253,7 @@ export class EntityCommandBufferTestSystem {
 				const queryA = this.getQuery({ with: [position, testEntityTag] })
 				const chunkToRecycleId = queryA.getChunks()[0]
 				expect(chunkToRecycleId).toBeDefined()
-				expect(entityStore.chunkArchetypeDirtyTicks[chunkToRecycleId].length).toBe(componentsInA)
+				expect(entityStore.chunkArchetypeDirtyVersions[chunkToRecycleId].length).toBe(componentsInA)
 
 				this.destroyEntitiesInChunk(chunkToRecycleId)
 
@@ -1268,8 +1268,8 @@ export class EntityCommandBufferTestSystem {
 				const queryB = this.getQuery({ with: [velocity, rotation, testEntityTag] })
 				expect(queryB.count).toBe(1)
 				const recycledChunkId = queryB.getChunks()[0]
-				expect(recycledChunkId).toBe(chunkToRecycleId)
-				expect(entityStore.chunkArchetypeDirtyTicks[recycledChunkId].length).toBe(componentsInB)
+				expect(recycledChunkId).toBe(chunkToRecycleId, 'The same chunk ID should be recycled')
+				expect(entityStore.chunkArchetypeDirtyVersions[recycledChunkId].length).toBe(componentsInB)
 			})
 
 			it('should correctly recycle a chunk in the same frame it was freed', () => {
@@ -1294,7 +1294,7 @@ export class EntityCommandBufferTestSystem {
 				expect(this.creationQuery.count).toBe(1)
 				const newChunkId = this.creationQuery.getChunks()[0]
 				expect(newChunkId).toBe(chunkToDestroyId)
-				expect(entityStore.chunkArchetypeDirtyTicks[newChunkId]).toBeInstanceOf(Uint32Array)
+				expect(entityStore.chunkArchetypeDirtyVersions[newChunkId]).toBeInstanceOf(Uint32Array)
 				expect(this.getChunkSize(newChunkId)).toBe(1)
 			})
 
@@ -1469,30 +1469,30 @@ export class EntityCommandBufferTestSystem {
 			it('should automatically fire a "modified" event on deferred setComponent', () => {
 				cleanup()
 
-				// 1. Setup: Get the event mask for a trackable component.
-				const modifiedMaskId = entityMaskManager.getDirtyMask(trackedTestComponent)
-				expect(modifiedMaskId).toBeDefined()
-
-				// 2. Create an entity with the trackable component.
+				// 2. Create an entity with the trackable component, managing versions manually for the test.
+				const lastVersionBeforeCreation = ecs.systemManager.gameLoop.globalVersion
+				const creationVersion = lastVersionBeforeCreation + 1
 				const creationPayload = this.compile({ trackedTestComponent: { value: 1.0 } })
 				this.instantiate(creationPayload, 1)
-				flush()
+				flush(creationVersion)
 
 				const entityId = this.getQuery({ with: [trackedTestComponent] }).getSingleEntity()
 				const location = this.getEntityLocation(entityId)
 				const scratchBuffer = this.createScratchBuffer()
 
-				// 3. Verify it is NOT dirty initially.
-				let dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, 0, 1, scratchBuffer)
-				expect(dirtyCount).toBe(0, 'Entity should not be dirty on creation')
+				// 3. Verify it is dirty initially.
+				let dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, lastVersionBeforeCreation, creationVersion, scratchBuffer)
+				expect(dirtyCount).toBe(1, 'Entity should be dirty on creation')
 
-				// 4. Defer a setComponent command.
+				// 4. Defer a setComponent command, again managing versions.
+				const lastVersionBeforeSet = ecs.systemManager.gameLoop.globalVersion
+				const setVersion = lastVersionBeforeSet + 1
 				const setPayload = this.compile({ trackedTestComponent: { value: 2.0 } })
 				this.setComponent(entityId, setPayload)
-				flush(2) // Flush with a new tick (2)
+				flush(setVersion)
 
 				// 5. Verification: The entity should now be dirty for the tick it was changed.
-				dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, 1, 2, scratchBuffer)
+				dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, lastVersionBeforeSet, setVersion, scratchBuffer)
 				expect(dirtyCount).toBe(1, 'Entity should be marked dirty after setComponent')
 			})
 		})

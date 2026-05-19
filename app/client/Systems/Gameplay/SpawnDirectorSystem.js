@@ -151,7 +151,7 @@ export class SpawnDirectorSystem {
 		this.modifiedChunksForReactiveSystems = new Set()
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		// This system only acts if a SpawnDirector entity exists.
 		const directorChunkIds = this.directorQuery.getChunks()
 		for (let i = 0; i < directorChunkIds.length; i++) {
@@ -172,7 +172,7 @@ export class SpawnDirectorSystem {
 			// Check if we have enough budget to trigger a spawn wave.
 			if (directorState.threatBudget[0] >= this.minSpawnCost && directorState.threatBudget[0] >= minSpawnBudget) {
 				// Spend the budget and spawn the wave.
-				const spentBudget = this.spawnWave(directorState.threatBudget[0], currentTick)
+				const spentBudget = this.spawnWave(directorState.threatBudget[0])
 
 				// Deduct the budget that was actually spent.
 				directorState.threatBudget[0] -= spentBudget
@@ -180,7 +180,7 @@ export class SpawnDirectorSystem {
 		}
 
 		// Process a batch of spawn requests from the queue each frame.
-		this._processSpawnQueue(currentTick)
+		this._processSpawnQueue()
 	}
 
 	/**
@@ -189,7 +189,7 @@ export class SpawnDirectorSystem {
 	 * @param {number} budget The threat budget available for this wave.
 	 * @returns {number} The amount of budget that was actually spent.
 	 */
-	spawnWave(budget, currentTick) {
+	spawnWave(budget) {
 		this._chooseEnemiesForWave(budget, this.waveChoiceResult)
 		const { chosenEnemies, spentBudget } = this.waveChoiceResult
 		if (chosenEnemies.length === 0) {
@@ -283,7 +283,7 @@ export class SpawnDirectorSystem {
 		}
 	}
 
-	_processSpawnQueue(currentTick) {
+	_processSpawnQueue() {
 		this.modifiedChunksForReactiveSystems.clear()
 		const processCount = Math.min(this.spawnQueue.count, this.maxSpawnsPerFrame)
 		if (processCount === 0) {
@@ -320,7 +320,6 @@ export class SpawnDirectorSystem {
 					index,
 					separation,
 					phi,
-					currentTick,
 				)
 			} else {
 				const batch = this.newCreationsBatch.batches[enemyInfo.index]
@@ -343,10 +342,10 @@ export class SpawnDirectorSystem {
 
 		// After processing, mark the chunks containing reused entities as dirty for reactive systems.
 		for (const chunkId of this.modifiedChunksForReactiveSystems) {
-			this.markComponentDirty(chunkId, lifecycleState, currentTick)
-			this.markComponentDirty(chunkId, health, currentTick)
-			this.markComponentDirty(chunkId, tint, currentTick)
-			this.markComponentDirty(chunkId, scale, currentTick)
+			this.markComponentDirty(chunkId, lifecycleState)
+			this.markComponentDirty(chunkId, health)
+			this.markComponentDirty(chunkId, tint)
+			this.markComponentDirty(chunkId, scale)
 		}
 			
 	}
@@ -386,7 +385,7 @@ export class SpawnDirectorSystem {
 	 * Issues commands to reset a single pooled enemy's state.
 	 * @private
 	 */
-	_resetReusedEnemy(entityId, enemyInfo, locationX, locationY, index, separation, phi, currentTick) {		
+	_resetReusedEnemy(entityId, enemyInfo, locationX, locationY, index, separation, phi) {		
 		// --- 1. Calculate new spawn position ---
 		const radius = Math.sqrt(index + 0.5) * separation
 		const angle = 2 * Math.PI * index * phi
@@ -437,7 +436,7 @@ export class SpawnDirectorSystem {
 
 		// --- 4. Mark all trackable components as dirty for same-frame reactivity ---
 		// Narrow-phase marking for specific entities.
-		this.markEntitiesDirtyById(entityId, [lifecycleState, health, visibility, tint, scale], currentTick)
+		this.markEntitiesDirtyById(entityId, [lifecycleState, health, visibility, tint, scale])
 		// Broad-phase marking for the chunk, so reactive systems pick it up.
 		this.modifiedChunksForReactiveSystems.add(chunkId)
 	}

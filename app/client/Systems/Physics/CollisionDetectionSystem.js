@@ -103,7 +103,7 @@ export class CollisionDetectionSystem {
 		this.modifiedChunks = new Set()
 	}
 
-	update({ currentTick }) {
+	update() {
 		this.modifiedChunks.clear()
 
 		// --- Pass 1: Clear Buffers ---
@@ -120,7 +120,6 @@ export class CollisionDetectionSystem {
 				}
 			}
 		}
-		this.currentTick = currentTick
 
 		// --- Pass 2: Detect and Record Collisions ---
 		// This is the aggressor-driven loop. We only iterate over players and projectiles.
@@ -184,7 +183,7 @@ export class CollisionDetectionSystem {
 		// --- Pass 3: Broad-Phase Dirty Marking ---
 		// Mark all chunks that had collisions written to them as dirty for reactive systems.
 		for (const chunkId of this.modifiedChunks) {
-			this.markComponentDirty(chunkId, this.damageCollisionBufferId, currentTick)
+			this.markComponentDirty(chunkId, this.damageCollisionBufferId)
 		}
 	}
 
@@ -649,7 +648,7 @@ export class CollisionDetectionSystem {
 
 
 			
-			this.markEntityDirty(chunkId, indexInChunk, this.damageCollisionBufferId, this.currentTick)
+			this.markEntityDirty(chunkId, indexInChunk, this.damageCollisionBufferId)
 		}
 	}
 }

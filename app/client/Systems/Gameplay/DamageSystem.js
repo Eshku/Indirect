@@ -83,7 +83,7 @@ export class DamageSystem {
 	/**
 	 * The main update loop, organized into clear phases.
 	 */
-	update({ currentTick, lastTick }) {
+	update() {
 		this.modifiedHealthChunks.clear()
 
 		// --- 1. Gather Phase ---
@@ -92,12 +92,12 @@ export class DamageSystem {
 
 		// --- 2. Scatter Phase ---
 		// Process player and non-player entities in their own optimized paths.
-		this._processPlayer(currentTick, lastTick)
-		this._processReceivers(currentTick, lastTick)
+		this._processPlayer()
+		this._processReceivers()
 
 		// --- 3. Broad-Phase Dirty Marking ---
 		for (const chunkId of this.modifiedHealthChunks) {
-			this.markComponentDirty(chunkId, health, currentTick)
+			this.markComponentDirty(chunkId, health)
 		}
 	}
 
@@ -136,7 +136,7 @@ export class DamageSystem {
 		}
 	}
 
-	_processPlayer(currentTick, lastTick) {
+	_processPlayer() {
 		const playerChunkIds = this.playerQuery.getChunks()
 		if (playerChunkIds.length === 0) return
 
@@ -144,8 +144,6 @@ export class DamageSystem {
 		const changedCount = this.getDirty(
 			playerChunkId,
 			damageCollisionBuffer,
-			lastTick,
-			currentTick,
 			this.scratchBuffer,
 		)
 
@@ -155,17 +153,17 @@ export class DamageSystem {
 		const isPlayerInvulnerable = this.isComponentEnabled(playerChunkId, 0, immunity)
 
 		if (isPlayerActive && !isPlayerInvulnerable) {
-			this._applyDamageToPlayer(playerChunkId, currentTick)
+			this._applyDamageToPlayer(playerChunkId)
 		}
 	}
 
-	_applyDamageToPlayer(playerChunkId, currentTick) {
+	_applyDamageToPlayer(playerChunkId) {
 		this._findFirstDamager(playerChunkId)
 
 		if (this.foundDamageValue > 0) {
 			const healths = this.getComponentData(playerChunkId, health)
 			healths.current[0] -= this.foundDamageValue
-			this.markEntityDirty(playerChunkId, 0, health, currentTick)
+			this.markEntityDirty(playerChunkId, 0, health)
 			this.modifiedHealthChunks.add(playerChunkId)
 			this._triggerPlayerInvulnerability(playerChunkId)
 			this._triggerHitFlash(this.getEntities(playerChunkId)[0], playerChunkId, 0)
@@ -177,7 +175,7 @@ export class DamageSystem {
 	 * @param {number} currentTick
 	 * @private
 	 */
-	_processReceivers(currentTick, lastTick) {
+	_processReceivers() {
 		const receiverChunkIds = this.receiversQuery.getChunks()
 		for (let i = 0; i < receiverChunkIds.length; i++) {
 			const chunkId = receiverChunkIds[i]
@@ -185,8 +183,6 @@ export class DamageSystem {
 			const changedCount = this.getDirty(
 				chunkId,
 				damageCollisionBuffer,
-				lastTick,
-				currentTick,
 				this.scratchBuffer,
 			)
 
@@ -195,7 +191,7 @@ export class DamageSystem {
 
 				// Only process entities that are currently active.
 				if (this.isBitSet(this.isActiveMaskId, chunkId, indexInChunk)) {
-					this._applyDamageToReceiver(chunkId, indexInChunk, currentTick)
+					this._applyDamageToReceiver(chunkId, indexInChunk)
 				}
 			}
 		}
@@ -208,7 +204,7 @@ export class DamageSystem {
 	 * @param {number} currentTick
 	 * @private
 	 */
-	_applyDamageToReceiver(chunkId, indexInChunk, currentTick) {
+	_applyDamageToReceiver(chunkId, indexInChunk) {
 		const receiverEntityId = this.getEntities(chunkId)[indexInChunk]		
 
 		// This method now has a side effect: it populates `this.accumulatedDamage`
@@ -220,7 +216,7 @@ export class DamageSystem {
 			const newHealth = healths.current[indexInChunk] - this.accumulatedDamage
 
 			healths.current[indexInChunk] = newHealth
-			this.markEntityDirty(chunkId, indexInChunk, health, currentTick)
+			this.markEntityDirty(chunkId, indexInChunk, health)
 			this.modifiedHealthChunks.add(chunkId)
 
 			//show red tint unconditionally.
@@ -228,7 +224,7 @@ export class DamageSystem {
 
 			// Update hit history for all damagers that landed a hit.
 			for (const damagerId of this.damagersToUpdate) {
-				this._recordPiercingHit(damagerId, receiverEntityId, currentTick)
+				this._recordPiercingHit(damagerId, receiverEntityId)
 			}
 		}
 	}
@@ -405,7 +401,7 @@ export class DamageSystem {
 	 * If a damager is a piercing projectile, this adds the receiver's ID to its hit history.
 	 * @private
 	 */
-	_recordPiercingHit(damagerId, receiverId, currentTick) {
+	_recordPiercingHit(damagerId, receiverId) {
 		const historyChunkId = this.hitHistoryChunkCache.get(damagerId)
 		if (!historyChunkId) {
 			return // Does not have the component.
@@ -474,6 +470,6 @@ export class DamageSystem {
 				break
 		}
 
-		this.markEntityDirty(historyChunkId, indexInChunk, hitHistory, currentTick)
+		this.markEntityDirty(historyChunkId, indexInChunk, hitHistory)
 	}
 }

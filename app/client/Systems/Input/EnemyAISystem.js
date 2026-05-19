@@ -77,7 +77,7 @@ export class EnemyAISystem {
 		this.stopDistance = playerRadius * 2 // e.g., 16 * 2 = 32
 	}
 
-	update({ currentTick }) {
+	update({ frameCounter }) {
 		let playerX
 		let playerY
 
@@ -149,7 +149,10 @@ export class EnemyAISystem {
 
 				// 2. Calculate the time-based "wobble" angle.
 				const baseWobbleFrequency = enemyAIParams.orbitWobbleFrequency[indexInChunk]
-				const timePhase = currentTick * baseWobbleFrequency * freqMultiplier * 0.01 // 0.01 is a tuning constant
+				// Using frameCounter makes the wobble visually smooth but ties it to the render rate,
+				// making it non-deterministic with respect to game logic. `currentVersion` would be
+				// deterministic but could appear jittery if logic ticks are skipped or caught up.
+				const timePhase = frameCounter * baseWobbleFrequency * freqMultiplier * 0.01 // 0.01 is a tuning constant
 				const orbitAngleSpread = enemyAIParams.orbitAngleSpread[indexInChunk]
 				const wobbleAngle = Math.sin(timePhase + angleSeed * Math.PI * 2) * orbitAngleSpread
 

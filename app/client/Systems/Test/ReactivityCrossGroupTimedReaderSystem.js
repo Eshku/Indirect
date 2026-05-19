@@ -76,7 +76,9 @@ export class ReactivityCrossGroupTimedReaderSystem {
 			case 'INIT':
 				// On our first run, the writer has likely already made its change.
 				// We check for the change immediately.
+				
 				const changedChunks = this.reactiveQuery.getChunks()
+
 				if (changedChunks.length > 0) {
 					expect(changedChunks.length).toBe(1, '[Timed] Should detect change from Logic group in the same frame.')
 					this.testPhase = 'COMPLETE'

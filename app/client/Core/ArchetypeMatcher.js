@@ -1,8 +1,5 @@
 import { entityStore, MASK_PARTS } from '@managers/EntityManager/EntityManager.js'
 
-//! would need to move data from entity manager too later on, once we attempt to allow workers to use masking.
-//! gonna figure out how to reorg data.
-
 /**
  * A stateless utility to check if an archetype matches a set of component mask rules.
  * This is a core engine primitive used by both the QueryManager and EntityMaskManager.

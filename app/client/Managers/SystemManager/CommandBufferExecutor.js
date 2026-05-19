@@ -49,11 +49,13 @@ export class CommandBufferExecutor {
 		this.moveRequestEntityIds = new BigUint64Array(MOVE_REQUEST_INITIAL_CAPACITY)
 		this.moveRequestOldPackedLocations = new Uint32Array(MOVE_REQUEST_INITIAL_CAPACITY)
 		this.moveRequestOldIndicesInChunk = new Uint32Array(MOVE_REQUEST_INITIAL_CAPACITY)
+		this.moveRequestIsSilent = new Uint8Array(MOVE_REQUEST_INITIAL_CAPACITY)
 		// Temp buffers for radix sort
 		this.tempMoveRequestSortKeys = new BigUint64Array(MOVE_REQUEST_INITIAL_CAPACITY)
 		this.tempMoveRequestEntityIds = new BigUint64Array(MOVE_REQUEST_INITIAL_CAPACITY)
 		this.tempMoveRequestOldPackedLocations = new Uint32Array(MOVE_REQUEST_INITIAL_CAPACITY)
 		this.tempMoveRequestOldIndicesInChunk = new Uint32Array(MOVE_REQUEST_INITIAL_CAPACITY)
+		this.tempMoveRequestIsSilent = new Uint8Array(MOVE_REQUEST_INITIAL_CAPACITY)
 
 		this.destroyBatch = []
 	}
@@ -105,42 +107,47 @@ export class CommandBufferExecutor {
 		newOldIndices.set(this.moveRequestOldIndicesInChunk)
 		this.moveRequestOldIndicesInChunk = newOldIndices
 
+		const newIsSilent = new Uint8Array(newCapacity)
+		newIsSilent.set(this.moveRequestIsSilent)
+		this.moveRequestIsSilent = newIsSilent
+
 		this.tempMoveRequestSortKeys = new BigUint64Array(newCapacity)
 		this.tempMoveRequestEntityIds = new BigUint64Array(newCapacity)
 		this.tempMoveRequestOldPackedLocations = new Uint32Array(newCapacity)
 		this.tempMoveRequestOldIndicesInChunk = new Uint32Array(newCapacity)
+		this.tempMoveRequestIsSilent = new Uint8Array(newCapacity)
 		this.moveRequestCapacity = newCapacity
 	}
 
 	/**
 	 * Executes all commands in the provided EntityCommandBuffer.
 	 * @param {import('./EntityCommandBuffer.js').EntityCommandBuffer} ecb
-	 * @param {number} currentTick
+	 * @param {number} version
 	 */
-	execute(ecb, currentTick) {
+	execute(ecb, version) {
 		// --- 1. Immediate Commands ---
 		// These are high-level, pre-compiled bulk operations that bypass the sort.
 		// They are executed first to ensure bulk destructions happen before any new
 		// creations or modifications are processed, preventing wasted work.
-		this._executeImmediateCommands(ecb.immediateCommands, currentTick)
+		this._executeImmediateCommands(ecb.immediateCommands, version)
 
 		// --- 2. Sortable Commands ---
 		// The main "Record-Sort-Execute" pipeline.
-		this._executeSortableCommands(ecb, currentTick)
+		this._executeSortableCommands(ecb, version)
 	}
 
 	/**
 	 * A high-level method that executes all commands in a command buffer and then clears it.
 	 * This encapsulates the full "execute and reset" cycle for a given buffer.
 	 * @param {import('./EntityCommandBuffer.js').EntityCommandBuffer} ecb The command buffer to flush.
-	 * @param {number} timestampTick The tick to timestamp the changes with.
+	 * @param {number} timestampVersion The version to timestamp the changes with.
 	 */
-	flush(ecb, timestampTick) {
-		this.execute(ecb, timestampTick)
+	flush(ecb, timestampVersion) {
+		this.execute(ecb, timestampVersion)
 		ecb.clear()
 	}
 
-	_executeImmediateCommands(immediateBuffer, currentTick) {
+	_executeImmediateCommands(immediateBuffer, version) {
 		if (immediateBuffer.offset === 0) return
 
 		const reader = this.immediateReader
@@ -168,7 +175,7 @@ export class CommandBufferExecutor {
 		}
 	}
 
-	_executeSortableCommands(ecb, currentTick) {
+	_executeSortableCommands(ecb, version) {
 		// 1. Sort the buffer.
 		ecb.sortableBuffer.sort()
 
@@ -199,7 +206,7 @@ export class CommandBufferExecutor {
 			sortedOpCodesAndTypes,
 			firstModifyIndex, // Process up to the first modify command
 			payloadReader,
-			currentTick,
+			version,
 		)
 
 		// --- Pass 2: Mark any placeholders that are also destroyed in this frame ---
@@ -222,7 +229,7 @@ export class CommandBufferExecutor {
 		// --- Pass 4: Structural Execution ---
 		// This pass sorts the `moveRequest` buffers and executes the planned structural
 		// changes in optimized batches.
-		this._structuralExecutionPass(currentTick)
+		this._structuralExecutionPass(version)
 
 		// --- Pass 5: Data Write ---
 		// This pass re-reads the MODIFY commands and applies all data-setting operations
@@ -235,7 +242,7 @@ export class CommandBufferExecutor {
 			sortedOpCodesAndTypes,
 			sortedGenerations,
 			payloadReader,
-			currentTick,
+			version,
 		)
 
 		// --- Pass 6: Final Destruction ---
@@ -258,7 +265,7 @@ export class CommandBufferExecutor {
 		return count
 	}
 
-	_creationAndMappingPass(keys, offsets, opCodesAndTypes, count, payloadReader, currentTick) {
+	_creationAndMappingPass(keys, offsets, opCodesAndTypes, count, payloadReader, version) {
 		let i = 0
 		for (; i < count; i++) {
 			const key = keys[i]
@@ -284,9 +291,26 @@ export class CommandBufferExecutor {
 						archetypeId,
 						payloadReader,
 						payloadOffset,
-						currentTick,
+						version,
 						this.placeholderResolutionMap,
 						placeholderStartIndex,
+					)
+					break
+				}
+				case OpCodes.INSTANTIATE_SILENT: {
+					const placeholderStartIndex = Number((key >> SortKeyLayout.ENTITY_INDEX_SHIFT) & 0xffffffffn)
+
+					const archetypeId = opAndType & 0xffff
+					const payloadOffset = offsets[i]
+
+					this.entityManager.createEntitiesFromSoaBuffer(
+						archetypeId,
+						payloadReader,
+						payloadOffset,
+						version,
+						this.placeholderResolutionMap,
+						placeholderStartIndex,
+						true, // isSilent
 					)
 					break
 				}
@@ -325,6 +349,7 @@ export class CommandBufferExecutor {
 		let sourceArchetypeId = -1
 		let packedLocation = 0
 		let indexInChunk = 0
+		let isCurrentEntitySilent = true
 
 		const planStructuralChange = () => {
 			let hasStructuralChange = false
@@ -354,6 +379,7 @@ export class CommandBufferExecutor {
 					this.moveRequestEntityIds[this.moveRequestCount] = currentRealEntityId
 					this.moveRequestOldPackedLocations[this.moveRequestCount] = packedLocation
 					this.moveRequestOldIndicesInChunk[this.moveRequestCount] = indexInChunk
+					this.moveRequestIsSilent[this.moveRequestCount] = isCurrentEntitySilent ? 1 : 0
 					this.moveRequestCount++
 				}
 			}
@@ -390,6 +416,7 @@ export class CommandBufferExecutor {
 				currentEntityIndex = entityIndex
 				this.modAddedComponentsMask.fill(0n)
 				this.modRemovedComponentsMask.fill(0n)
+				isCurrentEntitySilent = true
 
 				if (isPlaceholderCommand) {
 					const realEntityFromPlaceholder = this.placeholderResolutionMap.get(entityIndex)
@@ -425,11 +452,13 @@ export class CommandBufferExecutor {
 					// (with the placeholder flag in the MSB). We mask out the flag to get the ID.
 					const componentTypeId = subKey & 0x7fff
 					const partIndex = Math.floor(componentTypeId / 64)
+					isCurrentEntitySilent = false
 					this.modAddedComponentsMask[partIndex] |= 1n << BigInt(componentTypeId % 64)
 					break
 				}
 				case OpCodes.REMOVE_COMPONENT: {
 					const partIndex = Math.floor(typeId / 64)
+					isCurrentEntitySilent = false
 					this.modRemovedComponentsMask[partIndex] |= 1n << BigInt(typeId % 64)
 					break
 				}
@@ -440,11 +469,27 @@ export class CommandBufferExecutor {
 					for (let j = 0; j < count; j++) {
 						const componentTypeId = payloadReader.readU16()
 						const partIndex = Math.floor(componentTypeId / 64)
+						isCurrentEntitySilent = false
 						this.modRemovedComponentsMask[partIndex] |= 1n << BigInt(componentTypeId % 64)
 					}
 					break
 				}
 				case OpCodes.ADD_COMPONENTS: {
+					const addedComponentsArchetypeId = opAndType & 0xffff
+					const addedComponentsMaskOffset = addedComponentsArchetypeId * MASK_PARTS
+					for (let k = 0; k < MASK_PARTS; k++) {
+						isCurrentEntitySilent = false
+						this.modAddedComponentsMask[k] |= entityStore.archetypeMasks[addedComponentsMaskOffset + k]
+					}
+					break
+				}
+				case OpCodes.ADD_COMPONENT_SILENT: {
+					const componentTypeId = subKey & 0x7fff
+					const partIndex = Math.floor(componentTypeId / 64)
+					this.modAddedComponentsMask[partIndex] |= 1n << BigInt(componentTypeId % 64)
+					break
+				}
+				case OpCodes.ADD_COMPONENTS_SILENT: {
 					const addedComponentsArchetypeId = opAndType & 0xffff
 					const addedComponentsMaskOffset = addedComponentsArchetypeId * MASK_PARTS
 					for (let k = 0; k < MASK_PARTS; k++) {
@@ -551,7 +596,7 @@ export class CommandBufferExecutor {
 	 * Pass 4: Sorts the `moveRequest` buffers and executes the planned structural
 	 * changes in optimized batches.
 	 */
-	_structuralExecutionPass(currentTick) {
+	_structuralExecutionPass(version) {
 		if (this.moveRequestCount === 0) return
 
 		const count = this.moveRequestCount
@@ -562,12 +607,12 @@ export class CommandBufferExecutor {
 			this.moveRequestEntityIds.subarray(0, count),
 			this.moveRequestOldPackedLocations.subarray(0, count),
 			this.moveRequestOldIndicesInChunk.subarray(0, count),
-			null, // No 5th array
+			this.moveRequestIsSilent.subarray(0, count),
 			this.tempMoveRequestSortKeys.subarray(0, count),
 			this.tempMoveRequestEntityIds.subarray(0, count),
 			this.tempMoveRequestOldPackedLocations.subarray(0, count),
 			this.tempMoveRequestOldIndicesInChunk.subarray(0, count),
-			null, // No 5th array
+			this.tempMoveRequestIsSilent.subarray(0, count),
 		)
 
 		// 2. Iterate through the sorted requests and execute them in batches.
@@ -592,7 +637,8 @@ export class CommandBufferExecutor {
 				this.moveRequestOldPackedLocations.subarray(i, batchEnd), // Pass subarray view
 				this.moveRequestOldIndicesInChunk.subarray(i, batchEnd), // Pass subarray view
 				batchSize,
-				currentTick,
+				version,
+				this.moveRequestIsSilent.subarray(i, batchEnd),
 			)
 
 			i = batchEnd
@@ -603,7 +649,7 @@ export class CommandBufferExecutor {
 	 * Pass 5: Re-reads all MODIFY commands and applies all data-setting operations
 	 * to the entities in their final, post-move locations.
 	 */
-	_dataWritePass(startIndex, endIndex, keys, offsets, opCodesAndTypes, generations, payloadReader, currentTick) {
+	_dataWritePass(startIndex, endIndex, keys, offsets, opCodesAndTypes, generations, payloadReader, version) {
 		if (startIndex >= endIndex) return
 
 		for (let i = startIndex; i < endIndex; i++) {
@@ -616,7 +662,7 @@ export class CommandBufferExecutor {
 			const payloadOffset = offsets[i]
 
 			if (opCode === OpCodes.BULK_ADD_COMPONENTS) {
-				this._processBulkDataWrite(opAndType, payloadOffset, payloadReader, currentTick)
+				this._processBulkDataWrite(opAndType, payloadOffset, payloadReader, version)
 				continue
 			}
 
@@ -651,7 +697,21 @@ export class CommandBufferExecutor {
 			if (finalChunkId === 0) continue // Should not happen for an active entity.
 
 			switch (opCode) {
-				case OpCodes.ADD_COMPONENT:
+				case OpCodes.ADD_COMPONENT: {
+					this.entityManager._setComponentsDataFromSoaBufferAtLocation(
+						finalChunkId,
+						finalIndexInChunk,
+						realEntityId,
+						typeId,
+						payloadReader,
+						payloadOffset,
+						this.placeholderResolutionMap,
+						version,
+						false,
+						true, // isAddComponent
+					)
+					break
+				}
 				case OpCodes.ADD_COMPONENTS:
 				case OpCodes.SET_COMPONENTS: {
 					this.entityManager._setComponentsDataFromSoaBufferAtLocation(
@@ -662,8 +722,9 @@ export class CommandBufferExecutor {
 						payloadReader,
 						payloadOffset,
 						this.placeholderResolutionMap,
-						currentTick,
+						version,
 						false,
+						opCode === OpCodes.ADD_COMPONENTS,
 					)
 					break
 				}
@@ -676,8 +737,24 @@ export class CommandBufferExecutor {
 						payloadReader,
 						payloadOffset,
 						this.placeholderResolutionMap,
-						currentTick,
+						version,
 						true,
+					)
+					break
+				}
+				case OpCodes.ADD_COMPONENT_SILENT:
+				case OpCodes.ADD_COMPONENTS_SILENT: {
+					this.entityManager._setComponentsDataFromSoaBufferAtLocation(
+						finalChunkId,
+						finalIndexInChunk,
+						realEntityId,
+						typeId,
+						payloadReader,
+						payloadOffset,
+						this.placeholderResolutionMap,
+						version,
+						true, // isSilent
+						true, // isAddComponent
 					)
 					break
 				}
@@ -685,7 +762,7 @@ export class CommandBufferExecutor {
 		}
 	}
 
-	_processBulkDataWrite(opAndType, payloadOffset, reader, currentTick) {
+	_processBulkDataWrite(opAndType, payloadOffset, reader, version) {
 		reader.seek(payloadOffset)
 		const entityCount = reader.readU32()
 		if (entityCount === 0) return
@@ -733,7 +810,7 @@ export class CommandBufferExecutor {
 				reader,
 				componentPayloadOffset,
 				this.placeholderResolutionMap,
-				currentTick,
+				version,
 				false,
 			)
 		}

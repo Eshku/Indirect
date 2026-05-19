@@ -70,7 +70,7 @@ export class DeathAnimationSystem {
 		this.modifiedChunksForReactiveSystems = new Set()
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		// Reset the new-spawn batch counter for this frame.
 		this.explosionsToSpawnCount = 0
 		this.modifiedChunksForReactiveSystems.clear()
@@ -96,7 +96,7 @@ export class DeathAnimationSystem {
 
 				// If duration is 0, it's an instant death. Transition immediately.
 				if (states.duration[indexInChunk] <= 0) {
-					this._transitionToDead(chunkId, indexInChunk, currentTick)
+					this._transitionToDead(chunkId, indexInChunk)
 					wasStateChunkModified = true
 					wasVisibilityChunkModified = true
 					wasScaleChunkModified = true
@@ -130,13 +130,13 @@ export class DeathAnimationSystem {
 					tints.a[indexInChunk] = newScale
 				}
 
-				this.markEntityDirty(chunkId, indexInChunk, scale, currentTick)
-				this.markEntityDirty(chunkId, indexInChunk, tint, currentTick)
+				this.markEntityDirty(chunkId, indexInChunk, scale)
+				this.markEntityDirty(chunkId, indexInChunk, tint)
 				wasScaleChunkModified = true
 				wasTintChunkModified = true
 
 				if (newTime <= 0) {
-					this._transitionToDead(chunkId, indexInChunk, currentTick)
+					this._transitionToDead(chunkId, indexInChunk)
 					wasStateChunkModified = true
 					wasVisibilityChunkModified = true
 					wasTintChunkModified = true
@@ -144,10 +144,10 @@ export class DeathAnimationSystem {
 				}
 			}
 
-			if (wasScaleChunkModified) this.markComponentDirty(chunkId, scale, currentTick)
-			if (wasTintChunkModified) this.markComponentDirty(chunkId, tint, currentTick)
-			if (wasStateChunkModified) this.markComponentDirty(chunkId, lifecycleState, currentTick)
-			if (wasVisibilityChunkModified) this.markComponentDirty(chunkId, visibility, currentTick)
+			if (wasScaleChunkModified) this.markComponentDirty(chunkId, scale)
+			if (wasTintChunkModified) this.markComponentDirty(chunkId, tint)
+			if (wasStateChunkModified) this.markComponentDirty(chunkId, lifecycleState)
+			if (wasVisibilityChunkModified) this.markComponentDirty(chunkId, visibility)
 		}
 
 		// After iterating all chunks, instantiate the batched explosions.
@@ -157,9 +157,9 @@ export class DeathAnimationSystem {
 
 		// After processing, mark the chunks containing reused explosions as dirty for reactive systems.
 		for (const chunkId of this.modifiedChunksForReactiveSystems) {
-			this.markComponentDirty(chunkId, lifecycleState, currentTick)
-			this.markComponentDirty(chunkId, tint, currentTick)
-			this.markComponentDirty(chunkId, visibility, currentTick)
+			this.markComponentDirty(chunkId, lifecycleState)
+			this.markComponentDirty(chunkId, tint)
+			this.markComponentDirty(chunkId, visibility)
 		}
 	}
 
@@ -185,7 +185,7 @@ export class DeathAnimationSystem {
 	 * triggering death effects and resetting component data for pooling.
 	 * @private
 	 */
-	_transitionToDead(chunkId, indexInChunk, currentTick) {
+	_transitionToDead(chunkId, indexInChunk) {
 		const deathTriggers = this.getComponentData(chunkId, triggersOnDeath)
 		const positions = this.getComponentData(chunkId, position)
 
@@ -200,7 +200,7 @@ export class DeathAnimationSystem {
 				// Prioritize reusing a pooled explosion.
 				if (this.availablePooledExplosions.length > 0) {
 					const explosionId = this.availablePooledExplosions.pop()
-					this._reuseExplosion(explosionId, posX, posY, currentTick)
+					this._reuseExplosion(explosionId, posX, posY)
 				} else if (this.explosionsToSpawnCount < MAX_EXPLOSIONS_PER_FRAME) {
 					// Fallback to creating a new one if the pool is empty.
 					const spawnIndex = this.explosionsToSpawnCount++
@@ -230,17 +230,17 @@ export class DeathAnimationSystem {
 		tints.b[indexInChunk] = 1.0
 		tints.a[indexInChunk] = 1.0
 
-		this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
-		this.markEntityDirty(chunkId, indexInChunk, visibility, currentTick)
-		this.markEntityDirty(chunkId, indexInChunk, tint, currentTick)
-		this.markEntityDirty(chunkId, indexInChunk, scale, currentTick)
+		this.markEntityDirty(chunkId, indexInChunk, lifecycleState)
+		this.markEntityDirty(chunkId, indexInChunk, visibility)
+		this.markEntityDirty(chunkId, indexInChunk, tint)
+		this.markEntityDirty(chunkId, indexInChunk, scale)
 	}
 
 	/**
 	 * Resets a pooled explosion entity for immediate reuse using direct component writes.
 	 * @private
 	 */
-	_reuseExplosion(entityId, newX, newY, currentTick) {
+	_reuseExplosion(entityId, newX, newY) {
 		const location = this.getEntityLocation(entityId)
 		if (!location) return
 		const { chunkId, indexInChunk } = location
@@ -265,7 +265,7 @@ export class DeathAnimationSystem {
 
 		// Mark trackable components as dirty for same-frame reactivity.
 		// Narrow-phase marking for specific entities.
-		this.markEntitiesDirtyById(entityId, [lifecycleState, visibility, tint], currentTick)
+		this.markEntitiesDirtyById(entityId, [lifecycleState, visibility, tint])
 		// Broad-phase marking for the chunk, so reactive systems pick it up.
 		this.modifiedChunksForReactiveSystems.add(chunkId)
 	}

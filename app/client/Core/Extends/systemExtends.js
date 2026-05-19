@@ -4,8 +4,13 @@ const { queryManager } = await import(`@managers/QueryManager/QueryManager.js`)
 const { entityManager } = await import(`@managers/EntityManager/EntityManager.js`)
 const { entityMaskManager } = await import(`@managers/EntityMaskManager/EntityMaskManager.js`)
 const { ecs } = await import(`@managers/EntityManager/ECS.js`)
+import { executionContext, CTX_CURRENT_VERSION_OFFSET, CTX_LAST_VERSION_OFFSET } from '@core/ExecutionContext.js'
 
 const { entityStore, MAX_CHUNK_CAPACITY } = await import(`@managers/EntityManager/EntityManager.js`)
+
+// Get a direct view into the execution context's shared buffer.
+// This avoids a function call on every dirty mark, which can be a hot path.
+const contextU32View = new Uint32Array(executionContext.getBuffer())
 
 /**
  * A central configuration file for extending system instances.
@@ -23,6 +28,8 @@ export const extensions = {
 	// --- Command Buffer: Fast Path (for existing entities) ---
 	addComponent: (entityId, payload, layer) => entityCommandBuffer.addComponent(entityId, payload, layer),
 	addComponents: (entityId, payload, layer) => entityCommandBuffer.addComponents(entityId, payload, layer),
+	addComponentSilent: (entityId, payload, layer) => entityCommandBuffer.addComponentSilent(entityId, payload, layer),
+	addComponentsSilent: (entityId, payload, layer) => entityCommandBuffer.addComponentsSilent(entityId, payload, layer),
 	addComponentsToEntities: (entityIds, payload, layer) =>
 		entityCommandBuffer.addComponentsToEntities(entityIds, payload, layer),
 	// `setComponent` is now an alias for `setComponents` for single-component data setting.
@@ -66,28 +73,44 @@ export const extensions = {
 
 	// --- Dirty Tracking Component Pattern Helpers ---
 	// Broad-phase: Marks the entire component type as dirty for a chunk. Call this ONCE per chunk, outside the entity loop.
-	markComponentDirty: (chunkId, componentTypeId, tick) =>
-		entityManager.markComponentDirty(chunkId, componentTypeId, tick),
+	markComponentDirty: (chunkId, componentTypeId) => {
+		const version = contextU32View[CTX_CURRENT_VERSION_OFFSET]
+		entityManager.markComponentDirty(chunkId, componentTypeId, version)
+	},
 
 	// Narrow-phase: Marks a specific entity as dirty. Call this inside an entity loop for `isTrackable` components.
-	markEntityDirty: (chunkId, indexInChunk, componentTypeId, tick) =>
-		entityMaskManager.maskDirty(chunkId, indexInChunk, componentTypeId, tick),
-	markEntityDirtyById: (entityId, componentTypeId, tick) =>
-		entityMaskManager.maskDirtyById(entityId, componentTypeId, tick),
+	markEntityDirty: (chunkId, indexInChunk, componentTypeId) => {
+		const version = contextU32View[CTX_CURRENT_VERSION_OFFSET]
+		entityManager.markEntityDirty(chunkId, indexInChunk, componentTypeId, version)
+	},
+	markEntityDirtyById: (entityId, componentTypeId) => {
+		const version = contextU32View[CTX_CURRENT_VERSION_OFFSET]
+		entityManager.markEntityDirtyById(entityId, componentTypeId, version)
+	},
 
-	markEntitiesDirty: (chunkId, indexInChunk, componentTypeIds, tick) =>
-		entityMaskManager.markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, tick),
-	markEntitiesDirtyById: (entityId, componentTypeIds, tick) =>
-		entityMaskManager.markEntitiesDirtyById(entityId, componentTypeIds, tick),
+	markEntitiesDirty: (chunkId, indexInChunk, componentTypeIds) => {
+		const version = contextU32View[CTX_CURRENT_VERSION_OFFSET]
+		entityManager.markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version)
+	},
+	markEntitiesDirtyById: (entityId, componentTypeIds) => {
+		const version = contextU32View[CTX_CURRENT_VERSION_OFFSET]
+		entityManager.markEntitiesDirtyById(entityId, componentTypeIds, version)
+	},
 
 	// Querying for dirty entities (narrow-phase).
-	getDirty: (chunkId, componentTypeId, lastTick, currentTick, outBuffer) =>
-		entityMaskManager.getDirty(chunkId, componentTypeId, lastTick, currentTick, outBuffer),
+	getDirty: (chunkId, componentTypeId, outBuffer) => {
+		// This helper automatically reads the correct version range from the global execution context,
+		// simplifying system code.
+		const lastVersion = contextU32View[CTX_LAST_VERSION_OFFSET]
+		const currentVersion = contextU32View[CTX_CURRENT_VERSION_OFFSET]
+		return entityManager.getDirty(chunkId, componentTypeId, lastVersion, currentVersion, outBuffer)
+	},
 
 	// --- Command Buffer: Bulk & Other ---
 	destroyByQuery: (query, layer) => entityCommandBuffer.destroyByQuery(query, layer),
 	destroyEntitiesInChunk: (chunkId, layer) => entityCommandBuffer.destroyEntitiesInChunk(chunkId, layer),
 	instantiate: (payload, count = 1, layer) => entityCommandBuffer.instantiate(payload, count, layer),
+	instantiateSilent: (payload, count = 1, layer) => entityCommandBuffer.instantiateSilent(payload, count, layer),
 
 	// Query-related helpers
 	getComponentData: (chunkId, componentTypeId) => entityStore.chunkComponentData[chunkId][componentTypeId],

@@ -26,7 +26,7 @@ export class MovementSystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ deltaTime, currentTick, lastTick }) {
+	update({ deltaTime }) {
 		const chunkIds = this.query.getChunks()
 		for (let i = 0; i < chunkIds.length; i++) {
 			const chunkId = chunkIds[i]

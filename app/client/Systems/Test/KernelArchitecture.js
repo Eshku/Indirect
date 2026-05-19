@@ -71,7 +71,7 @@ export class KernelArchitecture {
 
 	update(frameContext) {
 		// Reset log periodically to see fresh results.
-		if (frameContext.currentTick > 0 && frameContext.currentTick % 60 === 0) {
+		if (frameContext.currentVersion > 0 && frameContext.currentVersion % 60 === 0) {
 			Atomics.store(logIndex, 0, 0)
 			executionLog.fill(0)
 		}
@@ -108,7 +108,7 @@ export class KernelArchitecture {
 	process(frameContext) {
 		// --- Verify Execution Order ---
 		// Check on the frame after a reset to ensure we have a full log.
-		if (frameContext.currentTick > 0 && frameContext.currentTick % 60 === 1) {
+		if (frameContext.currentVersion > 0 && frameContext.currentVersion % 60 === 1) {
 			const finalLogIndex = Atomics.load(logIndex, 0)
 			const log = Array.from(executionLog).slice(0, finalLogIndex)
 

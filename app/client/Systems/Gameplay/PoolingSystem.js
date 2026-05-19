@@ -32,7 +32,7 @@ export class PoolingSystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ currentTick, lastTick }) {
+	update() {
 		const chunkIds = this.poolableQuery.getChunks()
 
 		for (let i = 0; i < chunkIds.length; i++) {
@@ -50,7 +50,7 @@ export class PoolingSystem {
 				this.clearBit(this.isDeadMaskId, chunkId, indexInChunk)
 				this.setBit(this.isPooledMaskId, chunkId, indexInChunk)
 				states.state[indexInChunk] = LIFECYCLE.POOLED
-				this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
+				this.markEntityDirty(chunkId, indexInChunk, lifecycleState)
 
 				// If the entity has a hitFlash component and it's enabled, disable it upon pooling.
 				if (hitFlashes && this.isComponentEnabled(chunkId, indexInChunk, hitFlash)) {
@@ -60,7 +60,7 @@ export class PoolingSystem {
 			}
 
 			if (wasChunkModified) {
-				this.markComponentDirty(chunkId, lifecycleState, currentTick)
+				this.markComponentDirty(chunkId, lifecycleState)
 			}
 		}
 	}

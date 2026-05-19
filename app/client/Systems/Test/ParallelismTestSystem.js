@@ -178,7 +178,7 @@ export class ParallelismTestSystem {
 		jobWriter.scheduleForEachChunk(this.query, parallelismTest)
 	}
 
-	process({ deltaTime, currentTick }) {
+	process({ deltaTime, currentVersion }) {
 		// --- 1. Initialize Sprites (if needed) ---
 		if (!this.spritesInitialized) {
 			this._initializeSprites()
@@ -239,7 +239,7 @@ export class ParallelismTestSystem {
 
 		// --- 3. Verification Step ---
 		// This now runs in the same phase as the visual update, after all parallel jobs are complete.
-		if (currentTick % 60 !== 0) return
+		if (currentVersion % 60 !== 0) return
 
 		const columns = new Map()
 

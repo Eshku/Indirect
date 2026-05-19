@@ -43,11 +43,11 @@ export class ContextTestSystem {
 		console.log('[ContextTestSystem] Initialized and created a test entity.')
 	}
 
-	update({ currentTick }) {
+	update({ currentVersion }) {
 		// This runs on the main thread before `schedule`.
 		const valueToWrite = 1
 		Atomics.store(this.sharedState, 0, valueToWrite)
-		console.log(`%c[ContextTestSystem] update (tick ${currentTick}): Wrote value -> ${valueToWrite}`, 'color: orange')
+		console.log(`%c[ContextTestSystem] update (version ${currentVersion}): Wrote value -> ${valueToWrite}`, 'color: orange')
 	}
 
 	/**
@@ -58,20 +58,18 @@ export class ContextTestSystem {
 		jobWriter.scheduleForEachChunk(this.query, contextTest)
 	}
 
-	process({ currentTick }) {
+	process({ currentVersion }) {
 		// This runs on the main thread after all `schedule` jobs are complete.
 		const valueToRead = 2
 		const readValue = Atomics.load(this.sharedState, 0)
 
 		if (readValue === valueToRead) {
 			console.log(
-				`%c[ContextTestSystem] process (tick ${currentTick}): Correctly read value -> ${readValue}`,
+				`%c[ContextTestSystem] process (version ${currentVersion}): Correctly read value -> ${readValue}`,
 				'color: lightblue',
 			)
 		} else {
-			console.error(
-				`[ContextTestSystem] process (tick ${currentTick}): FAILED! Expected to read ${valueToRead}, but got ${readValue}.`,
-			)
+			console.error(`[ContextTestSystem] process (version ${currentVersion}): FAILED! Expected to read ${valueToRead}, but got ${readValue}.`)
 		}
 
 		// Reset the flag for the next frame's test run.

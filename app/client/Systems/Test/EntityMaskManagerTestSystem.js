@@ -13,12 +13,6 @@ const { componentA, componentB, hitFlash } = ecs.getComponentIDs()
  */
 export class EntityMaskManagerTestSystem {
 	init() {
-		// State for the ring buffer overflow test
-		this.ringBufferTestPhase = 'INIT'
-		this.ringBufferTestResolve = null
-		this.ringBufferTestDamagedMaskId = null
-		this.ringBufferTestChunkId = null
-
 		this.entityMaskManager = entityMaskManager
 
 		// Helpers to make tests cleaner
@@ -34,9 +28,9 @@ export class EntityMaskManagerTestSystem {
 				it('should set, clear, and query bits for a state mask', () => {
 					cleanup()
 
-					// 1. Setup: Register a state mask that allocates for archetypes with componentA
+					// 1. Setup: Register a mask that allocates for archetypes with componentA
 					const allocationRule = { with: [componentA] }
-					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:selected', allocationRule)
+					const selectedMaskId = this.entityMaskManager.createMask('bitmask_test:selected', allocationRule)
 
 					// 2. Create entities that will match the allocation query
 					const payload = this.compile({ componentA: {} })
@@ -79,7 +73,7 @@ export class EntityMaskManagerTestSystem {
 
 					// 1. Setup
 					const allocationRule = { with: [componentA] }
-					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:swap_pop', allocationRule)
+					const selectedMaskId = this.entityMaskManager.createMask('bitmask_test:swap_pop', allocationRule)
 					const creationPayload = this.compile({ componentA: {} })
 
 					// Create two entities in the same chunk
@@ -120,7 +114,7 @@ export class EntityMaskManagerTestSystem {
 
 					// 1. Setup
 					const allocationRule = { with: [componentA] }
-					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:swap_preserve', allocationRule)
+					const selectedMaskId = this.entityMaskManager.createMask('bitmask_test:swap_preserve', allocationRule)
 					const creationPayload = this.compile({ componentA: {} })
 
 					// Create two entities in the same chunk
@@ -171,7 +165,7 @@ export class EntityMaskManagerTestSystem {
 
 					// 1. Setup
 					const allocationRule = { with: [componentA] }
-					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:move_selected', allocationRule)
+					const selectedMaskId = this.entityMaskManager.createMask('bitmask_test:move_selected', allocationRule)
 					const creationPayload = this.compile({ componentA: {} })
 					const entityPlaceholder = this.instantiate(creationPayload, 1)
 					flush()
@@ -221,7 +215,7 @@ export class EntityMaskManagerTestSystem {
 					// --- ARRANGE ---
 					// 1. Create a state mask and a payload for our test entities.
 					const allocationRule = { with: [componentA] }
-					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:stale_state', allocationRule)
+					const selectedMaskId = this.entityMaskManager.createMask('bitmask_test:stale_state', allocationRule)
 					const creationPayload = this.compile({ componentA: {} })
 
 					// 2. Create Entity A and set its state.
@@ -272,7 +266,7 @@ export class EntityMaskManagerTestSystem {
 
 					// 1. Setup
 					const allocationRule = { with: [componentA] }
-					const selectedMaskId = this.entityMaskManager.createStateMask('bitmask_test:stale_state_swap', allocationRule)
+					const selectedMaskId = this.entityMaskManager.createMask('bitmask_test:stale_state_swap', allocationRule)
 					const creationPayload = this.compile({ componentA: {} })
 
 					// 2. Create two entities in the same chunk.
@@ -419,252 +413,10 @@ export class EntityMaskManagerTestSystem {
 						this.isComponentEnabled(location.chunkId, location.indexInChunk, componentB)
 					}).toThrow(TypeError)
 				})
-
-				it('should throw a TypeError when masking a non-trackable component as dirty', () => {
-					cleanup()
-					// componentA is not 'isTrackable'
-					const payload = this.compile({ componentA: {} })
-					const entityId = this.instantiate(payload, 1)
-					flush()
-
-					// Test ById API
-					expect(() => {
-						this.markEntityDirtyById(entityId, componentA, 1)
-					}).toThrow(TypeError)
-
-					// Test non-ID API
-					const location = this.getEntityLocation(entityId)
-					expect(() => {
-						this.markEntityDirty(location.chunkId, location.indexInChunk, componentA, 1)
-					}).toThrow(TypeError)
-				})
-
-				it('should throw a TypeError when getting dirty indices for a non-trackable component', () => {
-					cleanup()
-					const payload = this.compile({ componentA: {} })
-					this.instantiate(payload, 1)
-					flush()
-
-					const chunkId = this.getQuery({ with: [componentA] }).getChunks()[0]
-					const scratchBuffer = this.createScratchBuffer()
-
-					expect(() => {
-						this.getDirty(chunkId, componentA, 0, 1, scratchBuffer)
-					}).toThrow(TypeError)
-				})
-			})
-
-			// --- EVENT MASK TESTS ---
-			describe('Event Masks', () => {
-				it('should fire and detect events in a single tick window', () => {
-					cleanup()
-
-					// 1. Setup
-					const allocationRule = { with: [componentA] }
-					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged', allocationRule)
-					const payload = this.compile({ componentA: {} })
-					const entities = [this.instantiate(payload, 1), this.instantiate(payload, 1), this.instantiate(payload, 1)]
-					flush()
-
-					const query = this.getQuery({ with: [componentA] })
-					const chunkIds = query.getChunks()
-					expect(chunkIds.length).toBe(1)
-					const chunkId = chunkIds[0]
-					const realEntities = this.getEntities(chunkId).slice(0, this.getChunkSize(chunkId))
-					const scratchBuffer = this.createScratchBuffer()
-					const currentTick = 5
-
-					// 2. Action: Fire events
-					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[1], currentTick)
-
-					// 3. Verification
-					const changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, chunkId, 4, 5, scratchBuffer)
-					expect(changedCount).toBe(1)
-					expect(scratchBuffer[0]).toBe(1) // Entity at index 1
-				})
-
-				it('should be quiet on subsequent ticks if no new events are fired', () => {
-					cleanup()
-					const allocationRule = { with: [componentA] }
-					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged_quiet', allocationRule)
-					const payload = this.compile({ componentA: {} })
-					this.instantiate(payload, 1)
-					flush()
-
-					const query = this.getQuery({ with: [componentA] })
-					const entityId = query.getSingleEntity()
-					const chunkId = query.getChunks()[0]
-					const scratchBuffer = this.createScratchBuffer()
-
-					// Fire event at tick 10
-					this.entityMaskManager.fireEventById(damagedMaskId, entityId, 10)
-
-					// Verify it's found when querying for tick 10
-					let changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, chunkId, 9, 10, scratchBuffer)
-					expect(changedCount).toBe(1)
-
-					// Verify it's NOT found when querying for tick 11
-					changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, chunkId, 10, 11, scratchBuffer)
-					expect(changedCount).toBe(0)
-				})
-
-				it('should aggregate events over a multi-tick window', () => {
-					cleanup()
-					const allocationRule = { with: [componentA] }
-					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:damaged_multi', allocationRule)
-					const payload = this.compile({ componentA: {} })
-					const entities = [this.instantiate(payload, 1), this.instantiate(payload, 1), this.instantiate(payload, 1)]
-					flush()
-
-					const query = this.getQuery({ with: [componentA] })
-					const chunkIds = query.getChunks()
-					expect(chunkIds.length).toBe(1)
-					const chunkId = chunkIds[0]
-					const realEntities = this.getEntities(chunkId).slice(0, this.getChunkSize(chunkId))
-					const scratchBuffer = this.createScratchBuffer()
-
-					// Fire events across multiple ticks
-					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[0], 20)
-					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[2], 22)
-					this.entityMaskManager.fireEventById(damagedMaskId, realEntities[0], 22) // Duplicate event, should be aggregated
-
-					// Query over the whole window
-					const changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, chunkId, 19, 22, scratchBuffer)
-					expect(changedCount).toBe(2)
-					const changedIndices = Array.from(scratchBuffer.slice(0, changedCount)).sort()
-					expect(changedIndices).toEqual([0, 2])
-				})
-
-				it('should preserve event history when an entity moves to a new chunk', () => {
-					cleanup()
-
-					// 1. Setup
-					const allocationRule = { with: [componentA] }
-					const damagedMaskId = this.entityMaskManager.createEventMask('bitmask_test:event_move', allocationRule)
-					const creationPayload = this.compile({ componentA: {} })
-					this.instantiate(creationPayload, 1)
-					flush()
-
-					const query = this.getQuery({ with: [componentA] })
-					const entityId = query.getSingleEntity()
-					const oldLocation = this.getEntityLocation(entityId)
-					const scratchBuffer = this.createScratchBuffer()
-
-					// 2. Fire an event in the old chunk
-					this.entityMaskManager.fireEventById(damagedMaskId, entityId, 10)
-
-					// Verify it's found in the old chunk
-					let changedCount = this.entityMaskManager.getEventsSince(
-						damagedMaskId,
-						oldLocation.chunkId,
-						9,
-						10,
-						scratchBuffer,
-					)
-					expect(changedCount).toBe(1, 'Event should be detected in the original chunk')
-					expect(scratchBuffer[0]).toBe(oldLocation.indexInChunk)
-
-					// 3. Force an archetype move by adding a component
-					const addPayload = this.compile({ componentB: {} })
-					const location = this.getEntityLocation(entityId)
-					this.addComponent(entityId, addPayload)
-					flush()
-
-					// 4. Verification
-					const newLocation = this.getEntityLocation(entityId)
-					expect(newLocation).toBeDefined()
-					expect(newLocation.chunkId).not.toBe(oldLocation.chunkId, 'Entity should have moved to a new chunk')
-
-					// The event history should have been copied to the new chunk's mask
-					changedCount = this.entityMaskManager.getEventsSince(damagedMaskId, newLocation.chunkId, 9, 10, scratchBuffer)
-					expect(changedCount).toBe(1, 'Event history should be preserved after moving chunks')
-					expect(scratchBuffer[0]).toBe(newLocation.indexInChunk)
-				})
-
-				it('should correctly handle history ring buffer overflow', async () => {
-					cleanup()
-					const allocationRule = { with: [componentA] }
-					// Use a small history (4) for easier testing
-					this.ringBufferTestDamagedMaskId = this.entityMaskManager.createEventMask(
-						'bitmask_test:damaged_overflow',
-						allocationRule,
-						4,
-					)
-					const payload = this.compile({ componentA: {} })
-					this.instantiate(payload, 1)
-					flush()
-					const query = this.getQuery({ with: [componentA] })
-					this.ringBufferTestChunkId = query.getChunks()[0]
-
-					// The update method will drive the rest of this test.
-					await new Promise(resolve => {
-						this.ringBufferTestResolve = resolve
-					})
-				})
 			})
 		})
 
 		testManager.runAllTests()
-	}
-
-	update({ currentTick, lastTick }) {
-		// --- Ring Buffer Overflow Test State Machine ---
-		if (this.ringBufferTestResolve) {
-			const query = this.getQuery({ with: [componentA] })
-			const entityId = query.getSingleEntity()
-			const chunkId = this.ringBufferTestChunkId
-			const damagedMaskId = this.ringBufferTestDamagedMaskId
-			const scratchBuffer = this.createScratchBuffer()
-
-			switch (this.ringBufferTestPhase) {
-				case 'INIT':
-					// Wait for the entity to be created and the chunk to be ready.
-					if (!entityId || !chunkId) return
-
-					// Fire an event at an early tick (e.g., currentTick + 1)
-					this.entityMaskManager.fireEventById(damagedMaskId, entityId, currentTick + 1)
-					this.ringBufferTestPhase = 'WAIT_FOR_OVERFLOW'
-					break
-
-				case 'WAIT_FOR_OVERFLOW':
-					// We need to advance the game loop enough times for the maintenance job
-					// to clear the original event's slot in the ring buffer.
-					// historyLength is 4. We fired at currentTick + 1.
-					// We need to query at (currentTick + 1) + historyLength + some_buffer.
-					// Let's say we fire at tick 5. History is 4.
-					// Tick 5 (index 1) has event.
-					// Tick 6 (index 2) maintenance clears slot for tick 7 (index 3).
-					// Tick 7 (index 3) maintenance clears slot for tick 8 (index 0).
-					// Tick 8 (index 0) maintenance clears slot for tick 9 (index 1).
-					// So, by tick 8, the original event at tick 5 (index 1) should be cleared by maintenance for tick 9.
-					// We query at tick 9 for events since tick 4.
-
-					const eventTick = lastTick + 1 // The tick the event was fired on
-					const historyLength = this.entityMaskManager.getMaskSetInfo(damagedMaskId).historyLength
-					const queryTick = eventTick + historyLength + 1 // Query after enough ticks have passed
-
-					if (currentTick >= queryTick) {
-						const changedCount = this.entityMaskManager.getEventsSince(
-							damagedMaskId,
-							chunkId,
-							eventTick - 1,
-							queryTick,
-							scratchBuffer,
-						)
-						expect(changedCount).toBe(
-							0,
-							`Event fired at tick ${eventTick} should have aged out of the ring buffer by tick ${queryTick}`,
-						)
-						this.ringBufferTestPhase = 'COMPLETE'
-						this.ringBufferTestResolve()
-					}
-					break
-
-				case 'COMPLETE':
-					// Test finished.
-					break
-			}
-		}
 	}
 
 	destroy() {

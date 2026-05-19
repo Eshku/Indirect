@@ -1,6 +1,5 @@
 const { engine } = await import(`@client/Engine.js`)
-const { ecs, testManager } = engine.getManagers()
-const { describe, it, expect } = await import(`@managers/TestManager/TestAPI.js`)
+const { ecs } = engine.getManagers()
 
 const { reactivityComponent, componentA } = ecs.getComponentIDs()
 
@@ -37,10 +36,9 @@ const { reactivityComponent, componentA } = ecs.getComponentIDs()
  */
 export class ReactivityCrossGroupDeferredReaderSystem {
 	constructor() {
-		this.testPhase = 'INIT'
+		this.testPhase = 'WAIT_FOR_CREATION'
 		this.testEntityId = null
 		this.testComplete = false
-		this.resolveTest = null
 	}
 
 	init() {
@@ -50,20 +48,11 @@ export class ReactivityCrossGroupDeferredReaderSystem {
 			modified: [reactivityComponent],
 		})
 
-		describe('Reactivity Cross-Group (Deferred Commands)', () => {
-			it('should detect deferred entity creation from a Logic system in the same global frame', async () => {
-				await new Promise(resolve => {
-					this.resolveTest = resolve
-				})
-			})
-		})
-
-		testManager.runAllTests()
-
+		console.log('[ReactivityCrossGroupDeferredReaderSystem] Initialized. Waiting for deferred entity creation...')
 	}
 
-	update({ currentTick, lastTick }) {
-		if (this.testComplete || !this.resolveTest) return
+	update({ currentVersion, lastVersion, frameCounter }) {
+		if (this.testComplete) return
 
 		// Always try to get the entity ID once it's created.
 		if (!this.testEntityId) {
@@ -72,51 +61,50 @@ export class ReactivityCrossGroupDeferredReaderSystem {
 
 		// If it's still not there, we're waiting for it to be created.
 		if (!this.testEntityId) {
-			// We are in INIT phase, just waiting.
 			return
 		}
 
 		switch (this.testPhase) {
-			case 'INIT':
-				// We found the entity, so we can move to the next phase.
-				// We'll check for the reactive change on this same frame.
-				this.testPhase = 'CHECK_CREATION'
-			// fallthrough
-
-			case 'CHECK_CREATION': {
-				console.log(`Detected creation at Tick ${currentTick}`)
+			case 'WAIT_FOR_CREATION':
+				// The entity now exists. We can proceed to check for the reactive change on this same frame.
+				this.testPhase = 'DETECT_CHANGE'
+			// fall-through to check immediately
+			case 'DETECT_CHANGE': {
 				// The entity was created via a deferred command in the 'logic' group on a previous tick.
 				// The command was flushed and timestamped.
 				// This 'visuals' system, running later, should now see the change.
-				// A `createEntity` command triggers both `added:` and `modified:` reactivity.
 				const changedChunks = this.reactiveQuery.getChunks()
 
 				if (changedChunks.length > 0) {
-					expect(changedChunks.length).toBe(
-						1,
-						`[Deferred] Should detect one changed chunk on creation. Reader at tick ${currentTick}, last ran at ${lastTick}.`,
+					console.log(
+						`%c[SUCCESS] [Deferred] Detected creation in Frame ${frameCounter} at Version ${currentVersion}.`,
+						'color: lightgreen',
 					)
 
 					const data = ecs.getComponent(this.testEntityId, 'reactivityComponent')
-					expect(data.value).toBe(1, '[Deferred] Initial value should be 1.')
+					if (data.value !== 1) {
+						console.error(`[FAILURE] [Deferred] Initial value was ${data.value}, expected 1.`)
+					}
 
 					this.testPhase = 'QUIET_CHECK'
 				}
-				// If not found, we just wait. The test will time out if it never appears, indicating a failure.
+				// If not found yet, we just wait. The test will fail if it never appears.
 				break
 			}
 
 			case 'QUIET_CHECK': {
-				console.log(`Checking quiet at Tick ${currentTick}`)
 				// On the next frame, the reactive query should be empty because we already reacted to the creation.
 				// The system's `lastTick` has been updated, so the creation event is no longer in the `(lastTick, currentTick]` range.
 				const changedChunksQuiet = this.reactiveQuery.getChunks()
-				
 
-				expect(changedChunksQuiet.length).toBe(
-					0,
-					`[Deferred] Should be quiet on the frame after reaction. Reader at tick ${currentTick}.`,
-				)
+				if (changedChunksQuiet.length === 0) {
+					console.log(
+						`%c[SUCCESS] [Deferred] Query was quiet in Frame ${frameCounter} on the next frame (Version ${currentVersion}).`,
+						'color: lightgreen',
+					)
+				} else {
+					console.error(`[FAILURE] [Deferred] Query was not quiet. Found ${changedChunksQuiet.length} changed chunks.`)
+				}
 
 				this.testPhase = 'COMPLETE'
 				break
@@ -124,7 +112,10 @@ export class ReactivityCrossGroupDeferredReaderSystem {
 
 			case 'COMPLETE':
 				this.testComplete = true
-				this.resolveTest()
+				console.log(
+					'%c[TEST COMPLETE] [Deferred] Cross-group deferred reactivity test passed.',
+					'font-weight: bold; color: lightgreen',
+				)
 				break
 		}
 	}

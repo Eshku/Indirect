@@ -30,7 +30,7 @@ export class SpawnAnimationSystem {
 
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		const chunkIds = this.query.getChunks()
 		for (let i = 0; i < chunkIds.length; i++) {
 			const chunkId = chunkIds[i]
@@ -56,7 +56,7 @@ export class SpawnAnimationSystem {
 
 				scales.x[indexInChunk] = newScale
 				scales.y[indexInChunk] = newScale
-				this.markEntityDirty(chunkId, indexInChunk, scale, currentTick)
+				this.markEntityDirty(chunkId, indexInChunk, scale)
 				wasScaleChunkModified = true
 
 				if (newTime <= 0) {
@@ -67,16 +67,16 @@ export class SpawnAnimationSystem {
 					// Ensure final scale is exactly 1.0
 					scales.x[indexInChunk] = 1.0
 					scales.y[indexInChunk] = 1.0
-					this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, lifecycleState)
 					wasStateChunkModified = true
 				}
 			}
 
 			if (wasScaleChunkModified) {
-				this.markComponentDirty(chunkId, scale, currentTick)
+				this.markComponentDirty(chunkId, scale)
 			}
 			if (wasStateChunkModified) {
-				this.markComponentDirty(chunkId, lifecycleState, currentTick)
+				this.markComponentDirty(chunkId, lifecycleState)
 			}
 		}
 	}

@@ -73,7 +73,7 @@ export class SpatialHashingSystem {
 		this.lastPlayerY = 0
 	}
 
-	update({ currentTick, lastTick }) {
+	update() {
 		// --- 1. Clear and Reposition Phase ---
 
 		// This is a simple query that will always find the player.

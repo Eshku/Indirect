@@ -71,7 +71,7 @@ export class CursorSystem {
 	 * world position in the cursor entity.
 	 * @param {object} context - The frame context object.
 	 */
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		// Update hardware position from input
 		const pointer = this.renderer.events.pointer
 		this.hardwarePosition.x = pointer.global.x

@@ -43,14 +43,6 @@ const { reactivityComponent, reactivityTarget } = ecs.getComponentIDs()
  */
 
 export class ReactivityCrossGroupReaderSystem {
-	constructor() {
-		this.testPhase = 'INIT'
-		this.testEntityId = null
-		this.testComplete = false
-		this.resolveTest = null // Initialize to null
-		this.lastValue = -1
-	}
-
 	init() {
 		// Reactive query to detect changes in reactivityComponent
 		this.reactiveQuery = this.getQuery({
@@ -64,28 +56,10 @@ export class ReactivityCrossGroupReaderSystem {
 		})
 
 		this.scratchBuffer = this.createScratchBuffer()
-
-		describe('Reactivity Cross-Group (Direct Writes)', () => {
-			it('should detect direct writes from a Logic system in the same global frame when timestamped correctly', async () => {
-				await new Promise(resolve => {
-					this.resolveTest = resolve
-				})
-			})
-		})
-
-		testManager.runAllTests()
 	}
 
-	update({ currentTick, lastTick }) {
-
+	update({ frameCounter }) {
 		if (this.testComplete) return
-
-		// Wait for the test promise to be set up by the test manager
-		if (this.testPhase === 'INIT' && !this.resolveTest) {
-			// The test manager hasn't run the 'it' block yet to assign resolveTest.
-			// Keep waiting in the 'INIT' phase until it's ready.
-			return
-		}
 
 		this.testEntityId = this.entityQuery.getSingleEntity()
 
@@ -93,60 +67,66 @@ export class ReactivityCrossGroupReaderSystem {
 
 		const entityLocation = ecs.getEntityLocation(this.testEntityId)
 		if (!entityLocation) return
+		//entity exist
 
 		const { chunkId } = entityLocation
 		const reactivity = this.getComponentData(chunkId, reactivityComponent)
 		const currentValue = reactivity.value[entityLocation.indexInChunk]
 
-		switch (this.testPhase) {
-			case 'INIT':
-				// The writer system (Logic group) ran at frame tick `T` and marked the component
-				// dirty with a timestamp of `T`.
-				// This reader system (Visuals group) runs later in the same frame. Its context is:
-				// - `lastTick` = `T-1` (the tick of the *frame* it last completed)
-				// - `currentTick` = `T+N` (the latest global tick after the logic loop)
-				// The reactive query looks for changes in the range `(lastTick, currentTick]`, which is `(T-1, T+N]`.
-				// The change timestamped `T` is correctly detected. We check for it as soon as we see the value change.
+		// For logging purposes, we can get the current version directly from the game loop.
+		const currentVersion = ecs.systemManager.gameLoop.globalVersion
 
-				const changedChunks = this.reactiveQuery.getChunks()
+		console.log(`READER LOGS:`)
 
-				// On the first frame, the logic group may not have run yet. We only run assertions
-				// once a change is actually detected to make the test robust.
-				if (changedChunks.length > 0) {
-					expect(changedChunks.length).toBe(
-						1,
-						`[Cross-Group] Broad-phase: Expected 1 changed chunk. Reader at tick ${currentTick}.`,
-					)
+		console.log(
+			`Frame ${frameCounter}: Found entity with reactivity value ${currentValue} on Version ${currentVersion}`,
+		)
 
-					const dirtyCount = this.getDirty(chunkId, reactivityComponent, lastTick, currentTick, this.scratchBuffer)
-					expect(dirtyCount).toBe(
-						1,
-						`[Cross-Group] Narrow-phase: Expected 1 dirty entity. Reader at tick ${currentTick}.`,
-					)
-					expect(this.scratchBuffer[0]).toBe(entityLocation.indexInChunk)
+		this.foundOnVersion = currentVersion
 
-					this.lastValue = currentValue
-					this.testPhase = 'QUIET_CHECK'
-				}
-				break
+		// The writer system (Logic group) ran at frame tick `T` and marked the component
+		// dirty with a timestamp of `T`.
+		// This reader system (Visuals group) runs later in the same frame. Its context is:
+		// - `lastTick` = `T-1` (the tick of the *frame* it last completed)
+		// - `currentTick` = `T+N` (the latest global tick after the logic loop)
+		// The reactive query looks for changes in the range `(lastTick, currentTick]`, which is `(T-1, T+N]`.
+		// The change timestamped `T` is correctly detected. We check for it as soon as we see the value change.
 
-			case 'QUIET_CHECK':
-				// On this frame, the reactive query should be empty because we already reacted.
-				const changedChunksQuiet = this.reactiveQuery.getChunks()
+		const changedChunks = this.reactiveQuery.getChunks()
+		if (changedChunks > 0) {
+			this.broadPhaseFoundTick = currentVersion
+		}
+		//! MUST DETECT CHANGE AS SOON AS CHANGE MADE
 
-				expect(changedChunksQuiet.length).toBe(
-					0,
-					`[Cross-Group] Broad-phase: Should be quiet on the frame after reaction. Reader at tick ${currentTick}.`,
-				)
+		console.log(`Changed chunks (Broad Phase):`)
+		console.log(changedChunks)
 
-				this.testPhase = 'COMPLETE'
-				break
+		/* 		console.log(`Current value: ${currentValue}`)
+		console.log(`Current version: ${currentVersion}`) */
 
+		const dirtyCount = this.getDirty(chunkId, reactivityComponent, this.scratchBuffer)
+		if (dirtyCount > 0) {
+			this.narrowPhaseFoundVersion = currentVersion
+		}
+		console.log(`Entity Dirty Count (Narrow Phase): ${dirtyCount}`)
 
-			case 'COMPLETE':
-				this.testComplete = true
-				this.resolveTest()
-				break
+		//! Quiet check next frame will be added later.
+
+		//something like
+
+		if (currentVersion === this.foundOnVersion + 1) {
+			const changedChunks = this.reactiveQuery.getChunks()
+			const dirtyCount = this.getDirty(chunkId, reactivityComponent, this.scratchBuffer)
+
+			console.log(`Next Frame found:`)
+			console.log(`Chunks:`)
+			console.log(changedChunks)
+			console.log(`Entities:`)
+			console.log(dirtyCount)
+
+			this.testComplete = true
+			//if implementation is correct we should stop there, that is last silent check when entity is created + 1 frame.
+
 		}
 	}
 

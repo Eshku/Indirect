@@ -19,12 +19,17 @@ export class ReactivityCrossGroupDeferredWriterSystem {
 		})
 
 		this.testEntityId = null
+		this.hasInstantiated = false // Flag to ensure instantiation happens only once
 	}
 
-	update({ currentTick }) {
-		//wait for a bit
+	update({ currentVersion, frameCounter }) {
+		if (this.hasInstantiated) return // Only instantiate once
 
 		this.testEntityId = this.instantiate(this.testEntityPayload)
+		console.log(
+			`instantiate command recorded by Writer in Frame ${frameCounter}, will be timestamped for Version ${currentVersion}`,
+		)
+		this.hasInstantiated = true
 
 		// The command buffer will flush at the end of the logic tick, applying the
 		// change and timestamping it with tick 26. The reader system, running in the

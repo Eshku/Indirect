@@ -11,8 +11,8 @@ class WorkerEntry {
 		this.FRAME_STATE_SLEEP_GENERATION_OFFSET = 0
 		this.FRAME_STATE_FRAME_GENERATION_OFFSET = 0
 		this.FRAME_CONTEXT_FRAME_ID_OFFSET = 0
-		this.FRAME_CONTEXT_CURRENT_TICK_OFFSET = 0
-		this.FRAME_CONTEXT_LAST_TICK_OFFSET = 0
+		this.FRAME_CONTEXT_CURRENT_VERSION_OFFSET = 0
+		this.FRAME_CONTEXT_LAST_VERSION_OFFSET = 0
 		this.FRAME_CONTEXT_DELTA_TIME_OFFSET = 0
 		this.FRAME_CONTEXT_ALPHA_OFFSET = 0
 		this.JOB_AFFINITY_OFFSET = 0
@@ -59,7 +59,7 @@ class WorkerEntry {
 		this.maxDequeCapacity = 0
 
 		this.currentFrameId = -1
-		this.currentTick = -1
+		this.currentVersion = -1
 
 		// This is now a global, read-only object for kernels.
 		self.frameContext = {}
@@ -112,8 +112,7 @@ class WorkerEntry {
 		entityStore.packedComponentIdPages = [] // Keep the property for consistency, but it's unused.
 
 		entityStore.chunkComponentData = new Array(sharedData.MAX_CHUNKS)
-		entityStore.chunkDirtyTicks = new Array(sharedData.MAX_CHUNKS)
-		entityStore.chunkArchetypeDirtyTicks = sharedData.chunkArchetypeDirtyTicks
+		entityStore.chunkArchetypeDirtyVersions = sharedData.chunkArchetypeDirtyVersions
 		entityStore.chunkArchetypeIds = new Uint16Array(sharedData.chunkArchetypeIds)
 		entityStore.chunkSizes = new Uint16Array(sharedData.chunkSizes)
 		entityStore.chunkCapacities = new Uint16Array(sharedData.chunkCapacities)
@@ -252,11 +251,11 @@ class WorkerEntry {
 
 	_updateSharedFrameContext() {
 		this.currentFrameId = Number(this.frameContextI64View[this.FRAME_CONTEXT_FRAME_ID_OFFSET])
-		this.currentTick = Number(this.frameContextI64View[this.FRAME_CONTEXT_CURRENT_TICK_OFFSET])
+		this.currentVersion = Number(this.frameContextI64View[this.FRAME_CONTEXT_CURRENT_VERSION_OFFSET])
 
 		// Update the global frameContext object that kernels will access.
-		self.frameContext.currentTick = this.currentTick
-		self.frameContext.lastTick = Number(this.frameContextI64View[this.FRAME_CONTEXT_LAST_TICK_OFFSET])
+		self.frameContext.currentVersion = this.currentVersion
+		self.frameContext.lastVersion = Number(this.frameContextI64View[this.FRAME_CONTEXT_LAST_VERSION_OFFSET])
 		self.frameContext.deltaTime = this.frameContextF64View[this.FRAME_CONTEXT_DELTA_TIME_OFFSET]
 		self.frameContext.alpha = this.frameContextF64View[this.FRAME_CONTEXT_ALPHA_OFFSET]
 	}
@@ -563,16 +562,14 @@ class WorkerEntry {
 		if (destroyedChunks) {
 			for (const chunkId of destroyedChunks) {
 				entityStore.chunkComponentData[chunkId] = undefined
-				entityStore.chunkDirtyTicks[chunkId] = undefined
-				entityStore.chunkArchetypeDirtyTicks[chunkId] = undefined
+				entityStore.chunkArchetypeDirtyVersions[chunkId] = undefined
 			}
 		}
 		if (newChunks) {
 			for (const chunkId in newChunks) {
 				const chunkSyncData = newChunks[chunkId]
 				entityStore.chunkComponentData[chunkId] = chunkSyncData.data
-				entityStore.chunkDirtyTicks[chunkId] = chunkSyncData.ticks
-				entityStore.chunkArchetypeDirtyTicks[chunkId] = chunkSyncData.archetypeTicks
+				entityStore.chunkArchetypeDirtyVersions[chunkId] = chunkSyncData.archetypeVersions
 				entityStore.chunkMetadata[chunkId] = chunkSyncData.metadata
 			}
 		}

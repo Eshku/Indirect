@@ -31,7 +31,7 @@ export class RWMBenchmark {
 		this.spawnEntities()
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		const chunkIds = this.query.getChunks()
 		for (let i = 0; i < chunkIds.length; i++) {
 			const chunkId = chunkIds[i]
@@ -45,7 +45,7 @@ export class RWMBenchmark {
 			}
 
 			// Since we modify every entity, mark the whole component type as dirty.
-			this.markComponentDirty(chunkId, position, currentTick)
+			this.markComponentDirty(chunkId, position)
 		}
 	}
 

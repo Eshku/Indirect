@@ -12,16 +12,16 @@ export class TimedSystemTest {
 		console.log('[TimedSystemTest] Initialized. Will run at its configured frequency.')
 	}
 
-	update({deltaTime, currentTick, lastTick}) {
+	update({ deltaTime, currentVersion, lastVersion }) {
 		// Avoid logging on the very first frame if it happens to run.
-		if (this.lastRunTick === currentTick) return
+		if (this.lastRunTick === currentVersion) return
 
 		console.log(
-			`%c[TimedSystemTest] Update called at tick: ${currentTick}. (DeltaTime since last run: ${deltaTime.toFixed(4)}s)`,
+			`%c[TimedSystemTest] Update called at version: ${currentVersion}. (DeltaTime since last run: ${deltaTime.toFixed(4)}s)`,
 			'color: yellow'
 		)
 
-		this.lastRunTick = currentTick
+		this.lastRunTick = currentVersion
 	}
 
 	destroy() {}

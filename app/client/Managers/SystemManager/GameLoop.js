@@ -1,5 +1,6 @@
 import { systemRegistry } from './SystemRegistry.js'
 import { Scheduler } from './Scheduler.js'
+import { executionContext } from '@core/ExecutionContext.js'
 
 /**
  * Manages the core game loop, including fixed and variable timesteps.
@@ -66,15 +67,13 @@ import { Scheduler } from './Scheduler.js'
  * This "next-tick" model ensures that all structural changes from a given tick are fully resolved before any system attempts to react to them, preventing race conditions and ensuring a stable world state for reactive systems.
  */
 export class GameLoop {
+	
 	/**
 	 * @param {import('./SystemManager.js').SystemManager} systemManager - The system manager instance.
 	 */
 	constructor() {
-		// lastTick starts at -1. The first logic tick to complete will be tick 1.
-		// This ensures that on the very first frame, reactive queries checking for changes
-		// since `lastTick` (i.e., `dirtyTick > -1`) will correctly include changes made at `tick = 0`.
-		this.lastTick = -1
-		this.currentTick = 1
+		// The global version counter. It's incremented before each group execution.
+		this.globalVersion = 0
 		this.frameCounter = 0
 
 		this.FIXED_TIMESTEP = 1 / 60
@@ -89,23 +88,14 @@ export class GameLoop {
 		this.renderer = null
 
 		this.scheduler = null
-
-		// A single, reusable context object to pass to systems.
-		// This avoids creating new objects every frame, reducing GC pressure.
-		this.frameContext = {
-			deltaTime: 0,
-			alpha: 0,
-			currentTick: 0,
-			lastTick: 0,
-			frameCounter: 0,
-		}
 	}
 
 	async init(engine) {
-		const { workerManager, systemManager, entityMaskManager, eventManager } = engine.getManagers()
+		const { workerManager, systemManager, entityMaskManager, eventManager, entityManager } = engine.getManagers()
 		this.workerManager = workerManager
 		this.systemManager = systemManager
 		this.entityMaskManager = entityMaskManager
+		this.entityManager = entityManager
 		this.eventManager = eventManager
 		this.app = this.systemManager.app
 		this.renderer = this.systemManager.renderer
@@ -191,20 +181,25 @@ export class GameLoop {
 		this._lastTime = currentTime
 
 		this.frameCounter++
-		const tickForFrame = this.currentTick // Capture the tick at the start of the frame.
 
 		// --- 1. Input Phase (Variable Timestep) ---
 		// Runs once per frame for low-latency input processing.
 		const inputSystems = this.systemManager.updateGroups.input.systems
 
 		if (inputSystems.length > 0) {
-			this.frameContext.deltaTime = rawDeltaTime
-			this.frameContext.currentTick = tickForFrame
-			this.frameContext.lastTick = this.systemManager.updateGroups.input.lastTick
-			this.frameContext.alpha = 0 // Not applicable, but set for consistency
-			this.frameContext.frameCounter = this.frameCounter
-			await this.scheduler.execute(inputSystems, this.frameContext, this.frameCounter)
-			this.systemManager.updateGroups.input.lastTick = tickForFrame
+			this.globalVersion++
+			const groupRunVersion = this.globalVersion
+			const lastVersion = this.systemManager.updateGroups.input.lastProcessedVersion
+			const frameContext = {
+				deltaTime: rawDeltaTime,
+				alpha: 0, // Not applicable, but set for consistency
+				currentVersion: groupRunVersion,
+				lastVersion: lastVersion,
+				frameCounter: this.frameCounter,
+			}
+			executionContext.update(frameContext)
+			await this.scheduler.execute(inputSystems, frameContext, this.frameCounter)
+			this.systemManager.updateGroups.input.lastProcessedVersion = groupRunVersion
 		}
 
 		// --- 3. Logic Phase (Fixed Timestep) ---
@@ -214,34 +209,35 @@ export class GameLoop {
 		// It's important to update the group's lastTick *after* its execution for a given tick.
 		// We capture the last tick value *before* the loop, as this is what reactive systems
 		// in this group will compare against.
-		let lastLogicTickForGroup = this.systemManager.updateGroups.logic.lastTick
+		let lastLogicVersionForGroup = this.systemManager.updateGroups.logic.lastProcessedVersion
 
 		const logicSystems = this.systemManager.updateGroups.logic.systems
 
 		while (this.accumulator >= this.FIXED_TIMESTEP) {
 			if (logicSystems.length > 0) {
-				this.frameContext.deltaTime = this.FIXED_TIMESTEP
-				this.frameContext.currentTick = this.currentTick
-				this.frameContext.lastTick = lastLogicTickForGroup
-				this.frameContext.alpha = 0 // Not applicable
-
-				this.frameContext.frameCounter = this.frameCounter
-				await this.scheduler.execute(logicSystems, this.frameContext, this.frameCounter)
+				this.globalVersion++
+				const groupRunVersion = this.globalVersion
+				const frameContext = {
+					deltaTime: this.FIXED_TIMESTEP,
+					alpha: 0, // Not applicable
+					currentVersion: groupRunVersion,
+					lastVersion: lastLogicVersionForGroup,
+					frameCounter: this.frameCounter,
+				}
+				executionContext.update(frameContext)
+				await this.scheduler.execute(logicSystems, frameContext, this.frameCounter)
+				lastLogicVersionForGroup = groupRunVersion
 			}
 
-			// --- Flush after each logic tick ---
+			// --- Flush after each logic step ---
 			// This is the primary synchronization point for the ECS. It ensures that structural changes
-			// made during tick N (e.g., by logic systems) are applied and visible to all systems
-			// running in the next tick (N+1). This is crucial for reactive systems and for maintaining
+			// made during a version are applied and visible to all systems running in the next version. This is crucial for reactive systems and for maintaining
 			// a consistent world state, especially when multiple logic ticks are processed in a single
 			// frame during lag catch-up.
 			this._flushCommandBuffer()
 
 			// After logic systems run for a tick, we update the group's last tick and advance the global tick.
-			this.lastTick = this.currentTick
-			this.systemManager.updateGroups.logic.lastTick = this.currentTick
-			lastLogicTickForGroup = this.currentTick // Update for the next iteration
-			this.currentTick++
+			this.systemManager.updateGroups.logic.lastProcessedVersion = lastLogicVersionForGroup
 			this.accumulator -= this.FIXED_TIMESTEP
 		}
 
@@ -258,13 +254,18 @@ export class GameLoop {
 			group.accumulator += rawDeltaTime
 
 			if (group.accumulator >= group.interval) {
-				this.frameContext.deltaTime = group.accumulator // Pass the actual elapsed time
-				this.frameContext.currentTick = this.currentTick
-				this.frameContext.lastTick = group.lastTick
-				this.frameContext.alpha = 0 // Not applicable
-				this.frameContext.frameCounter = this.frameCounter
-				await this.scheduler.execute(group.systems, this.frameContext, this.frameCounter)
-				group.lastTick = tickForFrame
+				this.globalVersion++
+				const groupRunVersion = this.globalVersion
+				const frameContext = {
+					deltaTime: group.accumulator, // Pass the actual elapsed time
+					alpha: 0, // Not applicable
+					currentVersion: groupRunVersion,
+					lastVersion: group.lastProcessedVersion,
+					frameCounter: this.frameCounter,
+				}
+				executionContext.update(frameContext)
+				await this.scheduler.execute(group.systems, frameContext, this.frameCounter)
+				group.lastProcessedVersion = groupRunVersion
 				group.accumulator = 0 // Reset accumulator for this group
 			}
 		}
@@ -285,14 +286,19 @@ export class GameLoop {
 		// regardless of whether a logic tick occurred. Visual systems must be robust
 		// enough to handle entities that may not be fully initialized (e.g., sprite not yet created).
 		if (visualsSystems.length > 0) {
+			this.globalVersion++
+			const groupRunVersion = this.globalVersion
 			const alpha = this.accumulator / this.FIXED_TIMESTEP
-			this.frameContext.deltaTime = rawDeltaTime
-			this.frameContext.alpha = alpha
-			this.frameContext.currentTick = this.currentTick
-			this.frameContext.lastTick = this.systemManager.updateGroups.visuals.lastTick
-			this.frameContext.frameCounter = this.frameCounter
-			await this.scheduler.execute(visualsSystems, this.frameContext, this.frameCounter)
-			this.systemManager.updateGroups.visuals.lastTick = tickForFrame
+			const frameContext = {
+				deltaTime: rawDeltaTime,
+				alpha: alpha,
+				currentVersion: groupRunVersion,
+				lastVersion: this.systemManager.updateGroups.visuals.lastProcessedVersion,
+				frameCounter: this.frameCounter,
+			}
+			executionContext.update(frameContext)
+			await this.scheduler.execute(visualsSystems, frameContext, this.frameCounter)
+			this.systemManager.updateGroups.visuals.lastProcessedVersion = groupRunVersion
 		}
 
 		// --- Manual Render Call ---
@@ -314,13 +320,12 @@ export class GameLoop {
 
 		this.systemManager.clearSystemTimings()
 
-		// --- Maintenance Phase ---
-		// This is a direct, main-thread-only operation. The work is too lightweight
-		// to justify the overhead of creating scheduler jobs.
-		const chunksToMaintain = this.entityMaskManager.getChunksWithEventMasks()
-		for (const chunkId of chunksToMaintain) {
-			this.entityMaskManager.performMaintenance(chunkId, this.currentTick)
-		}
+		// --- Reactivity Compaction Step ---
+		// This runs synchronously after all systems and jobs are complete for the frame.
+		// It is safe to use non-atomic operations inside this method.
+		this.entityManager.performReactivityCompaction(this.globalVersion)
+		//! perf monitor compaction too later.
+		//! could add new group for performance monitor as "maintenence" for some other future crap too.
 
 		// --- Advance Tick ---
 		// The main logic tick is advanced inside the fixed logic loop. This section
@@ -331,7 +336,10 @@ export class GameLoop {
 	}
 
 	_flushCommandBuffer() {
-		// We flush using the *next* tick's ID to timestamp the changes correctly.
+		// A command buffer flush is an atomic event that advances the world state.
+		// We increment the global version *before* flushing to get a new, unique version for these changes.
+		this.globalVersion++
+		const flushVersion = this.globalVersion
 		const cbStartTime = performance.now()
 
 		// Clear all instant event channels before flushing commands.
@@ -339,7 +347,7 @@ export class GameLoop {
 		// as no structural changes from the command buffer have been applied yet.
 		this.eventManager.clearAllChannels()
 
-		this.systemManager.commandBufferExecutor.flush(this.systemManager.entityCommandBuffer, this.currentTick + 1)
+		this.systemManager.commandBufferExecutor.flush(this.systemManager.entityCommandBuffer, flushVersion)
 		const cbEndTime = performance.now()
 		// Immediately after flushing, broadcast the structural changes to workers.
 		// This ensures workers have the latest world state before any new jobs are scheduled.

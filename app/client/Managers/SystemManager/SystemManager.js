@@ -16,6 +16,7 @@ import { entityCommandBuffer } from './EntityCommandBuffer.js'
 import { CommandBufferExecutor } from './CommandBufferExecutor.js'
 
 import { payloadCompiler } from './PayloadCompiler.js'
+import { executionContext } from '@core/ExecutionContext.js'
 
 const { Sequence } = await import(`@core/DataStructures/Sequence.js`)
 const { Query } = await import(`@managers/QueryManager/Query.js`)
@@ -31,14 +32,6 @@ const { Query } = await import(`@managers/QueryManager/Query.js`)
  * depend on other systems having been instantiated or initialized.
  */
 export class SystemManager {
-	get currentTick() {
-		return this.gameLoop.currentTick
-	}
-
-	get lastTick() {
-		return this.gameLoop.lastTick
-	}
-
 	/**
 	 * Starts the main game loop.
 	 * This loop manages a fixed timestep for gameplay logic and variable updates for other systems.
@@ -83,24 +76,14 @@ export class SystemManager {
 
 		this.updateGroups = {
 			// Runs first for low-latency user input.
-			input: { name: 'input', systems: [], lastTick: -1 },
+			input: { name: 'input', systems: [], lastProcessedVersion: 0 },
 			// Runs on a fixed, deterministic timer for core gameplay logic and physics.
-			logic: { name: 'logic', systems: [], lastTick: -1 },
+			logic: { name: 'logic', systems: [], lastProcessedVersion: 0 },
 			// Runs once per visual frame for rendering, interpolation, and UI.
-			visuals: { name: 'visuals', systems: [], lastTick: -1 },
-
-			//placeholder, last tick will be synced with GameLoop
+			visuals: { name: 'visuals', systems: [], lastProcessedVersion: 0 },
 		}
 
 		this.gameLoop = new GameLoop()
-
-		// Sync the initial lastTick for all predefined groups from the GameLoop.
-		// This ensures a single source of truth for starting tick values.
-		for (const groupName in this.updateGroups) {
-			if (Object.prototype.hasOwnProperty.call(this.updateGroups, groupName)) {
-				this.updateGroups[groupName].lastTick = this.gameLoop.lastTick
-			}
-		}
 
 		this.entityManager = engine.entityManager
 		this.componentManager = engine.componentManager
@@ -151,6 +134,9 @@ export class SystemManager {
 		// --- Configuration Step ---
 		// Get the single, flattened list of systems from the new group-based config.
 		this._defineSystemList()
+
+		// Register the execution context buffer for workers.
+		this.workerManager.addInitialResource('executionContextSAB', executionContext.getBuffer())
 		this._configureSystemFrequencies()
 
 		this._validateSystemConfiguration()
@@ -657,7 +643,7 @@ export class SystemManager {
 				systems: [],
 				interval: 1 / fps,
 				accumulator: 0,
-				lastTick: this.gameLoop.lastTick,
+				lastProcessedVersion: 0,
 			}
 			this.updateGroups[groupName] = newGroup
 		}

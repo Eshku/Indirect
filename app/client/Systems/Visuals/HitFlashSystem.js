@@ -30,7 +30,7 @@ export class HitFlashSystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		const chunkIds = this.query.getChunks()
 		for (let i = 0; i < chunkIds.length; i++) {
 			const chunkId = chunkIds[i]
@@ -57,7 +57,7 @@ export class HitFlashSystem {
 						tints.r[indexInChunk] = 1.0
 						tints.g[indexInChunk] = 1.0
 						tints.b[indexInChunk] = 1.0
-						this.markEntityDirty(chunkId, indexInChunk, tint, currentTick)
+						this.markEntityDirty(chunkId, indexInChunk, tint)
 						wasChunkModified = true
 					}
 				} else {
@@ -67,12 +67,12 @@ export class HitFlashSystem {
 					tints.r[indexInChunk] = 1.0
 					tints.g[indexInChunk] = 1.0 - progress
 					tints.b[indexInChunk] = 1.0 - progress
-					this.markEntityDirty(chunkId, indexInChunk, tint, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, tint)
 					wasChunkModified = true
 				}
 			}
 
-			if (wasChunkModified) this.markComponentDirty(chunkId, tint, currentTick)
+			if (wasChunkModified) this.markComponentDirty(chunkId, tint)
 		}
 	}
 }

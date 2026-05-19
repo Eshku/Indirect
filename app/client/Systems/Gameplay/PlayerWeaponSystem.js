@@ -77,7 +77,7 @@ export class PlayerWeaponSystem {
 		this.projectileMutators = this.projectilePayload.buffers
 	}
 
-	update({ currentTick }) {
+	update() {
 		let intentValue, cooldownTimer, playerX, playerY, playerStats, cursorX, cursorY
 
 		const playerChunkIds = this.playerQuery.getChunks()
@@ -146,9 +146,9 @@ export class PlayerWeaponSystem {
 		const availablePooledProjectile = this.findAvailableProjectile()
 
 		if (availablePooledProjectile) {
-			this.reuseProjectile(availablePooledProjectile, fireData, currentTick)
+			this.reuseProjectile(availablePooledProjectile, fireData)
 		} else {
-			this.createNewProjectile(fireData, currentTick)
+			this.createNewProjectile(fireData)
 		}
 
 		// Reset cooldown using direct writes for better performance and immediate effect.
@@ -176,7 +176,7 @@ export class PlayerWeaponSystem {
 	 * Resets a pooled projectile for immediate reuse using direct component writes.
 	 * This is more consistent and keeps masks and component data in sync.
 	 */
-	reuseProjectile(entityId, fireData, currentTick) {
+	reuseProjectile(entityId, fireData) {
 		const location = this.getEntityLocation(entityId)
 		const { chunkId, indexInChunk } = location
 
@@ -204,10 +204,10 @@ export class PlayerWeaponSystem {
 		this.getComponentData(chunkId, range).value[indexInChunk] = fireData.projectileRange
 		this.getComponentData(chunkId, damage).value[indexInChunk] = fireData.projectileDamage
 
-		this.markEntitiesDirtyById(entityId, [lifecycleState, visibility], currentTick)
+		this.markEntitiesDirtyById(entityId, [lifecycleState, visibility])
 	}
 
-	createNewProjectile(fireData, currentTick) {
+	createNewProjectile(fireData) {
 		this.projectileMutators.owner.entityId[0] = fireData.playerId
 		this.projectileMutators.position.x[0] = fireData.spawnX
 		this.projectileMutators.position.y[0] = fireData.spawnY

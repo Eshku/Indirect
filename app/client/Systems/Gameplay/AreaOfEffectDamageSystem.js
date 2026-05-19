@@ -52,7 +52,7 @@ export class AreaOfEffectDamageSystem {
 		this.modifiedBufferChunks = new Set()
 	}
 
-	update({ currentTick }) {
+	update() {
 		this.modifiedBufferChunks.clear()
 
 		const aoeChunkIds = this.aoeQuery.getChunks()
@@ -94,7 +94,7 @@ export class AreaOfEffectDamageSystem {
 					const targetGroup = 1 << (targetLayers.group[targetIndexInChunk] - 1)
 					if (!(targetGroup & mask)) continue
 
-					this._writeToDamageBuffer(targetChunkId, targetIndexInChunk, aoeEntityId, currentTick)
+					this._writeToDamageBuffer(targetChunkId, targetIndexInChunk, aoeEntityId)
 				}
 
 				aoeDatas.hasApplied[indexInChunk] = 1
@@ -102,18 +102,18 @@ export class AreaOfEffectDamageSystem {
 		}
 
 		for (const chunkId of this.modifiedBufferChunks) {
-			this.markComponentDirty(chunkId, damageCollisionBuffer, currentTick)
+			this.markComponentDirty(chunkId, damageCollisionBuffer)
 		}
 	}
 
-	_writeToDamageBuffer(chunkId, indexInChunk, damagerId, currentTick) {
+	_writeToDamageBuffer(chunkId, indexInChunk, damagerId) {
 		const buffers = this.getComponentData(chunkId, damageCollisionBuffer)
 		const count = buffers.count[indexInChunk]
 		if (count >= 8) return
 
 		buffers[`event${count}`][indexInChunk] = damagerId
 		buffers.count[indexInChunk]++
-		this.markEntityDirty(chunkId, indexInChunk, damageCollisionBuffer, currentTick)
+		this.markEntityDirty(chunkId, indexInChunk, damageCollisionBuffer)
 		this.modifiedBufferChunks.add(chunkId)
 	}
 }

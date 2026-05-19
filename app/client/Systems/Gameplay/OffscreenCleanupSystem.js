@@ -43,7 +43,7 @@ export class OffscreenCleanupSystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ currentTick }) {
+	update() {
 		let playerX = 0
 		let playerY = 0
 		const playerChunkIds = this.playerQuery.getChunks()
@@ -88,18 +88,18 @@ export class OffscreenCleanupSystem {
 					tints.b[indexInChunk] = 1.0
 					tints.a[indexInChunk] = 1.0
 					// Mark the specific entity as dirty for narrow-phase checks.
-					this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
-					this.markEntityDirty(chunkId, indexInChunk, visibility, currentTick)
-					this.markEntityDirty(chunkId, indexInChunk, tint, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, lifecycleState)
+					this.markEntityDirty(chunkId, indexInChunk, visibility)
+					this.markEntityDirty(chunkId, indexInChunk, tint)
 					wasChunkModified = true
 				}
 			}
 			// If any entity in this chunk had its lifecycle state changed, we must perform a
 			// broad-phase dirty mark so that reactive systems like PoolingSystem will process this chunk.
 			if (wasChunkModified) {
-				this.markComponentDirty(chunkId, lifecycleState, currentTick)
-				this.markComponentDirty(chunkId, visibility, currentTick)
-				this.markComponentDirty(chunkId, tint, currentTick)
+				this.markComponentDirty(chunkId, lifecycleState)
+				this.markComponentDirty(chunkId, visibility)
+				this.markComponentDirty(chunkId, tint)
 			}
 		}
 

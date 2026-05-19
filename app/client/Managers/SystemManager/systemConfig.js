@@ -46,7 +46,7 @@
  *   infrequent tasks that don't need to run every frame, like periodic UI refreshes.
  */
 export const systemSchedule = {
-		Initialization: [
+			Initialization: [
 		{ name: 'UIInputSystem', frequency: 'none' },
 		{ name: 'BackgroundSystem', frequency: 'none' },
 	],
@@ -93,8 +93,10 @@ export const systemSchedule = {
 		{ name: 'PoolingSystem', frequency: 'logic' },
 	],
 
-	// Infrequent UI updates. Runs on a timer, not every frame.
-	Timed: [{ name: 'OffscreenCleanupSystem', frequency: 1 }],
+	// Infrequent updates. Runs on a timer, not every frame.
+	Timed: [
+		{ name: 'OffscreenCleanupSystem', frequency: 1 },
+	],
 
 	// Runs once per rendered frame for visuals, interpolation, and UI.
 	Visuals: [
@@ -157,24 +159,20 @@ export const systemSchedule = {
 		// Reactivity
 		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
 
+		//simplified real systems behaviour
 
-		//! Cross-boundary is messed up.
-		//! lacking silent creation \ addition API, tests are not clean.
-		//! bigger issue = I need to make up my mind in which way I wanna do dirty tracking
-		//! is it versioning? is it masking? Is it Journaling? (last one very fragile, but all has their own pros.)
+/* 		{ name: `SimplifiedSpawnSystem`, frequency: `logic` },
+
+		{ name: 'SpriteFactorySystem', frequency: 'visuals' },
+
+		{ name: 'SyncTransforms', frequency: 'visuals' }, */
 
 		//Cross-boundary Reactivity
 		/* { name: 'ReactivityCrossGroupWriterSystem', frequency: 'logic' },
 		{ name: 'ReactivityCrossGroupReaderSystem', frequency: 'visuals' }, */
 
-
-
 		/* { name: 'ReactivityCrossGroupDeferredWriterSystem', frequency: 'logic' },
 		{ name: 'ReactivityCrossGroupDeferredReaderSystem', frequency: 'visuals' }, */
-		
-
-
-
 
 		/* { name: 'ReactivityCrossGroupDeferredWriterSystem', frequency: 'logic' },
 		{ name: 'ReactivityCrossGroupTimedReaderSystem', frequency: 1 }, */

@@ -124,7 +124,7 @@ export class EntityCommandBufferBenchmarkSystem {
 		}
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		switch (benchmarkConfig.activeBenchmark) {
 			case 'creation':
 				this._updateCreation()

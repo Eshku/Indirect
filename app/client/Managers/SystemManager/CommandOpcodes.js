@@ -11,6 +11,10 @@ export const OpCodes = Object.freeze({
 	BULK_REMOVE_COMPONENTS: 16,
 	DESTROY_ENTITY: 17,
 
+		// Silent structural changes
+	ADD_COMPONENT_SILENT: 18,
+	ADD_COMPONENTS_SILENT: 19,
+
 	// --- Data-Only Changes (Phase: MODIFY) ---
 	SET_COMPONENTS: 21,
 	SET_COMPONENTS_SILENT: 22, // for silent SoA updates
@@ -18,6 +22,7 @@ export const OpCodes = Object.freeze({
 
 	// --- Creation (Phase: CREATE) ---
 	INSTANTIATE: 31,
+	INSTANTIATE_SILENT: 32,
 
 	// --- Bulk Immediate Commands ---
 	// These are special-case commands that are written directly to the compiled stream and bypass the main sort/compile pipeline.

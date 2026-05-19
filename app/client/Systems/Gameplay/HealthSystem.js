@@ -39,15 +39,15 @@ export class HealthSystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ currentTick, lastTick }) {
-		const changedChunkIds = this.healthQuery.getChunks(lastTick, currentTick)
+	update() {
+		const changedChunkIds = this.healthQuery.getChunks()
 
 		for (let i = 0; i < changedChunkIds.length; i++) {
 			const chunkId = changedChunkIds[i]
 			const healths = this.getComponentData(chunkId, health)
 			const states = this.getComponentData(chunkId, lifecycleState)
 			const entities = this.getEntities(chunkId)
-			const changedCount = this.getDirty(chunkId, health, lastTick, currentTick, this.scratchBuffer)
+			const changedCount = this.getDirty(chunkId, health, this.scratchBuffer)
 			let wasChunkModified = false
 
 			for (let j = 0; j < changedCount; j++) {
@@ -64,7 +64,7 @@ export class HealthSystem {
 						states.state[indexInChunk] = LIFECYCLE.DYING
 						states.timer[indexInChunk] = DEATH_ANIMATION_DURATION
 						states.duration[indexInChunk] = DEATH_ANIMATION_DURATION
-						this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
+						this.markEntityDirty(chunkId, indexInChunk, lifecycleState)
 						wasChunkModified = true
 					}
 				}
@@ -73,7 +73,7 @@ export class HealthSystem {
 			// If any entity in this chunk had its lifecycle state changed, we must perform a
 			// broad-phase dirty mark so that reactive systems like PoolingSystem will process this chunk.
 			if (wasChunkModified) {
-				this.markComponentDirty(chunkId, lifecycleState, currentTick)
+				this.markComponentDirty(chunkId, lifecycleState)
 			}
 		}
 	}

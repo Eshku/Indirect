@@ -78,7 +78,7 @@ export class DataIntegrityTestSystem {
 	}
 
 	// Runs on the main thread, handles phase switching, entity creation/destruction, and visualization.
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime, currentVersion }) {
 		// --- Phase Management ---
 		this.phaseTimer -= deltaTime
 		if (this.phaseTimer <= 0) {
@@ -97,7 +97,7 @@ export class DataIntegrityTestSystem {
 					const variantData = this.archetypeVariants[this.archetypeVariantCounter]
 					const payload = this.compile({
 						churnTag: {},
-						churnData: { creationTick: currentTick, entityId: 0n },
+						churnData: { creationTick: currentVersion, entityId: 0n },
 						verification: { status: 0 },
 						...variantData,
 					})
@@ -135,9 +135,9 @@ export class DataIntegrityTestSystem {
 	}
 
 	// Runs on the main thread after parallel jobs. Reports any detected corruption.
-	process({ currentTick }) {
+	process({ currentVersion }) {
 		// Only run the check periodically to avoid log spam.
-		if (currentTick % 60 !== 0) return
+		if (currentVersion % 60 !== 0) return
 
 		const chunkIds = this.query.getChunks()
 		for (let i = 0; i < chunkIds.length; i++) {

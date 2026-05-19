@@ -25,7 +25,7 @@ export class ProjectileLifetimeSystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		const chunkIds = this.query.getChunks()
 
 		for (let i = 0; i < chunkIds.length; i++) {
@@ -59,17 +59,17 @@ export class ProjectileLifetimeSystem {
 					tints.b[indexInChunk] = 1.0
 					tints.a[indexInChunk] = 1.0
 
-					this.markEntityDirty(chunkId, indexInChunk, lifecycleState, currentTick)
-					this.markEntityDirty(chunkId, indexInChunk, visibility, currentTick)
-					this.markEntityDirty(chunkId, indexInChunk, tint, currentTick)
+					this.markEntityDirty(chunkId, indexInChunk, lifecycleState)
+					this.markEntityDirty(chunkId, indexInChunk, visibility)
+					this.markEntityDirty(chunkId, indexInChunk, tint)
 					wasChunkModified = true
 				}
 			}
 
 			if (wasChunkModified) {
-				this.markComponentDirty(chunkId, lifecycleState, currentTick)
-				this.markComponentDirty(chunkId, visibility, currentTick)
-				this.markComponentDirty(chunkId, tint, currentTick)
+				this.markComponentDirty(chunkId, lifecycleState)
+				this.markComponentDirty(chunkId, visibility)
+				this.markComponentDirty(chunkId, tint)
 			}
 		}
 	}

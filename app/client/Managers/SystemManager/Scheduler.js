@@ -23,20 +23,7 @@ import {
 	JOB_AFFINITY,
 } from './JobLayout.js'
 
-import {
-	FRAME_STATE_TOTAL_JOBS_OFFSET,
-	FRAME_STATE_COMPLETED_JOBS_OFFSET,
-	FRAME_STATE_IDLE_THREADS_OFFSET,
-	FRAME_STATE_BARRIER_COUNTER_OFFSET,
-	FRAME_STATE_BARRIER_GENERATION_OFFSET,
-	FRAME_STATE_SLEEP_GENERATION_OFFSET,
-	FRAME_STATE_FRAME_GENERATION_OFFSET,
-	FRAME_CONTEXT_FRAME_ID_OFFSET,
-	FRAME_CONTEXT_CURRENT_TICK_OFFSET,
-	FRAME_CONTEXT_LAST_TICK_OFFSET,
-	FRAME_CONTEXT_DELTA_TIME_OFFSET,
-	FRAME_CONTEXT_ALPHA_OFFSET,
-} from './FrameStateLayout.js'
+import { FRAME_STATE_TOTAL_JOBS_OFFSET, FRAME_STATE_COMPLETED_JOBS_OFFSET, FRAME_STATE_IDLE_THREADS_OFFSET, FRAME_STATE_BARRIER_COUNTER_OFFSET, FRAME_STATE_BARRIER_GENERATION_OFFSET, FRAME_STATE_SLEEP_GENERATION_OFFSET, FRAME_STATE_FRAME_GENERATION_OFFSET } from './FrameStateLayout.js'
 
 /**
  * Maps JOB_TYPE enum to method names for dependency lookups.
@@ -64,8 +51,6 @@ export class Scheduler {
 		this.systemManager = null
 
 		this.sharedBuffers = {}
-		this.frameContextI64View = null
-		this.frameContextF64View = null
 		this.mainThreadDeque = null
 		this.mainThreadInbox = null
 		this.inboxDrain = new Uint32Array(MPSC_QUEUE_CAPACITY) // Pre-allocated buffer for drained jobs.
@@ -120,7 +105,6 @@ export class Scheduler {
 		this.sharedBuffers.frameStateSAB = new SharedArrayBuffer(8 * JOB_STRIDE_IN_BYTES) // Increased size for frame generation
 		this.sharedBuffers.jobsSAB = new SharedArrayBuffer(MAX_JOBS * JOB_STRIDE_IN_BYTES)
 		this.sharedBuffers.dependentsSAB = new SharedArrayBuffer(MAX_DEPENDENTS * 4)
-		this.sharedBuffers.frameContextSAB = new SharedArrayBuffer(CACHE_LINE_SIZE) // 64 bytes for shared context
 
 		// --- Main Thread Inbox (MPSC) Memory Allocation ---
 		// Allocate enough space to put head, tail, and write_claim pointers on separate cache lines.
@@ -146,13 +130,8 @@ export class Scheduler {
 		this.workerManager.addInitialResource('frameStateSAB', this.sharedBuffers.frameStateSAB)
 		this.workerManager.addInitialResource('jobsSAB', this.sharedBuffers.jobsSAB)
 		this.workerManager.addInitialResource('dependentsSAB', this.sharedBuffers.dependentsSAB)
-		this.workerManager.addInitialResource('frameContextSAB', this.sharedBuffers.frameContextSAB)
 		this.workerManager.addInitialResource('mainThreadInbox', this.sharedBuffers.mainThreadInbox)
 		this.workerManager.addInitialResource('dequeBuffers', this.sharedBuffers.dequeBuffers)
-
-		// Create views for the new shared frame context buffer.
-		this.frameContextI64View = new BigInt64Array(this.sharedBuffers.frameContextSAB)
-		this.frameContextF64View = new Float64Array(this.sharedBuffers.frameContextSAB)
 
 		// Create and initialize an instance of the parallel API for the main thread.
 		// Make the parallel API globally available for kernels running on the main thread.
@@ -215,7 +194,6 @@ export class Scheduler {
 
 		// 5. Signal workers to start processing, ONLY if there is parallel work.
 		if (this.hasParallelJobs) {
-			this._updateSharedFrameContext(this.perFrameContext, frameId)
 			this._signalNewFrame()
 		}
 
@@ -265,21 +243,6 @@ export class Scheduler {
 		this.mainThreadInbox.reset()
 	}
 
-	/**
-	 * Writes the per-frame context data to the shared buffer for workers to read.
-	 * @param {object} context The per-frame context from the game loop.
-	 * @param {number} frameId The current frame/execution ID.
-	 * @private
-	 */
-	_updateSharedFrameContext(context, frameId) {
-		this.frameContextI64View[FRAME_CONTEXT_FRAME_ID_OFFSET] = BigInt(frameId)
-		this.frameContextI64View[FRAME_CONTEXT_CURRENT_TICK_OFFSET] = BigInt(context.currentTick)
-		this.frameContextI64View[FRAME_CONTEXT_LAST_TICK_OFFSET] = BigInt(context.lastTick)
-		// These are indexed by Float64 size (8 bytes), so index 3 is at byte offset 24.
-		this.frameContextF64View[FRAME_CONTEXT_DELTA_TIME_OFFSET] = context.deltaTime
-		this.frameContextF64View[FRAME_CONTEXT_ALPHA_OFFSET] = context.alpha
-	}
-
 	_signalNewFrame() {
 		const frameState = new BigInt64Array(this.sharedBuffers.frameStateSAB)
 		Atomics.add(frameState, FRAME_STATE_FRAME_GENERATION_OFFSET, 1n)
@@ -312,14 +275,6 @@ export class Scheduler {
 			if (!metadata) {
 				console.warn(`[Scheduler] Could not find cached metadata for system "${systemName}". Skipping.`)
 				continue
-			}
-
-			// Prime the system's reactive queries with the correct lastTick from the context.
-			if (system.reactive) {
-				for (const query of system.reactiveQueries) {
-					query.iterationLastTick = perFrameContext.lastTick
-					query.iterationCurrentTick = perFrameContext.currentTick
-				}
 			}
 
 			// A. Create UPDATE job (if update() exists)

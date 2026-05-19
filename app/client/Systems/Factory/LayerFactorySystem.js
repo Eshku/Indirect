@@ -27,14 +27,14 @@ export class LayerFactorySystem {
 		this.scratchBuffer = this.createScratchBuffer()
 	}
 
-	update({ deltaTime, currentTick, lastTick }) {
-		const changedChunkIds = this.layerQuery.getChunks(lastTick, currentTick)
+	update() {
+		const changedChunkIds = this.layerQuery.getChunks()
 
 		for (let i = 0; i < changedChunkIds.length; i++) {
 			const chunkId = changedChunkIds[i]
 
 			// Narrow-phase: Get the specific indices of entities whose `layer` component was marked dirty.
-			const dirtyCount = this.getDirty(chunkId, layer, lastTick, currentTick, this.scratchBuffer)
+			const dirtyCount = this.getDirty(chunkId, layer, this.scratchBuffer)
 
 			const viewableArrays = this.getComponentData(chunkId, viewable)
 			const layerArrays = this.getComponentData(chunkId, layer)

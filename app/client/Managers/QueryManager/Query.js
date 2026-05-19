@@ -1,6 +1,7 @@
 const { entityStore } = await import(`@managers/EntityManager/EntityManager.js`)
 import { DIRTY_HISTORY_LENGTH } from '../ComponentManager/ComponentSchema.js'
 const { archetypeMatches } = await import(`../../Core/ArchetypeMatcher.js`)
+import { executionContext } from '@core/ExecutionContext.js'
 
 const { NULL_CHUNK_ID, MAX_COMPONENTS, MASK_PARTS } = await import(`@managers/EntityManager/EntityManager.js`)
 
@@ -100,11 +101,6 @@ export class Query {
 		} else {
 			this.getChunks = this.getAllChunks
 		}
-
-		// --- New properties for primed ticks ---
-		// These are "primed" by the Scheduler before a system group runs.
-		this.iterationLastTick = -1
-		this.iterationCurrentTick = 0
 	}
 
 	/**
@@ -168,8 +164,8 @@ export class Query {
 	 * @returns {number[]} An array of chunk IDs that have changed.
 	 */
 	getReactiveChunks() {
-		const lastTick = this.iterationLastTick
-		const currentTick = this.iterationCurrentTick
+		const currentVersion = executionContext.getCurrentVersion()
+		const lastVersion = executionContext.getLastVersion()
 		const changedChunks = []
 		for (let i = 0; i < this.matchingChunkIds.length; i++) {
 			const chunkId = this.matchingChunkIds[i]
@@ -177,13 +173,13 @@ export class Query {
 				let isDirtyForQuery = false
 
 				// 1. Check for `modified`
-				const archetypeDirtyTicks = entityStore.chunkArchetypeDirtyTicks[chunkId]
-				if (archetypeDirtyTicks) {
+				const archetypeDirtyVersions = entityStore.chunkArchetypeDirtyVersions[chunkId]
+				if (archetypeDirtyVersions) {
 					const archetypeId = entityStore.chunkArchetypeIds[chunkId]
 					const reactiveIndices = this._reactiveIndicesByArchetype[archetypeId]
 					if (reactiveIndices?.modified) {
 						for (const index of reactiveIndices.modified) {
-							if (Atomics.load(archetypeDirtyTicks, index) > lastTick) {
+							if (Atomics.load(archetypeDirtyVersions, index) > lastVersion) {
 								isDirtyForQuery = true
 								break
 							}
@@ -193,20 +189,17 @@ export class Query {
 
 				// 2. Check for `added`
 				if (!isDirtyForQuery) {
-					const addedMasksRing = entityStore.chunkAddedComponentMasks[chunkId]
-					if (addedMasksRing) {
-						const startTick = lastTick + 1
-						const endTick = currentTick
-						for (let tick = startTick; tick <= endTick; tick++) {
-							const tickSlot = tick % DIRTY_HISTORY_LENGTH
-							const maskOffset = tickSlot * MASK_PARTS
-							for (let part = 0; part < MASK_PARTS; part++) {
-								if ((Atomics.load(addedMasksRing, maskOffset + part) & this._addedMask[part]) !== 0n) {
+					const addedVersions = entityStore.chunkArchetypeAddedVersions[chunkId]
+					if (addedVersions) {
+						const archetypeId = entityStore.chunkArchetypeIds[chunkId]
+						const reactiveIndices = this._reactiveIndicesByArchetype[archetypeId]
+						if (reactiveIndices?.added) {
+							for (const index of reactiveIndices.added) {
+								if (Atomics.load(addedVersions, index) > lastVersion) {
 									isDirtyForQuery = true
 									break
 								}
 							}
-							if (isDirtyForQuery) break
 						}
 					}
 				}
@@ -215,11 +208,11 @@ export class Query {
 				if (!isDirtyForQuery) {
 					const removedMasksRing = entityStore.chunkRemovedComponentMasks[chunkId]
 					if (removedMasksRing) {
-						const startTick = lastTick + 1
-						const endTick = currentTick
-						for (let tick = startTick; tick <= endTick; tick++) {
-							const tickSlot = tick % DIRTY_HISTORY_LENGTH
-							const maskOffset = tickSlot * MASK_PARTS
+						const startVersion = lastVersion + 1
+						const endVersion = currentVersion
+						for (let version = startVersion; version <= endVersion; version++) {
+							const versionSlot = version % DIRTY_HISTORY_LENGTH
+							const maskOffset = versionSlot * MASK_PARTS
 							for (let part = 0; part < MASK_PARTS; part++) {
 								if ((Atomics.load(removedMasksRing, maskOffset + part) & this._removedMask[part]) !== 0n) {
 									isDirtyForQuery = true
@@ -274,6 +267,7 @@ export class Query {
 
 				const indices = {
 					modified: [],
+					added: [],
 				}
 
 				for (const typeId of this.modified) {
@@ -293,6 +287,24 @@ export class Query {
 						}
 					}
 				}
+
+				for (const typeId of this.added) {
+					let low = 0,
+						high = count - 1
+					while (low <= high) {
+						const mid = (low + high) >>> 1
+						const midVal = componentIdArray[mid]
+						if (midVal === typeId) {
+							indices.added.push(mid)
+							break
+						} else if (midVal < typeId) {
+							low = mid + 1
+						} else {
+							high = mid - 1
+						}
+					}
+				}
+
 				this._reactiveIndicesByArchetype[archetype] = indices
 			}
 		}

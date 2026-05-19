@@ -36,7 +36,7 @@ export class ImmunityVisualSystem {
 		})
 	}
 
-	update({ deltaTime, currentTick }) {
+	update({ deltaTime }) {
 		const playerChunkIds = this.playerQuery.getChunks()
 		const shieldChunkIds = this.shieldQuery.getChunks()
 		// This system assumes a single player and a single shield entity exist.
@@ -68,11 +68,11 @@ export class ImmunityVisualSystem {
 		}
 
 		shieldTints.a[0] = targetAlpha
-		this.markEntityDirty(shieldChunkId, 0, tint, currentTick)
-		this.markComponentDirty(shieldChunkId, tint, currentTick)
+		this.markEntityDirty(shieldChunkId, 0, tint)
+		this.markComponentDirty(shieldChunkId, tint)
 
 		shieldVisibilities.isVisible[0] = targetVisibility
-		this.markEntityDirty(shieldChunkId, 0, visibility, currentTick)
-		this.markComponentDirty(shieldChunkId, visibility, currentTick)
+		this.markEntityDirty(shieldChunkId, 0, visibility)
+		this.markComponentDirty(shieldChunkId, visibility)
 	}
 }
