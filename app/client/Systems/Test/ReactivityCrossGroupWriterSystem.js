@@ -71,7 +71,7 @@ export class ReactivityCrossGroupWriterSystem {
 			const changedChunks = this.reactiveQuery.getChunks()
 			console.log(`Detected chunks within same system (writer) (Broad Phase):`)
 			console.log(changedChunks)
-			const dirtyCount = this.getDirty(chunkId, reactivityComponent, lastVersion, currentVersion, this.scratchBuffer)
+			const dirtyCount = this.getDirty(chunkId, reactivityComponent, this.scratchBuffer)
 			console.log(`Detected entities within same system (writer) (Narrow Phase): ${dirtyCount}`)
 
 

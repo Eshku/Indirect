@@ -4,6 +4,7 @@
  * into the correct PIXI.Container.
  */
 export const layer = {
+	meta: { isTrackable: true },
 	/**
 	 * The name of the rendering layer.
 	 * This must correspond to a layer created in the LayerManager.

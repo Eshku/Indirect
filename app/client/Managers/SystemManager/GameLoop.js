@@ -91,11 +91,10 @@ export class GameLoop {
 	}
 
 	async init(engine) {
-		const { workerManager, systemManager, entityMaskManager, eventManager, entityManager } = engine.getManagers()
+		const { workerManager, systemManager, entityMaskManager, eventManager } = engine.getManagers()
 		this.workerManager = workerManager
 		this.systemManager = systemManager
 		this.entityMaskManager = entityMaskManager
-		this.entityManager = entityManager
 		this.eventManager = eventManager
 		this.app = this.systemManager.app
 		this.renderer = this.systemManager.renderer
@@ -319,13 +318,6 @@ export class GameLoop {
 		}
 
 		this.systemManager.clearSystemTimings()
-
-		// --- Reactivity Compaction Step ---
-		// This runs synchronously after all systems and jobs are complete for the frame.
-		// It is safe to use non-atomic operations inside this method.
-		this.entityManager.performReactivityCompaction(this.globalVersion)
-		//! perf monitor compaction too later.
-		//! could add new group for performance monitor as "maintenence" for some other future crap too.
 
 		// --- Advance Tick ---
 		// The main logic tick is advanced inside the fixed logic loop. This section

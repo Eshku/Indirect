@@ -36,10 +36,7 @@ import { CommandBufferReader } from '../SystemManager/CommandBufferReader.js'
 
 // --- Reactivity Tier Configuration ---
 // These constants define the structure of the LSM-Tree for dirty tracking.
-export const DIRTY_HISTORY_LENGTH = 256
-export const TIER0_SLOTS = 16 // "Hot" tier, 1 mask per version
-export const TIER1_SLOTS = 16 // "Warm" tier, each mask aggregates TIER0_SLOTS/4 versions
-export const TIER2_SLOTS = 4 // "Cool" tier, each mask aggregates TIER1_SLOTS versions
+export const DIRTY_HISTORY_LENGTH = 256 // MUST be a power of two for efficient modulo.
 
 import { MAX_COMPONENTS, MASK_PARTS } from '../ComponentManager/ComponentSchema.js'
 export const MAX_ARCHETYPES = 4096 // Maximum number of unique archetypes
@@ -129,10 +126,6 @@ export const entityStore = {
 	// NEW: Store for narrow-phase reactivity data ({ticks, dirtyMask})
 	chunkReactivityData: new Array(MAX_CHUNKS),
 	chunkRemovedComponentMasks: new Array(MAX_CHUNKS),
-	// --- Compaction Tracking ---
-	compactionDirtySetTier0: new Set(),
-	compactionDirtySetTier1: new Set(),
-	compactionDirtySetTier2: new Set(),
 }
 
 // Initialize atomic nextArchetypeId to 0. The first archetype will be ID 0.
@@ -216,7 +209,6 @@ export class EntityManager {
 
 		// --- Reusable buffers for getDirty ---
 		this._getDirtyScratchMeta = new Uint32Array(Math.ceil(MAX_CHUNK_CAPACITY / 32 / 32))
-		this._compactionScratchMeta = new Uint32Array(Math.ceil(MAX_CHUNK_CAPACITY / 32 / 32))
 		this._getDirtyScratchRelevantMasks = { data: [], meta: [] }
 
 		// --- Reusable buffers for _allocateSpaceForNEntities ---
@@ -1262,22 +1254,16 @@ export class EntityManager {
 			const oldWordIndex = oldIndex >> 5, oldBitInWord = 1 << (oldIndex & 31) // prettier-ignore
 			const newWordIndex = newIndex >> 5, newBitInWord = 1 << (newIndex & 31) // prettier-ignore
 
-			for (const typeId of componentTypeIDs) {
-				const reactivity = entityStore.chunkReactivityData[chunkId]?.[typeId]
+			for (const typeId of componentTypeIDs) { // This is componentTypeIDs of the chunk's archetype
+				const reactivity = entityStore.chunkReactivityData[chunkId][typeId]
 				if (!reactivity) continue
 
-				const moveBitsInTier = (tier) => {
-					for (const dataMask of tier.dataMasks) {
-						const isSet = (Atomics.load(dataMask, oldWordIndex) & oldBitInWord) !== 0
-						if (isSet) Atomics.or(dataMask, newWordIndex, newBitInWord)
-						else Atomics.and(dataMask, newWordIndex, ~newBitInWord)
-						Atomics.and(dataMask, oldWordIndex, ~oldBitInWord)
-					}
+				for (const dataMask of reactivity.dataMasks) {
+					const isSet = (dataMask[oldWordIndex] & oldBitInWord) !== 0 // Non-atomic read is safe here
+					if (isSet) Atomics.or(dataMask, newWordIndex, newBitInWord)
+					else Atomics.and(dataMask, newWordIndex, ~newBitInWord)
+					Atomics.and(dataMask, oldWordIndex, ~oldBitInWord)
 				}
-
-				moveBitsInTier(reactivity.tier0)
-				moveBitsInTier(reactivity.tier1)
-				moveBitsInTier(reactivity.tier2)
 			}
 		}
 
@@ -1694,12 +1680,15 @@ export class EntityManager {
 					let maskPart = commonMask[part]
 					if (maskPart === 0n) continue
 					for (let bit = 0; bit < 64; bit++) {
-						if ((maskPart & (1n << BigInt(bit))) !== 0n) {
+						if ((maskPart & (1n << BigInt(bit))) !== 0n) { // This is a common component
 							const typeId = part * 64 + bit
-							// Reactivity data must be copied entity by entity, not as a block, because the tiered
-							// bitmasks are not simple linear arrays like component data.
-							for (let k = 0; k < blockSize; k++) {
-								this._copyReactivityData(oldChunkId, typeId, currentOldIndex + k, newChunkId, currentNewIndex + k)
+							const info = Schema.componentInfo[typeId]
+							if (info?.isTrackable) {
+								// Reactivity data must be copied entity by entity, not as a block, because the tiered
+								// bitmasks are not simple linear arrays like component data.
+								for (let k = 0; k < blockSize; k++) {
+									this._copyReactivityData(oldChunkId, typeId, currentOldIndex + k, newChunkId, currentNewIndex + k)
+								}
 							}
 							this._copyComponentDataBlock(oldChunkId, typeId, currentOldIndex, newChunkId, currentNewIndex, blockSize)
 						}
@@ -2096,12 +2085,12 @@ export class EntityManager {
 				newComponentData[typeId] = propArrays
 
 				// Reuse reactivity buffers
-				const reactivityTiers = oldReactivityData?.[typeId]
-				if (reactivityTiers) {
-					this._clearReactivityTiers(reactivityTiers)
-					newReactivityData[typeId] = reactivityTiers
+				const reactivityRingBuffer = oldReactivityData?.[typeId]
+				if (reactivityRingBuffer) {
+					this._clearReactivityRingBuffer(reactivityRingBuffer)
+					newReactivityData[typeId] = reactivityRingBuffer
 				} else {
-					newReactivityData[typeId] = this._allocateReactivityTiers(typeId, capacity)
+					newReactivityData[typeId] = this._allocateReactivityRingBuffer(typeId, capacity)
 				}
 			} else {
 				// --- ALLOCATE PATH (Component is new to this chunk) ---
@@ -2113,7 +2102,7 @@ export class EntityManager {
 				}
 				newComponentData[typeId] = propArrays
 				// Allocate new reactivity buffers
-				newReactivityData[typeId] = this._allocateReactivityTiers(typeId, capacity)
+				newReactivityData[typeId] = this._allocateReactivityRingBuffer(typeId, capacity)
 			}
 		}
 
@@ -2156,31 +2145,20 @@ export class EntityManager {
 	/**
 	 * @private
 	 */
-	_allocateReactivityTiers(typeId, capacity) {
+	_allocateReactivityRingBuffer(typeId, capacity) {
 		const words = Math.ceil(capacity / 32)
 		const metaWords = Math.ceil(words / 32)
 
-		const createTier = slots => ({
-			dataMasks: Array.from({ length: slots }, () => new Uint32Array(new SharedArrayBuffer(words * 4))),
-			metaMasks: Array.from({ length: slots }, () => new Uint32Array(new SharedArrayBuffer(metaWords * 4))),
-		})
-
 		return {
-			tier0: createTier(TIER0_SLOTS),
-			tier1: createTier(TIER1_SLOTS),
-			tier2: createTier(TIER2_SLOTS),
+			dataMasks: Array.from({ length: DIRTY_HISTORY_LENGTH }, () => new Uint32Array(new SharedArrayBuffer(words * 4))),
+			metaMasks: Array.from({ length: DIRTY_HISTORY_LENGTH }, () => new Uint32Array(new SharedArrayBuffer(metaWords * 4))),
 		}
 	}
 
-	_clearReactivityTiers(reactivityTiers) {
-		const clearTier = tier => {
-			for (const mask of tier.dataMasks) mask.fill(0)
-			for (const mask of tier.metaMasks) mask.fill(0)
-		}
-		if (reactivityTiers) {
-			clearTier(reactivityTiers.tier0)
-			clearTier(reactivityTiers.tier1)
-			clearTier(reactivityTiers.tier2)
+	_clearReactivityRingBuffer(reactivityRingBuffer) {
+		if (reactivityRingBuffer) {
+			for (const mask of reactivityRingBuffer.dataMasks) mask.fill(0)
+			for (const mask of reactivityRingBuffer.metaMasks) mask.fill(0)
 		}
 	}
 
@@ -2194,14 +2172,20 @@ export class EntityManager {
 	_allocateChunkSharedMetadata(chunkId, capacity, componentIdArray, componentCount) {
 		// Allocate the per-component-type dirty tick buffer.
 		const count = componentCount ?? componentIdArray.length
-		const archetypeVersionsBuffer = new SharedArrayBuffer(count * Uint32Array.BYTES_PER_ELEMENT)
 
 		// --- NEW: Allocate all narrow-phase reactivity buffers ---
 		const reactivityData = new Array(MAX_COMPONENTS)
+		let trackableCount = 0
 		for (let i = 0; i < count; i++) {
-			reactivityData[componentIdArray[i]] = this._allocateReactivityTiers(componentIdArray[i], capacity)
+			const typeId = componentIdArray[i]
+			const info = Schema.componentInfo[typeId]
+			if (info?.isTrackable) {
+				reactivityData[typeId] = this._allocateReactivityRingBuffer(typeId, capacity)
+				trackableCount++
+			}
 		}
 		entityStore.chunkReactivityData[chunkId] = reactivityData
+		const archetypeVersionsBuffer = new SharedArrayBuffer(count * Uint32Array.BYTES_PER_ELEMENT)
 		entityStore.chunkArchetypeDirtyVersions[chunkId] = new Uint32Array(archetypeVersionsBuffer)
 		entityStore.chunkArchetypeDirtyVersions[chunkId].fill(0)
 
@@ -2274,26 +2258,28 @@ export class EntityManager {
 	// =================================================================
 
 	markEntityDirty(chunkId, indexInChunk, componentTypeId, version) {
+		const info = Schema.componentInfo[componentTypeId];
+		if (!info?.isTrackable) return; // Only track if component is trackable
+
 		const reactivity = entityStore.chunkReactivityData[chunkId][componentTypeId]
 
-		// --- Write to the "Hot" Tier (Tier 0) ---
-		const slot = version % TIER0_SLOTS
-		const tier0 = reactivity.tier0
+		const slot = version % DIRTY_HISTORY_LENGTH
+		const dataMask = reactivity.dataMasks[slot]
+		const metaMask = reactivity.metaMasks[slot]
 
 		const wordIndex = indexInChunk >> 5
 		const bitInWord = 1 << (indexInChunk & 31)
 		const metaWordIndex = wordIndex >> 5
 		const metaBitInWord = 1 << (wordIndex & 31)
 
-		Atomics.or(tier0.dataMasks[slot], wordIndex, bitInWord)
-		Atomics.or(tier0.metaMasks[slot], metaWordIndex, metaBitInWord)
-
-		// Add this buffer to the set of buffers that need Tier 0 -> Tier 1 compaction.
-		const key = (chunkId << 16) | componentTypeId
-		entityStore.compactionDirtySetTier0.add(key)
+		Atomics.or(dataMask, wordIndex, bitInWord)
+		Atomics.or(metaMask, metaWordIndex, metaBitInWord)
 	}
 
 	markEntityDirtyById(entityId, componentTypeId, version) {
+		const info = Schema.componentInfo[componentTypeId];
+		if (!info?.isTrackable) return; // Only track if component is trackable
+
 		if (!this.isEntityActive(entityId)) return
 		const entityIndex = Number(entityId & 0xffffffffn)
 		const packedLocation = entityStore.entityPackedLocations[entityIndex]
@@ -2304,7 +2290,10 @@ export class EntityManager {
 
 	markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version) {
 		for (const componentTypeId of componentTypeIds) {
-			this.markEntityDirty(chunkId, indexInChunk, componentTypeId, version)
+			const info = Schema.componentInfo[componentTypeId];
+			if (info?.isTrackable) { // Only mark if component is trackable
+				this.markEntityDirty(chunkId, indexInChunk, componentTypeId, version)
+			}
 		}
 	}
 
@@ -2318,13 +2307,13 @@ export class EntityManager {
 			const entityIndex = Number(entityId & 0xffffffffn)
 			const packedLocation = entityStore.entityPackedLocations[entityIndex]
 			const chunkId = packedLocation & 0xffff
-			const indexInChunk = entityStore.entityIndicesInChunk[entityIndex]
-			this.markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version)
+			const indexInChunk = entityStore.entityIndicesInChunk[entityIndex];
+			this.markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version); // markEntitiesDirty already handles isTrackable check
 		}
 	}
 
 	getDirty(chunkId, componentTypeId, lastVersion, currentVersion, outBuffer) {
-		const reactivity = entityStore.chunkReactivityData[chunkId][componentTypeId]
+		const reactivity = entityStore.chunkReactivityData[chunkId]?.[componentTypeId]
 		if (!reactivity) return 0
 
 		const size = entityStore.chunkSizes[chunkId]
@@ -2333,17 +2322,16 @@ export class EntityManager {
 		const numWords = Math.ceil(size / 32)
 		const metaWords = Math.ceil(numWords / 32)
 
-		// --- 1. Identify Relevant Masks ---
-		const relevantMasks = this._getMasksForVersionRange(reactivity, lastVersion, currentVersion)
-		if (relevantMasks.data.length === 0) return 0
-
 		// --- 2. Aggregate Meta-Masks ---
 		const effectiveMetaMask = this._getDirtyScratchMeta
 		effectiveMetaMask.fill(0)
 
-		for (const mask of relevantMasks.meta) {
+		// Iterate through the version range and aggregate the meta masks.
+		for (let v = lastVersion + 1; v <= currentVersion; v++) {
+			const slot = v % DIRTY_HISTORY_LENGTH
+			const metaMask = reactivity.metaMasks[slot]
 			for (let i = 0; i < metaWords; i++) {
-				effectiveMetaMask[i] |= Atomics.load(mask, i)
+				effectiveMetaMask[i] |= metaMask[i] // Non-atomic read is safe here
 			}
 		}
 
@@ -2364,8 +2352,10 @@ export class EntityManager {
 
 				// --- 4. Aggregate Final Data for this Dirty Word ---
 				let effectiveDataWord = 0
-				for (const mask of relevantMasks.data) {
-					effectiveDataWord |= Atomics.load(mask, wordIndex)
+				for (let v = lastVersion + 1; v <= currentVersion; v++) {
+					const slot = v % DIRTY_HISTORY_LENGTH
+					const dataMask = reactivity.dataMasks[slot]
+					effectiveDataWord |= dataMask[wordIndex] // Non-atomic read is safe here
 				}
 
 				// --- 5. Extract Indices ---
@@ -2389,48 +2379,14 @@ export class EntityManager {
 		return count
 	}
 
-	_getMasksForVersionRange(reactivityTiers, lastVersion, currentVersion) {
-		const { data, meta } = this._getDirtyScratchRelevantMasks
-		data.length = 0
-		meta.length = 0
-
-		const TIER1_COVERAGE = TIER0_SLOTS
-		const TIER2_COVERAGE = TIER0_SLOTS * TIER1_SLOTS
-
-		let v = lastVersion + 1
-		while (v <= currentVersion) {
-			const tier2BlockStart = Math.floor((v - 1) / TIER2_COVERAGE) * TIER2_COVERAGE
-			if (v === tier2BlockStart + 1 && v + TIER2_COVERAGE - 1 <= currentVersion) {
-				const destSlot = (tier2BlockStart / TIER2_COVERAGE) % TIER2_SLOTS
-				data.push(reactivityTiers.tier2.dataMasks[destSlot])
-				meta.push(reactivityTiers.tier2.metaMasks[destSlot])
-				v += TIER2_COVERAGE
-				continue
-			}
-
-			const tier1BlockStart = Math.floor((v - 1) / TIER1_COVERAGE) * TIER1_COVERAGE
-			if (v === tier1BlockStart + 1 && v + TIER1_COVERAGE - 1 <= currentVersion) {
-				const destSlot = (tier1BlockStart / TIER1_COVERAGE) % TIER1_SLOTS
-				data.push(reactivityTiers.tier1.dataMasks[destSlot])
-				meta.push(reactivityTiers.tier1.metaMasks[destSlot])
-				v += TIER1_COVERAGE
-				continue
-			}
-
-			const slot = v % TIER0_SLOTS
-			data.push(reactivityTiers.tier0.dataMasks[slot])
-			meta.push(reactivityTiers.tier0.metaMasks[slot])
-			v++
-		}
-
-		return this._getDirtyScratchRelevantMasks
-	}
-
 	/**
 	 * @private
 	 */
 	_copyReactivityData(fromChunkId, typeId, fromIndex, toChunkId, toIndex) {
 		const fromReactivity = entityStore.chunkReactivityData[fromChunkId]?.[typeId]
+		const info = Schema.componentInfo[typeId];
+		if (!info?.isTrackable) return; // Only copy if component is trackable
+
 		const toReactivity = entityStore.chunkReactivityData[toChunkId]?.[typeId]
 		if (!fromReactivity || !toReactivity) return
 
@@ -2439,133 +2395,20 @@ export class EntityManager {
 		const toWordIndex = toIndex >> 5
 		const toBitInWord = 1 << (toIndex & 31)
 
-		const copyTier = (fromTier, toTier) => {
-			for (let i = 0; i < fromTier.dataMasks.length; i++) {
-				const fromDataMask = fromTier.dataMasks[i]
-				const toDataMask = toTier.dataMasks[i]
-				const isSet = (Atomics.load(fromDataMask, fromWordIndex) & fromBitInWord) !== 0
-				if (isSet) Atomics.or(toDataMask, toWordIndex, toBitInWord)
-				else Atomics.and(toDataMask, toWordIndex, ~toBitInWord)
-			}
-			for (let i = 0; i < fromTier.metaMasks.length; i++) {
-				const toMetaMask = toTier.metaMasks[i]
-				const toMetaWordIndex = toWordIndex >> 5
-				const toMetaBitInWord = 1 << (toWordIndex & 31)
-				Atomics.or(toMetaMask, toMetaWordIndex, toMetaBitInWord)
-			}
+		for (let i = 0; i < fromReactivity.dataMasks.length; i++) {
+			const fromDataMask = fromReactivity.dataMasks[i]
+			const toDataMask = toReactivity.dataMasks[i]
+			const isSet = (fromDataMask[fromWordIndex] & fromBitInWord) !== 0 // Non-atomic read is safe here
+			if (isSet) Atomics.or(toDataMask, toWordIndex, toBitInWord)
+			else Atomics.and(toDataMask, toWordIndex, ~toBitInWord)
 		}
-
-		copyTier(fromReactivity.tier0, toReactivity.tier0)
-		copyTier(fromReactivity.tier1, toReactivity.tier1)
-		copyTier(fromReactivity.tier2, toReactivity.tier2)
-	}
-
-	performReactivityCompaction(currentVersion) {
-		// This method is called synchronously by the GameLoop after all systems and jobs have finished.
-		// It is safe to use non-atomic operations here.
-
-		// --- Tier 0 -> Tier 1 Compaction ---
-		if (currentVersion > 0 && currentVersion % TIER0_SLOTS === 0) {
-			this._compactTierNonAtomic(0, currentVersion, entityStore.compactionDirtySetTier0, entityStore.compactionDirtySetTier1)
+		// Meta masks don't need to be copied bit-by-bit. If we move an entity,
+		// we just need to ensure the destination meta-mask word is marked as dirty.
+		const toMetaWordIndex = toWordIndex >> 5
+		const toMetaBitInWord = 1 << (toWordIndex & 31)
+		for (const metaMask of toReactivity.metaMasks) {
+			Atomics.or(metaMask, toMetaWordIndex, toMetaBitInWord)
 		}
-
-		// --- Tier 1 -> Tier 2 Compaction ---
-		const TIER1_COVERAGE = TIER0_SLOTS * TIER1_SLOTS
-		if (currentVersion > 0 && currentVersion % TIER1_COVERAGE === 0) {
-			this._compactTierNonAtomic(1, currentVersion, entityStore.compactionDirtySetTier1, entityStore.compactionDirtySetTier2)
-		}
-	}
-
-	_compactTierNonAtomic(sourceTierIndex, currentVersion, dirtySet, nextDirtySet) {
-		if (dirtySet.size === 0) return
-
-		for (const key of dirtySet) {
-			const chunkId = key >> 16
-			const typeId = key & 0xffff
-
-			const reactivityTiers = entityStore.chunkReactivityData[chunkId][typeId]
-			if (!reactivityTiers) continue
-			const capacity = entityStore.chunkCapacities[chunkId]
-			const numWords = Math.ceil(capacity / 32)
-			const metaWords = Math.ceil(numWords / 32)
-
-			if (sourceTierIndex === 0) {
-				const { tier0: sourceTier, tier1: destTier } = reactivityTiers
-				const versionToCompact = currentVersion - TIER0_SLOTS
-				const destSlot = (versionToCompact / TIER0_SLOTS) % TIER1_SLOTS
-				const destDataMask = destTier.dataMasks[destSlot]
-				const destMetaMask = destTier.metaMasks[destSlot]
-				destDataMask.fill(0)
-				destMetaMask.fill(0)
-
-				for (let s = 0; s < TIER0_SLOTS; s++) {
-					const sourceSlot = (versionToCompact + s) % TIER0_SLOTS
-					const sourceDataMask = sourceTier.dataMasks[sourceSlot]
-					const sourceMetaMask = sourceTier.metaMasks[sourceSlot]
-
-					for (let w = 0; w < metaWords; w++) {
-						const metaBits = sourceMetaMask[w] // Non-atomic read
-						if (metaBits === 0) continue
-
-						destMetaMask[w] |= metaBits
-						const metaOffset = w << 5
-						let bits = metaBits
-						while (bits !== 0) {
-							const t = bits & -bits
-							const wordIndexInMeta = 31 - Math.clz32(t)
-							const wordIndex = metaOffset | wordIndexInMeta
-							if (wordIndex >= numWords) break
-
-							destDataMask[wordIndex] |= sourceDataMask[wordIndex] // Non-atomic read
-							bits ^= t
-						}
-					}
-
-					sourceDataMask.fill(0)
-					sourceMetaMask.fill(0)
-				}
-			} else if (sourceTierIndex === 1) {
-				const { tier1: sourceTier, tier2: destTier } = reactivityTiers
-				const TIER1_COVERAGE = TIER0_SLOTS * TIER1_SLOTS
-				const versionBlockStart = currentVersion - TIER1_COVERAGE
-				const destSlot = (versionBlockStart / TIER1_COVERAGE) % TIER2_SLOTS
-				const destDataMask = destTier.dataMasks[destSlot]
-				const destMetaMask = destTier.metaMasks[destSlot]
-				destDataMask.fill(0)
-				destMetaMask.fill(0)
-
-				for (let s = 0; s < TIER1_SLOTS; s++) {
-					const sourceSlot = (versionBlockStart / TIER0_SLOTS + s) % TIER1_SLOTS
-					const sourceDataMask = sourceTier.dataMasks[sourceSlot]
-					const sourceMetaMask = sourceTier.metaMasks[sourceSlot]
-
-					for (let w = 0; w < metaWords; w++) {
-						const metaBits = sourceMetaMask[w] // Non-atomic read
-						if (metaBits === 0) continue
-
-						destMetaMask[w] |= metaBits
-						const metaOffset = w << 5
-						let bits = metaBits
-						while (bits !== 0) {
-							const t = bits & -bits
-							const wordIndexInMeta = 31 - Math.clz32(t)
-							const wordIndex = metaOffset | wordIndexInMeta
-							if (wordIndex >= numWords) break
-
-							destDataMask[wordIndex] |= sourceDataMask[wordIndex] // Non-atomic read
-							bits ^= t
-						}
-					}
-					sourceTier.dataMasks[sourceSlot].fill(0)
-					sourceTier.metaMasks[sourceSlot].fill(0)
-				}
-			}
-
-			if (nextDirtySet) {
-				nextDirtySet.add(key)
-			}
-		}
-		dirtySet.clear()
 	}
 
 	/**
@@ -2705,12 +2548,13 @@ export class EntityManager {
 				// --- Handle Dirty Tracking ---
 				for (const typeId of componentTypeIDs) {
 					this.markComponentDirty(chunkId, typeId, version)
-				}
-				// Also do narrow-phase marking for all created entities
-				for (let j = 0; j < batchSize; j++) {
-					const indexInChunk = startEntityIndexInChunk + j
-					for (const typeId of componentTypeIDs) {
-						this.markEntityDirty(chunkId, indexInChunk, typeId, version)
+					const info = Schema.componentInfo[typeId]
+					if (info?.isTrackable) {
+						// Also do narrow-phase marking for all created entities in this block
+						for (let j = 0; j < batchSize; j++) {
+							const indexInChunk = startEntityIndexInChunk + j
+							this.markEntityDirty(chunkId, indexInChunk, typeId, version)
+						}
 					}
 				}
 			}
@@ -2872,8 +2716,11 @@ export class EntityManager {
 			// Mark all components in the payload as dirty for broad-phase queries.
 			for (const typeId of componentTypeIDs) {
 				this.markComponentDirty(chunkId, typeId, version)
-				// Also mark for narrow-phase.
-				this.markEntityDirty(chunkId, indexInChunk, typeId, version)
+				const info = Schema.componentInfo[typeId]
+				// Also mark for narrow-phase, if trackable.
+				if (info?.isTrackable) {
+					this.markEntityDirty(chunkId, indexInChunk, typeId, version)
+				}
 			}
 		}
 	}

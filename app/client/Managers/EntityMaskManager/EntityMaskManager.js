@@ -259,8 +259,8 @@ export class EntityMaskManager {
 
 		const wordIndex = indexInChunk >>> 5
 		const bitInWord = 1 << (indexInChunk & 31)
-		// Use Atomics.load for thread-safe reading from the SharedArrayBuffer.
-		const word = Atomics.load(mask, wordIndex)
+		// A non-atomic read is safe here. This method is called from a system's `update` on the main thread, after any parallel writers have finished.
+		const word = mask[wordIndex]
 		return (word & bitInWord) !== 0
 	}
 
@@ -282,7 +282,7 @@ export class EntityMaskManager {
 		const numWords = Math.ceil(size / 32)
 
 		for (let i = 0; i < numWords; i++) {
-			let bits = Atomics.load(mask, i)
+			let bits = mask[i] // Non-atomic read is safe here.
 			if (bits === 0) continue
 
 			const offset = i << 5
@@ -391,7 +391,7 @@ export class EntityMaskManager {
 			if (oldMask) {
 				const oldWordIndex = oldIndex >>> 5
 				const oldBitInWord = 1 << (oldIndex & 31)
-				isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
+				isSet = (oldMask[oldWordIndex] & oldBitInWord) !== 0 // Non-atomic read is safe here
 				Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
 			}
 
@@ -470,8 +470,8 @@ export class EntityMaskManager {
 					let isSet = false
 					if (oldMask) {
 						const oldWordIndex = oldIndex >>> 5,
-							oldBitInWord = 1 << (oldIndex & 31)
-						isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
+							oldBitInWord = 1 << (oldIndex & 31) // Non-atomic read is safe here
+						isSet = (oldMask[oldWordIndex] & oldBitInWord) !== 0
 						Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
 					}
 					const newWordIndex = newIndex >>> 5,
@@ -534,7 +534,7 @@ export class EntityMaskManager {
 					if (oldMask) {
 						const oldWordIndex = oldIndex >>> 5
 						const oldBitInWord = 1 << (oldIndex & 31)
-						isSet = (Atomics.load(oldMask, oldWordIndex) & oldBitInWord) !== 0
+						isSet = (oldMask[oldWordIndex] & oldBitInWord) !== 0 // Non-atomic read is safe here
 						// After reading, clear the bit at the old location. This is crucial to prevent
 						// stale state if the slot is reused by a swap or a new entity.
 						Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
@@ -572,7 +572,7 @@ export class EntityMaskManager {
 
 				const oldWordIndex = oldIndex >>> 5
 				const oldBitInWord = 1 << (oldIndex & 31)
-				const isSet = (Atomics.load(mask, oldWordIndex) & oldBitInWord) !== 0
+				const isSet = (mask[oldWordIndex] & oldBitInWord) !== 0 // Non-atomic read is safe here
 
 				const newWordIndex = newIndex >>> 5
 				const newBitInWord = 1 << (newIndex & 31)

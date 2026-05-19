@@ -437,15 +437,19 @@ export class SchemaCompiler {
 			alignment: 0, //
 			sharedProperties: [], //! currently not used
 			perEntityProperties: [],
+			isTrackable: !!schema.meta?.isTrackable, 
 		}
 
-		if (schema === undefined || Object.keys(schema).length === 0) {
+		// Filter out the 'meta' block before processing properties.
+		const schemaKeys = Object.keys(schema).filter(key => key !== 'meta');
+
+		if (schema === undefined || schemaKeys.length === 0) {
 			return componentInfo
 		}
 
 		// The order of keys is critical for the "shorthand" feature, which relies on the first property.
 		// Do NOT sort schemaKeys. Modern JS (ES2015+) preserves definition order for non-integer keys.
-		const schemaKeys = Object.keys(schema)
+		//const schemaKeys = Object.keys(schema)
 		componentInfo.originalSchemaKeys = [...schemaKeys]
 		const implicitKeys = []
 		for (const propName of schemaKeys) {

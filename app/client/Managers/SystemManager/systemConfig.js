@@ -93,10 +93,8 @@ export const systemSchedule = {
 		{ name: 'PoolingSystem', frequency: 'logic' },
 	],
 
-	// Infrequent updates. Runs on a timer, not every frame.
-	Timed: [
-		{ name: 'OffscreenCleanupSystem', frequency: 1 },
-	],
+	// Infrequent UI updates. Runs on a timer, not every frame.
+	Timed: [{ name: 'OffscreenCleanupSystem', frequency: 1 }],
 
 	// Runs once per rendered frame for visuals, interpolation, and UI.
 	Visuals: [
@@ -159,14 +157,6 @@ export const systemSchedule = {
 		// Reactivity
 		/* { name: 'ReactivityTestSystem', frequency: 'logic' }, */
 
-		//simplified real systems behaviour
-
-/* 		{ name: `SimplifiedSpawnSystem`, frequency: `logic` },
-
-		{ name: 'SpriteFactorySystem', frequency: 'visuals' },
-
-		{ name: 'SyncTransforms', frequency: 'visuals' }, */
-
 		//Cross-boundary Reactivity
 		/* { name: 'ReactivityCrossGroupWriterSystem', frequency: 'logic' },
 		{ name: 'ReactivityCrossGroupReaderSystem', frequency: 'visuals' }, */
@@ -174,9 +164,9 @@ export const systemSchedule = {
 		/* { name: 'ReactivityCrossGroupDeferredWriterSystem', frequency: 'logic' },
 		{ name: 'ReactivityCrossGroupDeferredReaderSystem', frequency: 'visuals' }, */
 
+		//! LOW FREQUENCY SYSTEMS NO LONGER EXPECTED TO DETECT NARROW PHASE.
 		/* { name: 'ReactivityCrossGroupDeferredWriterSystem', frequency: 'logic' },
 		{ name: 'ReactivityCrossGroupTimedReaderSystem', frequency: 1 }, */
 
-		//tested on 0.01, lowered to not wait for so long */
 	],
 }

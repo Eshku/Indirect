@@ -1481,7 +1481,7 @@ export class EntityCommandBufferTestSystem {
 				const scratchBuffer = this.createScratchBuffer()
 
 				// 3. Verify it is dirty initially.
-				let dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, lastVersionBeforeCreation, creationVersion, scratchBuffer)
+				let dirtyCount = ecs.entityManager.getDirty(location.chunkId, trackedTestComponent, lastVersionBeforeCreation, creationVersion, scratchBuffer)
 				expect(dirtyCount).toBe(1, 'Entity should be dirty on creation')
 
 				// 4. Defer a setComponent command, again managing versions.
@@ -1492,7 +1492,7 @@ export class EntityCommandBufferTestSystem {
 				flush(setVersion)
 
 				// 5. Verification: The entity should now be dirty for the tick it was changed.
-				dirtyCount = this.getDirty(location.chunkId, trackedTestComponent, lastVersionBeforeSet, setVersion, scratchBuffer)
+				dirtyCount = ecs.entityManager.getDirty(location.chunkId, trackedTestComponent, lastVersionBeforeSet, setVersion, scratchBuffer)
 				expect(dirtyCount).toBe(1, 'Entity should be marked dirty after setComponent')
 			})
 		})

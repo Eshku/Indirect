@@ -7,7 +7,7 @@ const benchmarkConfig = {
 	// 'destruction', 'destruction_bulk',
 	// 'structuralChange', 'structuralChangeBulk',
 	// 'setData', 'setDataSilent'
-	activeBenchmark: 'setDataSilent',
+	activeBenchmark: 'structuralChange',
 
 	creation: {
 		entityCount: 0,

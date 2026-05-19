@@ -4,6 +4,8 @@
  * they only damage a given enemy once during their lifetime.
  */
 export const hitHistory = {
+	meta: { isTrackable: true },
+
 	/**
 	 * The current number of hits recorded in this buffer.
 	 * This should be reset to 0 when the entity is reused from a pool.
