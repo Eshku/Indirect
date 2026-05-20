@@ -164,7 +164,7 @@ export const systemSchedule = {
 		/* { name: 'ReactivityCrossGroupDeferredWriterSystem', frequency: 'logic' },
 		{ name: 'ReactivityCrossGroupDeferredReaderSystem', frequency: 'visuals' }, */
 
-		//! LOW FREQUENCY SYSTEMS NO LONGER EXPECTED TO DETECT NARROW PHASE.
+		//! LOW FREQUENCY SYSTEMS NO LONGER GUARANTIED TO DETECT NARROW PHASE.
 		/* { name: 'ReactivityCrossGroupDeferredWriterSystem', frequency: 'logic' },
 		{ name: 'ReactivityCrossGroupTimedReaderSystem', frequency: 1 }, */
 

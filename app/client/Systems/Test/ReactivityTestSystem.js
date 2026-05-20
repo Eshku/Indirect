@@ -189,6 +189,92 @@ export class ReactivityTestSystem {
 				expect(scratchBuffer[0]).toBe(0, 'The dirty entity should now be at index 0 after the swap')
 			})
 
+			it('should not transfer a dirty flag to a clean swapped entity', async () => {
+				// This test specifically targets a bug where a clean entity, when swapped
+				// into a dirty slot, would incorrectly inherit the dirty flag.
+
+				ecs.destroyAll()
+				// After a full reset, we must re-register the declarative masks.
+				ecs.entityMaskManager.registerDeclarativeMasks()
+				this.flush()
+
+				const lastVersionBeforeAction = ecs.systemManager.gameLoop.globalVersion
+				const versionOfAction = lastVersionBeforeAction + 1
+
+				// 1. Setup: Create two entities in the same chunk.
+				// Use instantiateSilent to ensure the entities start in a truly clean state,
+				// which is the premise of this specific test.
+				const payload = this.compile({ trackedTestComponent: { value: 0 } })
+				this.instantiateSilent(payload, 1) // This will be at index 0, the one we mark dirty and move.
+				this.instantiateSilent(payload, 1) // This will be at index 1, the clean one we will swap.
+				this.flush() // Flush creation
+
+				const query = this.getQuery({ with: [trackedTestComponent], without: [componentA] })
+				const chunkIds = query.getChunks()
+				expect(chunkIds.length).toBe(1, 'Expected all test entities to be in a single chunk.')
+				const chunkId = chunkIds[0]
+
+				const initialSize = this.getChunkSize(chunkId)
+				expect(initialSize).toBe(2, 'Chunk should contain exactly 2 entities before the test action.')
+
+				const entities = this.getEntities(chunkId)
+				const entityToMarkAndMove = entities[0] // Entity at index 0
+				const cleanEntityToSwap = entities[1] // Entity at index 1
+
+				// 2. Action: Mark the first entity as dirty. Then, in the same frame, trigger a structural change on it.
+				ecs.entityManager.markEntityDirtyById(entityToMarkAndMove, trackedTestComponent, versionOfAction)
+				this.addComponent(entityToMarkAndMove, this.addCompAPayload)
+				this.flush(versionOfAction)
+
+				// 3. Verification: The `addComponent` moved `entityToMarkAndMove`. `cleanEntityToSwap` was
+				// swapped into its place (index 0). The dirty flag from the slot must NOT be inherited.
+				const scratchBuffer = this.createScratchBuffer()
+				const dirtyCount = ecs.entityManager.getDirty(chunkId, trackedTestComponent, lastVersionBeforeAction, versionOfAction, scratchBuffer)
+
+				// The bug would cause dirtyCount to be 1. The correct behavior is 0.
+				expect(dirtyCount).toBe(0, 'A clean entity swapped into a dirty slot should not inherit the dirty flag.')
+			})
+
+			it('should not transfer a dirty flag to a new entity in a recycled end-of-chunk slot', async () => {
+				// This test targets the specific case where an entity at the end of a chunk
+				// is removed, and its slot is later recycled by a new entity. The new entity
+				// must not inherit the old one's dirty state.
+
+				ecs.destroyAll()
+				ecs.entityMaskManager.registerDeclarativeMasks()
+				this.flush()
+
+				const lastVersionBeforeAction = ecs.systemManager.gameLoop.globalVersion
+				const versionOfAction = lastVersionBeforeAction + 1
+
+				// 1. Setup: Create two entities in the same chunk.
+				const payload = this.compile({ trackedTestComponent: { value: 0 } })
+				this.instantiateSilent(payload, 1) // Entity A at index 0
+				this.instantiateSilent(payload, 1) // Entity B at index 1 (the one we'll destroy)
+				this.flush()
+
+				const query = this.getQuery({ with: [trackedTestComponent] })
+				const chunkId = query.getChunks()[0]
+				expect(this.getChunkSize(chunkId)).toBe(2, 'Chunk should contain 2 entities before action.')
+
+				const entities = this.getEntities(chunkId)
+				const entityToDestroy = entities[1] // The entity at the end of the chunk
+
+				// 2. Action: Mark the last entity as dirty, then destroy it in the same frame.
+				ecs.entityManager.markEntityDirtyById(entityToDestroy, trackedTestComponent, versionOfAction)
+				this.destroyEntity(entityToDestroy)
+				this.flush(versionOfAction)
+
+				// 3. Action: Create a new, clean entity. It should recycle the slot at index 1.
+				this.instantiateSilent(payload, 1)
+				this.flush()
+
+				// 4. Verification: The new entity at index 1 must be clean.
+				const scratchBuffer = this.createScratchBuffer()
+				const dirtyCount = ecs.entityManager.getDirty(chunkId, trackedTestComponent, lastVersionBeforeAction, versionOfAction, scratchBuffer)
+				expect(dirtyCount).toBe(0, 'A new entity in a recycled end-of-chunk slot should not inherit the dirty flag.')
+			})
+
 			it('should preserve a dirty flag when an unrelated setComponent is processed in the same frame', async () => {
 				// This test simulates a system directly marking an entity dirty (like HealthSystem),
 				// while another system queues a `setComponent` command for a different entity

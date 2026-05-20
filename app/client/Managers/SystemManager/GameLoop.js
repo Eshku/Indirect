@@ -334,11 +334,6 @@ export class GameLoop {
 		const flushVersion = this.globalVersion
 		const cbStartTime = performance.now()
 
-		// Clear all instant event channels before flushing commands.
-		// This ensures entity IDs in events are valid when read in the same frame,
-		// as no structural changes from the command buffer have been applied yet.
-		this.eventManager.clearAllChannels()
-
 		this.systemManager.commandBufferExecutor.flush(this.systemManager.entityCommandBuffer, flushVersion)
 		const cbEndTime = performance.now()
 		// Immediately after flushing, broadcast the structural changes to workers.

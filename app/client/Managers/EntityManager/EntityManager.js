@@ -105,6 +105,8 @@ export const entityStore = {
 	archetypeComponentListStartIndices: new Uint32Array(
 		new SharedArrayBuffer(MAX_ARCHETYPES * Uint32Array.BYTES_PER_ELEMENT),
 	),
+	// NEW: A cache for trackable component IDs per archetype.
+	archetypeTrackableComponentIds: new Array(MAX_ARCHETYPES),
 
 	// --- Chunk Management ---
 	nextChunkId: 1, // Start from 1 so 0 can be NULL_CHUNK_ID
@@ -870,6 +872,16 @@ export class EntityManager {
 		// insert, making the new archetype uncached (slower to find, but correct).
 		entityStore.archetypeLookup.set(key, id)
 
+		// --- NEW: Pre-cache trackable component IDs for this archetype ---
+		const trackableIds = []
+		for (let i = 0; i < componentCount; i++) {
+			const typeId = sortedTypeIDs[i]
+			const info = Schema.componentInfo[typeId]
+			if (info.isTrackable) {
+				trackableIds.push(typeId)
+			}
+		}
+		entityStore.archetypeTrackableComponentIds[id] = new Uint16Array(trackableIds)
 		this.queryManager.registerArchetype(id)
 		return id
 	}
@@ -1246,23 +1258,50 @@ export class EntityManager {
 			}
 		}
 
+		const archetypeId = entityStore.chunkArchetypeIds[chunkId]
+		const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
+
 		// After all component data has been moved, fix up the reactivity history for the swapped entities.
 		for (let i = 0; i < swapCount; i++) {
 			const oldIndex = this._swappedOldIndices[i]
 			const newIndex = this._swappedNewIndices[i]
 
-			const oldWordIndex = oldIndex >> 5, oldBitInWord = 1 << (oldIndex & 31) // prettier-ignore
-			const newWordIndex = newIndex >> 5, newBitInWord = 1 << (newIndex & 31) // prettier-ignore
+			const oldWordIndex = oldIndex >> 5
+			const oldBitInWord = 1 << (oldIndex & 31)
+			const newWordIndex = newIndex >> 5
+			const newBitInWord = 1 << (newIndex & 31)
 
-			for (const typeId of componentTypeIDs) { // This is componentTypeIDs of the chunk's archetype
+			for (const typeId of trackableIds) {
 				const reactivity = entityStore.chunkReactivityData[chunkId][typeId]
-				if (!reactivity) continue
 
 				for (const dataMask of reactivity.dataMasks) {
 					const isSet = (dataMask[oldWordIndex] & oldBitInWord) !== 0 // Non-atomic read is safe here
-					if (isSet) Atomics.or(dataMask, newWordIndex, newBitInWord)
-					else Atomics.and(dataMask, newWordIndex, ~newBitInWord)
-					Atomics.and(dataMask, oldWordIndex, ~oldBitInWord)
+					if (isSet) {
+						dataMask[newWordIndex] |= newBitInWord
+					} else {
+						dataMask[newWordIndex] &= ~newBitInWord
+					}
+					// The old slot is now invalid, so its bit must be cleared.
+					dataMask[oldWordIndex] &= ~oldBitInWord
+				}
+			}
+		}
+
+		// After handling swaps, we must also clear the reactivity data for any entities
+		// that were removed from the *end* of the chunk. These slots were not
+		// overwritten by a swap and would otherwise contain stale data.
+		for (const index of indicesToRemove) {
+			// An index >= newSize corresponds to a slot at the end of the original
+			// chunk that is now invalid.
+			if (index >= newSize) {
+				const wordIndex = index >> 5
+				const bitInWord = 1 << (index & 31)
+				for (const typeId of trackableIds) {
+					const reactivity = entityStore.chunkReactivityData[chunkId]?.[typeId]
+					if (!reactivity) continue // Component not trackable, or no reactivity data for this chunk.
+					for (const dataMask of reactivity.dataMasks) {
+						dataMask[wordIndex] &= ~bitInWord
+					}
 				}
 			}
 		}
@@ -1469,23 +1508,31 @@ export class EntityManager {
 		// 1. Find/create a spot in the new archetype
 		const newChunkId = this._findOrCreateChunkId(targetArchetypeId)
 		const newIndexInChunk = this._addEntityToChunk(newChunkId, entityId)
-
 		// 2. Copy common component data using masks
 		const sourceMaskOffset = sourceArchetypeId * MASK_PARTS
 		const targetMaskOffset = targetArchetypeId * MASK_PARTS
+		const commonMask = this.tempArchetypeMask // Reuse a scratch buffer
+		for (let i = 0; i < MASK_PARTS; i++) {
+			commonMask[i] =
+				entityStore.archetypeMasks[sourceMaskOffset + i] & entityStore.archetypeMasks[targetMaskOffset + i]
+		}
 
 		for (let i = 0; i < MASK_PARTS; i++) {
-			const commonMaskPart =
-				entityStore.archetypeMasks[sourceMaskOffset + i] & entityStore.archetypeMasks[targetMaskOffset + i]
-
+			const commonMaskPart = commonMask[i]
 			if (commonMaskPart === 0n) continue
 
 			for (let j = 0; j < 64; j++) {
 				if ((commonMaskPart & (1n << BigInt(j))) !== 0n) {
 					const typeId = i * 64 + j
 					this._copyComponentData(oldChunkId, typeId, oldIndexInChunk, newChunkId, newIndexInChunk)
-					this._copyReactivityData(oldChunkId, typeId, oldIndexInChunk, newChunkId, newIndexInChunk)
 				}
+			}
+		}
+		const sourceTrackableIds = entityStore.archetypeTrackableComponentIds[sourceArchetypeId]
+		for (const typeId of sourceTrackableIds) {
+			const partIndex = Math.floor(typeId / 64)
+			if ((commonMask[partIndex] & (1n << BigInt(typeId % 64))) !== 0n) {
+				this._copyReactivityData(oldChunkId, typeId, oldIndexInChunk, newChunkId, newIndexInChunk)
 			}
 		}
 
@@ -1676,21 +1723,24 @@ export class EntityManager {
 					blockSize++
 				}
 
+				// First, copy all common component data in a tight loop.
 				for (let part = 0; part < MASK_PARTS; part++) {
-					let maskPart = commonMask[part]
+					const maskPart = commonMask[part]
 					if (maskPart === 0n) continue
 					for (let bit = 0; bit < 64; bit++) {
-						if ((maskPart & (1n << BigInt(bit))) !== 0n) { // This is a common component
+						if ((maskPart & (1n << BigInt(bit))) !== 0n) {
 							const typeId = part * 64 + bit
-							const info = Schema.componentInfo[typeId]
-							if (info?.isTrackable) {
-								// Reactivity data must be copied entity by entity, not as a block, because the tiered
-								// bitmasks are not simple linear arrays like component data.
-								for (let k = 0; k < blockSize; k++) {
-									this._copyReactivityData(oldChunkId, typeId, currentOldIndex + k, newChunkId, currentNewIndex + k)
-								}
-							}
 							this._copyComponentDataBlock(oldChunkId, typeId, currentOldIndex, newChunkId, currentNewIndex, blockSize)
+						}
+					}
+				}
+				// Then, handle reactivity data for only the trackable components.
+				const sourceTrackableIds = entityStore.archetypeTrackableComponentIds[sourceArchetypeId]
+				for (const typeId of sourceTrackableIds) {
+					const partIndex = Math.floor(typeId / 64)
+					if ((commonMask[partIndex] & (1n << BigInt(typeId % 64))) !== 0n) {
+						for (let k = 0; k < blockSize; k++) {
+							this._copyReactivityData(oldChunkId, typeId, currentOldIndex + k, newChunkId, currentNewIndex + k)
 						}
 					}
 				}
@@ -2087,9 +2137,12 @@ export class EntityManager {
 				// Reuse reactivity buffers
 				const reactivityRingBuffer = oldReactivityData?.[typeId]
 				if (reactivityRingBuffer) {
+					// This component was trackable before, so it must be trackable now.
+					// We can safely reuse its buffers.
 					this._clearReactivityRingBuffer(reactivityRingBuffer)
 					newReactivityData[typeId] = reactivityRingBuffer
-				} else {
+				} else if (info.isTrackable) {
+					// This component is now trackable but wasn't before. Allocate new buffers.
 					newReactivityData[typeId] = this._allocateReactivityRingBuffer(typeId, capacity)
 				}
 			} else {
@@ -2101,8 +2154,10 @@ export class EntityManager {
 					propArrays[propKey] = new constructor(buffer)
 				}
 				newComponentData[typeId] = propArrays
-				// Allocate new reactivity buffers
-				newReactivityData[typeId] = this._allocateReactivityRingBuffer(typeId, capacity)
+				// Allocate new reactivity buffers only if the component is trackable.
+				if (info.isTrackable) {
+					newReactivityData[typeId] = this._allocateReactivityRingBuffer(typeId, capacity)
+				}
 			}
 		}
 
@@ -2151,7 +2206,10 @@ export class EntityManager {
 
 		return {
 			dataMasks: Array.from({ length: DIRTY_HISTORY_LENGTH }, () => new Uint32Array(new SharedArrayBuffer(words * 4))),
-			metaMasks: Array.from({ length: DIRTY_HISTORY_LENGTH }, () => new Uint32Array(new SharedArrayBuffer(metaWords * 4))),
+			metaMasks: Array.from(
+				{ length: DIRTY_HISTORY_LENGTH },
+				() => new Uint32Array(new SharedArrayBuffer(metaWords * 4)),
+			),
 		}
 	}
 
@@ -2179,7 +2237,7 @@ export class EntityManager {
 		for (let i = 0; i < count; i++) {
 			const typeId = componentIdArray[i]
 			const info = Schema.componentInfo[typeId]
-			if (info?.isTrackable) {
+			if (info.isTrackable) {
 				reactivityData[typeId] = this._allocateReactivityRingBuffer(typeId, capacity)
 				trackableCount++
 			}
@@ -2209,15 +2267,14 @@ export class EntityManager {
 	 * @private
 	 */
 	_updateArchetypeTick(versionArray, indexInArchetype, version) {
-		if (!versionArray) return
-
-		let oldValue = Atomics.load(versionArray, indexInArchetype)
-		while (version > oldValue) {
-			// This CAS loop ensures that if multiple threads try to update the tick,
-			// only the highest value wins, and it does so without a lock.
-			const result = Atomics.compareExchange(versionArray, indexInArchetype, oldValue, version)
-			if (result === oldValue) break
-			oldValue = result
+		if (!versionArray) {
+			return
+		}
+		// Non-atomic read/write is safe here. This method is only called from the
+		// CommandBufferExecutor, which runs single-threaded on the main thread.
+		// We only need to write if the new version is greater.
+		if (version > versionArray[indexInArchetype]) {
+			versionArray[indexInArchetype] = version
 		}
 	}
 
@@ -2258,8 +2315,8 @@ export class EntityManager {
 	// =================================================================
 
 	markEntityDirty(chunkId, indexInChunk, componentTypeId, version) {
-		const info = Schema.componentInfo[componentTypeId];
-		if (!info?.isTrackable) return; // Only track if component is trackable
+		const info = Schema.componentInfo[componentTypeId]
+		if (!info.isTrackable) return // Only track if component is trackable
 
 		const reactivity = entityStore.chunkReactivityData[chunkId][componentTypeId]
 
@@ -2272,13 +2329,13 @@ export class EntityManager {
 		const metaWordIndex = wordIndex >> 5
 		const metaBitInWord = 1 << (wordIndex & 31)
 
-		Atomics.or(dataMask, wordIndex, bitInWord)
-		Atomics.or(metaMask, metaWordIndex, metaBitInWord)
+		dataMask[wordIndex] |= bitInWord
+		metaMask[metaWordIndex] |= metaBitInWord
 	}
 
 	markEntityDirtyById(entityId, componentTypeId, version) {
-		const info = Schema.componentInfo[componentTypeId];
-		if (!info?.isTrackable) return; // Only track if component is trackable
+		const info = Schema.componentInfo[componentTypeId]
+		if (!info.isTrackable) return // Only track if component is trackable
 
 		if (!this.isEntityActive(entityId)) return
 		const entityIndex = Number(entityId & 0xffffffffn)
@@ -2290,8 +2347,9 @@ export class EntityManager {
 
 	markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version) {
 		for (const componentTypeId of componentTypeIds) {
-			const info = Schema.componentInfo[componentTypeId];
-			if (info?.isTrackable) { // Only mark if component is trackable
+			const info = Schema.componentInfo[componentTypeId]
+			if (info.isTrackable) {
+				// Only mark if component is trackable
 				this.markEntityDirty(chunkId, indexInChunk, componentTypeId, version)
 			}
 		}
@@ -2307,8 +2365,8 @@ export class EntityManager {
 			const entityIndex = Number(entityId & 0xffffffffn)
 			const packedLocation = entityStore.entityPackedLocations[entityIndex]
 			const chunkId = packedLocation & 0xffff
-			const indexInChunk = entityStore.entityIndicesInChunk[entityIndex];
-			this.markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version); // markEntitiesDirty already handles isTrackable check
+			const indexInChunk = entityStore.entityIndicesInChunk[entityIndex]
+			this.markEntitiesDirty(chunkId, indexInChunk, componentTypeIds, version) // markEntitiesDirty already handles isTrackable check
 		}
 	}
 
@@ -2383,12 +2441,13 @@ export class EntityManager {
 	 * @private
 	 */
 	_copyReactivityData(fromChunkId, typeId, fromIndex, toChunkId, toIndex) {
-		const fromReactivity = entityStore.chunkReactivityData[fromChunkId]?.[typeId]
-		const info = Schema.componentInfo[typeId];
-		if (!info?.isTrackable) return; // Only copy if component is trackable
+		const info = Schema.componentInfo[typeId]
+		if (!info.isTrackable) return // Only copy if component is trackable
 
-		const toReactivity = entityStore.chunkReactivityData[toChunkId]?.[typeId]
-		if (!fromReactivity || !toReactivity) return
+		// If a component is trackable, its reactivity data is guaranteed to exist.
+		// Removing optional chaining and the null check to surface errors if this assumption is violated.
+		const fromReactivity = entityStore.chunkReactivityData[fromChunkId][typeId]
+		const toReactivity = entityStore.chunkReactivityData[toChunkId][typeId]
 
 		const fromWordIndex = fromIndex >> 5
 		const fromBitInWord = 1 << (fromIndex & 31)
@@ -2399,15 +2458,15 @@ export class EntityManager {
 			const fromDataMask = fromReactivity.dataMasks[i]
 			const toDataMask = toReactivity.dataMasks[i]
 			const isSet = (fromDataMask[fromWordIndex] & fromBitInWord) !== 0 // Non-atomic read is safe here
-			if (isSet) Atomics.or(toDataMask, toWordIndex, toBitInWord)
-			else Atomics.and(toDataMask, toWordIndex, ~toBitInWord)
+			if (isSet) toDataMask[toWordIndex] |= toBitInWord
+			else toDataMask[toWordIndex] &= ~toBitInWord
 		}
 		// Meta masks don't need to be copied bit-by-bit. If we move an entity,
 		// we just need to ensure the destination meta-mask word is marked as dirty.
 		const toMetaWordIndex = toWordIndex >> 5
 		const toMetaBitInWord = 1 << (toWordIndex & 31)
 		for (const metaMask of toReactivity.metaMasks) {
-			Atomics.or(metaMask, toMetaWordIndex, toMetaBitInWord)
+			metaMask[toMetaWordIndex] |= toMetaBitInWord
 		}
 	}
 
@@ -2491,9 +2550,16 @@ export class EntityManager {
 
 			if (!isSilent) {
 				// --- Log structural change for `added:` queries (once per chunk) ---
-				const archetypeMaskOffset = archetypeId * MASK_PARTS
-				const addedMask = entityStore.archetypeMasks.subarray(archetypeMaskOffset, archetypeMaskOffset + MASK_PARTS)
-				this._logStructuralChange(chunkId, addedMask, null, version)
+				// This is an optimized path for creation. Instead of iterating through a bitmask
+				// in _logStructuralChange, we iterate directly over the archetype's component list.
+				const addedVersions = entityStore.chunkArchetypeAddedVersions[chunkId]
+				if (addedVersions) {
+					const componentCount = this.getComponentTypeIDsForArchetype(archetypeId, this.componentTypesScratch)
+					for (let i = 0; i < componentCount; i++) {
+						// The index in the sorted component list IS the indexInArchetype.
+						this._updateArchetypeTick(addedVersions, i, version)
+					}
+				}
 			}
 
 			// Create entity IDs and update their locations for this block
@@ -2546,15 +2612,15 @@ export class EntityManager {
 
 			if (!isSilent) {
 				// --- Handle Dirty Tracking ---
-				for (const typeId of componentTypeIDs) {
-					this.markComponentDirty(chunkId, typeId, version)
-					const info = Schema.componentInfo[typeId]
-					if (info?.isTrackable) {
-						// Also do narrow-phase marking for all created entities in this block
-						for (let j = 0; j < batchSize; j++) {
-							const indexInChunk = startEntityIndexInChunk + j
-							this.markEntityDirty(chunkId, indexInChunk, typeId, version)
-						}
+				// Broad-phase marking for all components.
+				for (const typeId of componentTypeIDs) this.markComponentDirty(chunkId, typeId, version)
+
+				// Narrow-phase marking only for trackable components, using the cached list.
+				const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
+				for (const typeId of trackableIds) {
+					for (let j = 0; j < batchSize; j++) {
+						const indexInChunk = startEntityIndexInChunk + j
+						this.markEntityDirty(chunkId, indexInChunk, typeId, version)
 					}
 				}
 			}
@@ -2714,13 +2780,12 @@ export class EntityManager {
 		// --- 4. Handle Dirty Tracking ---
 		if (!isSilent) {
 			// Mark all components in the payload as dirty for broad-phase queries.
-			for (const typeId of componentTypeIDs) {
-				this.markComponentDirty(chunkId, typeId, version)
-				const info = Schema.componentInfo[typeId]
-				// Also mark for narrow-phase, if trackable.
-				if (info?.isTrackable) {
-					this.markEntityDirty(chunkId, indexInChunk, typeId, version)
-				}
+			for (const typeId of componentTypeIDs) this.markComponentDirty(chunkId, typeId, version)
+
+			// Narrow-phase marking only for trackable components in the payload.
+			const trackableIds = entityStore.archetypeTrackableComponentIds[archetypeId]
+			for (const typeId of trackableIds) {
+				this.markEntityDirty(chunkId, indexInChunk, typeId, version)
 			}
 		}
 	}

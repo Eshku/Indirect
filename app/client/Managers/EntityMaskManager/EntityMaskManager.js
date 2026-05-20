@@ -392,15 +392,15 @@ export class EntityMaskManager {
 				const oldWordIndex = oldIndex >>> 5
 				const oldBitInWord = 1 << (oldIndex & 31)
 				isSet = (oldMask[oldWordIndex] & oldBitInWord) !== 0 // Non-atomic read is safe here
-				Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
+				oldMask[oldWordIndex] &= ~oldBitInWord
 			}
 
 			const newWordIndex = newIndex >>> 5
 			const newBitInWord = 1 << (newIndex & 31)
 			if (isSet) {
-				Atomics.or(newMask, newWordIndex, newBitInWord)
+				newMask[newWordIndex] |= newBitInWord
 			} else {
-				Atomics.and(newMask, newWordIndex, ~newBitInWord)
+				newMask[newWordIndex] &= ~newBitInWord
 			}
 		}
 	}
@@ -472,12 +472,12 @@ export class EntityMaskManager {
 						const oldWordIndex = oldIndex >>> 5,
 							oldBitInWord = 1 << (oldIndex & 31) // Non-atomic read is safe here
 						isSet = (oldMask[oldWordIndex] & oldBitInWord) !== 0
-						Atomics.and(oldMask, oldWordIndex, ~oldBitInWord)
+						oldMask[oldWordIndex] &= ~oldBitInWord
 					}
 					const newWordIndex = newIndex >>> 5,
 						newBitInWord = 1 << (newIndex & 31)
-					if (isSet) Atomics.or(newMask, newWordIndex, newBitInWord)
-					else Atomics.and(newMask, newWordIndex, ~newBitInWord)
+					if (isSet) newMask[newWordIndex] |= newBitInWord
+					else newMask[newWordIndex] &= ~newBitInWord
 				}
 			}
 			i = batchEnd
@@ -577,12 +577,12 @@ export class EntityMaskManager {
 				const newWordIndex = newIndex >>> 5
 				const newBitInWord = 1 << (newIndex & 31)
 
-				if (isSet) Atomics.or(mask, newWordIndex, newBitInWord)
-				else Atomics.and(mask, newWordIndex, ~newBitInWord)
+				if (isSet) mask[newWordIndex] |= newBitInWord
+				else mask[newWordIndex] &= ~newBitInWord
 				// The old location at `oldIndex` is now inaccessible because the chunk size has
 				// been reduced. However, if a new entity is added to the chunk, it can occupy
 				// this slot. We must clear the bit to prevent the new entity from inheriting a stale state.
-				Atomics.and(mask, oldWordIndex, ~oldBitInWord)
+				mask[oldWordIndex] &= ~oldBitInWord
 			}
 		}
 	}

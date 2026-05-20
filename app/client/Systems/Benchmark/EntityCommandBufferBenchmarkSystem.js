@@ -7,11 +7,11 @@ const benchmarkConfig = {
 	// 'destruction', 'destruction_bulk',
 	// 'structuralChange', 'structuralChangeBulk',
 	// 'setData', 'setDataSilent'
-	activeBenchmark: 'structuralChange',
+	activeBenchmark: 'creation_varied',
 
 	creation: {
 		entityCount: 0,
-		batchSize: 6_000, // 6k
+		batchSize: 6_000, // 6k 
 	},
 	creation_identical: {
 		entityCount: 0,
