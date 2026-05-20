@@ -116,7 +116,6 @@ export const systemSchedule = {
 		{ name: 'DebugInspectionSystem', frequency: 'input' },
 		{ name: 'SpatialHashDebugSystem', frequency: 'visuals' },
 	],
-
 	//! Do not run benchmark \ test systems with other systems together, high query overlap potential.
 
 	Benchmark: [
